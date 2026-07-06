@@ -300,7 +300,91 @@ def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
         "hints": p.hints,
         "tags": p.tags,
         "session_id": "",
+        "parsed_test_cases": _parse_examples_to_test_cases(p.examples, p.starter_code),
     }
+
+
+def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> list[dict]:
+    """Parse LeetCode example text into structured test cases.
+
+    Input format from LeetCode <pre> tags::
+
+        Input: nums = [2,7,11,15], target = 9
+        Output: [0,1]
+
+        Input: height = [1,8,6,2,5,4,8,3,7]
+        Output: 49
+
+    Returns list of dicts with ``input_args``, ``expected_output``, ``explanation``.
+    """
+    import re
+
+    test_cases = []
+    for ex in examples:
+        lines = ex.strip().split("\n")
+        input_line = ""
+        output_line = ""
+        for line in lines:
+            line = line.strip()
+            if line.startswith("输入") or line.startswith("Input"):
+                input_line = line
+            elif line.startswith("输出") or line.startswith("Output"):
+                output_line = line
+
+        if not input_line or not output_line:
+            continue
+
+        # Parse Input: extract values after "=" or ":"
+        input_str = re.sub(r"^(?:输入|Input)\s*[:：]\s*", "", input_line).strip()
+
+        # Split by ', ' outside brackets
+        parts = _split_input_args(input_str)
+
+        input_args = []
+        for part in parts:
+            eq_match = re.search(r"=\s*(.*)", part)
+            if eq_match:
+                val = eq_match.group(1).strip()
+            else:
+                val = part.strip()
+            input_args.append(val)
+
+        # Parse Output
+        output_val = re.sub(r"^(?:输出|Output)\s*[:：]\s*", "", output_line).strip()
+
+        test_cases.append({
+            "input_args": input_args,
+            "expected_output": output_val,
+            "explanation": f"LeetCode 示例 {len(test_cases) + 1}",
+            "is_hidden": False,
+        })
+
+    return test_cases
+
+
+def _split_input_args(text: str) -> list[str]:
+    """Split by ', ' outside brackets/braces.
+
+    E.g., "nums = [2,7,11,15], target = 9" → ["nums = [2,7,11,15]", "target = 9"]
+    """
+    parts = []
+    depth = 0
+    current = []
+    for ch in text:
+        if ch in ("[", "(", "{"):
+            depth += 1
+            current.append(ch)
+        elif ch in ("]", ")", "}"):
+            depth -= 1
+            current.append(ch)
+        elif ch == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    if current:
+        parts.append("".join(current).strip())
+    return parts
 
 
 if __name__ == "__main__":
@@ -308,6 +392,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "slug",
         type=str,
+        default="container-with-most-water",
         help="Problem slug, e.g. 'two-sum' or 'palindrome-number'"
     )
     parser.add_argument(
@@ -322,6 +407,7 @@ if __name__ == "__main__":
     try:
         # 获取题目数据
         problem = fetch_problem(args.slug, domain=args.domain)
+        # problem = fetch_problem("container-with-most-water", domain=args.domain)
 
         # 打印解析结果 (Markdown 格式)
         print("\n" + "=" * 50 + " Markdown Output " + "=" * 50 + "\n")
