@@ -160,13 +160,19 @@ class AdminPasswordRequest(BaseModel):
 
 
 class AdminProblemOut(BaseModel):
-    """Full problem representation for admin listing."""
+    """Full problem representation for admin listing.
+
+    Distinguishes two testcase categories:
+    - visible_test_cases: shown to users in the "Run" tab (前台运行)
+    - test_cases: full suite including hidden cases used by the judge (判题使用)
+    """
 
     id: int
     title: str
     topic: str
     difficulty: str
     description: str
+    visible_test_cases: list[dict] = Field(default_factory=list, alias="visible_test_cases_list")
     test_cases: list[dict] = Field(default_factory=list, alias="test_cases_list")
     brute_solution: str = ""
     starter_code: str = ""
@@ -175,7 +181,14 @@ class AdminProblemOut(BaseModel):
 
 
 class AdminUpdateProblemRequest(BaseModel):
-    """Fields that can be updated via admin panel."""
+    """Fields that can be updated via admin panel.
+
+    Testcase fields:
+    - test_cases: full judge suite (判题使用，含隐藏用例)
+    - visible_test_cases: frontend run suite (前台运行，仅可见用例)
+    When only test_cases is provided, visible_test_cases defaults
+    to the non-hidden subset.
+    """
 
     password: Optional[str] = Field(default="", description="Admin password for verification")
     title: Optional[str] = None
@@ -183,6 +196,7 @@ class AdminUpdateProblemRequest(BaseModel):
     topic: Optional[str] = None
     difficulty: Optional[str] = None
     test_cases: Optional[list[dict]] = None
+    visible_test_cases: Optional[list[dict]] = None
     brute_solution: Optional[str] = None
     starter_code: Optional[str] = None
     novelty_score: Optional[float] = None

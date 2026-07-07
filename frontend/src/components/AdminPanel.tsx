@@ -19,6 +19,7 @@ interface AdminProblem {
   topic: string;
   difficulty: string;
   description: string;
+  visible_test_cases_list: AdminTestCase[];
   test_cases_list: AdminTestCase[];
   brute_solution: string;
   starter_code: string;
@@ -49,6 +50,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const [activeTab, setActiveTab] = useState<AdminTab>('list');
   const [selectedProblem, setSelectedProblem] = useState<AdminProblem | null>(null);
   const [editForm, setEditForm] = useState<Record<string, string | number>>({});
+  const [editVisibleTestCases, setEditVisibleTestCases] = useState<string>('');
   const [editTestCases, setEditTestCases] = useState<string>('');
   const [saveMsg, setSaveMsg] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
@@ -114,6 +116,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       difficulty: p.difficulty,
       novelty_score: p.novelty_score,
     });
+    setEditVisibleTestCases(JSON.stringify(p.visible_test_cases_list, null, 2));
     setEditTestCases(JSON.stringify(p.test_cases_list, null, 2));
     setSaveMsg('');
     setActiveTab('edit');
@@ -127,6 +130,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           Object.entries(editForm).filter(([_, v]) => v !== '' && v !== undefined)
         ),
         test_cases: JSON.parse(editTestCases),
+        visible_test_cases: JSON.parse(editVisibleTestCases),
       } as Record<string, unknown>;
 
       const r = await fetch(BASE + `/admin/problem/${selectedProblem.id}`, {
@@ -144,7 +148,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     } catch (e) {
       setSaveMsg('JSON 格式错误: ' + (e instanceof Error ? e.message : String(e)));
     }
-  }, [selectedProblem, editForm, editTestCases, fetchProblems]);
+  }, [selectedProblem, editForm, editTestCases, editVisibleTestCases, fetchProblems]);
 
   // ── Delete problem ──
   const handleDelete = useCallback(async (pid: number) => {
@@ -248,9 +252,10 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           <pre className="whitespace-pre-wrap rounded border border-ct-border bg-slate-900/30 p-3 text-xs text-ct-text">{p.description}</pre>
         </section>
 
-        {/* Test Cases */}
+        {/* Test Cases — 判题用（全量） */}
         <section className="mb-4">
-          <h3 className="mb-1 text-sm font-semibold text-ct-accent">测试用例 ({p.test_cases_list.length})</h3>
+          <h3 className="mb-1 text-sm font-semibold text-ct-accent">判题测试用例 ({p.test_cases_list.length})</h3>
+          <p className="mb-2 text-[10px] text-ct-muted">后台判题使用的完整套件，包含隐藏用例</p>
           <div className="space-y-2">
             {p.test_cases_list.map((tc, i) => (
               <div key={i} className="rounded border border-ct-border bg-slate-900/30 p-3 text-xs">
@@ -263,7 +268,26 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
                 {tc.explanation && <div className="text-ct-muted mt-1 italic">{tc.explanation}</div>}
               </div>
             ))}
-            {p.test_cases_list.length === 0 && <p className="text-xs text-ct-muted">暂无测试用例</p>}
+            {p.test_cases_list.length === 0 && <p className="text-xs text-ct-muted">暂无判题测试用例</p>}
+          </div>
+        </section>
+
+        {/* Test Cases — 前台运行（可见） */}
+        <section className="mb-4">
+          <h3 className="mb-1 text-sm font-semibold text-ct-accent">前台运行用例 ({p.visible_test_cases_list.length})</h3>
+          <p className="mb-2 text-[10px] text-ct-muted">用户在"运行"标签页看到的测试用例</p>
+          <div className="space-y-2">
+            {p.visible_test_cases_list.map((tc, i) => (
+              <div key={i} className="rounded border border-ct-border bg-slate-900/30 p-3 text-xs">
+                <div className="mb-1 flex items-center gap-2">
+                  <span className="font-bold text-ct-accent">用例 #{i + 1}</span>
+                </div>
+                <div className="text-ct-muted">输入: <code className="text-ct-text">{JSON.stringify(tc.input_args)}</code></div>
+                <div className="text-ct-muted">输出: <code className="text-ct-text">{tc.expected_output}</code></div>
+                {tc.explanation && <div className="text-ct-muted mt-1 italic">{tc.explanation}</div>}
+              </div>
+            ))}
+            {p.visible_test_cases_list.length === 0 && <p className="text-xs text-ct-muted">暂无前台运行用例</p>}
           </div>
         </section>
 
@@ -382,15 +406,29 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
             />
           </div>
 
-          {/* Test Cases (JSON) */}
+          {/* Test Cases — 判题用（全量） */}
           <div>
             <label className="mb-1 block text-xs font-medium text-ct-muted">
-              测试用例 (JSON)
-              <span className="ml-1 text-[10px] text-ct-muted">格式: 数组格式，每项包含 input_args / expected_output / explanation</span>
+              判题测试用例 (JSON)
+              <span className="ml-1 text-[10px] text-ct-muted">后台判题套件，含隐藏用例</span>
             </label>
             <textarea
               value={editTestCases}
               onChange={e => setEditTestCases(e.target.value)}
+              rows={8}
+              className="w-full rounded border border-ct-border bg-slate-800/50 px-3 py-2 text-xs font-mono text-ct-text outline-none focus:border-ct-accent"
+            />
+          </div>
+
+          {/* Visible Test Cases — 前台运行 */}
+          <div>
+            <label className="mb-1 block text-xs font-medium text-ct-muted">
+              前台运行用例 (JSON)
+              <span className="ml-1 text-[10px] text-ct-muted">用户在"运行"标签页看到的用例</span>
+            </label>
+            <textarea
+              value={editVisibleTestCases}
+              onChange={e => setEditVisibleTestCases(e.target.value)}
               rows={6}
               className="w-full rounded border border-ct-border bg-slate-800/50 px-3 py-2 text-xs font-mono text-ct-text outline-none focus:border-ct-accent"
             />
@@ -454,7 +492,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
                         <span className="font-medium text-ct-text text-sm">{p.title}</span>
                         <span className={`rounded border px-1.5 py-0.5 text-[10px] ${diffColorMap[p.difficulty] || ''}`}>{p.difficulty}</span>
                         <span className="text-xs text-ct-muted">{p.topic}</span>
-                        <span className="text-xs text-ct-muted">{p.test_cases_list.length} 用例</span>
+                        <span className="text-xs text-ct-muted">{p.test_cases_list.length} 判题 / {p.visible_test_cases_list.length} 前台</span>
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-ct-muted">{p.description.slice(0, 120)}…</p>
                     </div>

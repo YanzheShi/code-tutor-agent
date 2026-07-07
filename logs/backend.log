@@ -1,0 +1,12 @@
+INFO:     Will watch for changes in these directories: ['D:\\Code\\PycharmProjects\\code-tutor-agent\\src\\code_tutor_agent']
+INFO:     Uvicorn running on http://0.0.0.0:8765 (Press CTRL+C to quit)
+INFO:     Started reloader process [41056] using WatchFiles
+INFO:     Started server process [31628]
+INFO:     Waiting for application startup.
+16:18:59 [src.code_tutor_agent.api.main] INFO Compiling LangGraph ¡­
+16:18:59 [code_tutor_agent.graph.graph] INFO \u25b6 compile_graph() ¡ª conn=D:\Code\PycharmProjects\code-tutor-agent\src\code_tutor_agent\graph\..\..\..\data\checkpoints\checkpoints.sqlite
+16:18:59 [code_tutor_agent.graph.graph] INFO Graph compiled ¡ª checkpointer=D:\Code\PycharmProjects\code-tutor-agent\src\code_tutor_agent\graph\..\..\..\data\checkpoints\checkpoints.sqlite (conn open=True)
+16:18:59 [src.code_tutor_agent.api.main] INFO LangGraph ready \u2713
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'src\code_tutor_agent\leetcode.py'. Reloading...
+ INFO:     Shutting down

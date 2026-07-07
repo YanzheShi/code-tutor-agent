@@ -914,6 +914,7 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
                 topic=p.get("topic", ""),
                 difficulty=p.get("difficulty", ""),
                 description=p.get("description", ""),
+                visible_test_cases_list=p.get("visible_test_cases", []),
                 test_cases_list=p.get("test_cases", []),
                 brute_solution=p.get("brute_solution", ""),
                 starter_code=p.get("starter_code", ""),
@@ -925,7 +926,14 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
 
 @app.put("/admin/problem/{problem_id}")
 async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest):
-    """Update a problem. Only provided fields are updated. Requires admin password."""
+    """Update a problem. Only provided fields are updated. Requires admin password.
+
+    Testcase handling:
+    - test_cases → updates test_cases_json (判题用全量套件)
+    - visible_test_cases → updates visible_test_cases_json (前台运行用可见套件)
+    If only test_cases is provided and visible_test_cases is not, the visible
+    subset is derived from non-hidden cases in test_cases.
+    """
     admin_body = body if isinstance(body, dict) else body.model_dump(exclude_none=True)
     if not _verify_admin(admin_body):
         raise HTTPException(401, "密码错误")
@@ -949,12 +957,22 @@ async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest)
     if body.test_cases is not None:
         import json
         updates.append("test_cases_json = ?"); params.append(json.dumps(body.test_cases, ensure_ascii=False))
+    if body.visible_test_cases is not None:
+        import json
+        updates.append("visible_test_cases_json = ?"); params.append(json.dumps(body.visible_test_cases, ensure_ascii=False))
     if body.brute_solution is not None:
         updates.append("brute_solution = ?"); params.append(body.brute_solution)
     if body.starter_code is not None:
         updates.append("starter_code = ?"); params.append(body.starter_code)
     if body.novelty_score is not None:
         updates.append("novelty_score = ?"); params.append(body.novelty_score)
+
+    # Auto-derive visible_test_cases from test_cases if test_cases changed but visible didn't
+    if body.test_cases is not None and body.visible_test_cases is None:
+        import json
+        derived_visible = [tc for tc in body.test_cases if not tc.get("is_hidden", False)]
+        if derived_visible:
+            updates.append("visible_test_cases_json = ?"); params.append(json.dumps(derived_visible, ensure_ascii=False))
 
     if updates:
         params.append(problem_id)

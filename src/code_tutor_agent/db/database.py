@@ -53,6 +53,8 @@ def init_db() -> None:
     for col_sql in [
         "ALTER TABLE problems ADD COLUMN starter_code TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN visible_test_cases_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
+        "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
     ]:
         try:
             cursor.execute(col_sql)
@@ -157,6 +159,12 @@ def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
     """Update test cases for an existing problem (Day2 background generation).
 
     Called after background test generation completes.
+    Only updates test_cases_json — visible_test_cases_json is left untouched
+    to preserve the original sample/visible test cases set during import.
+
+    Args:
+        problem_id: The ID of the problem to update.
+        test_cases: The full list of test cases (visible + hidden).
     """
     import json
     conn = _get_conn()
@@ -167,8 +175,8 @@ def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
     )
     conn.commit()
     conn.close()
-    logger.info("update_problem_test_cases() — id=%d, %d test cases", problem_id, len(test_cases))
-
+    logger.info("update_problem_test_cases() — id=%d, %d test cases (visible_test_cases untouched)",
+                problem_id, len(test_cases))
 
 def save_submission(problem_id: int, code: str, verdict: str, judge_results: list[dict]) -> int:
     """Save a submission record to the database.
