@@ -1,0 +1,153 @@
+# ──────────────────────────────────────────────────────────
+#  Code Tutor Agent — docker-compose (项目根目录执行)
+#
+#  新增内容：Judge0 判题沙箱全家桶（适配WSL2镜像模式localhost互通）
+#
+#  用法:
+#     # 首次启动（会初始化PG/Redis，约30s）
+#     docker compose -f docker/docker-compose.yml up -d
+#     # 查看Judge0启动日志
+#     docker logs cta-judge0 -f
+#     # 验证Judge0是否就绪
+#     curl http://localhost:2358/languages
+#
+#  环境变量（需在项目根.env中添加）:
+#     # Judge0基础配置
+#     JUDGE0_REDIS_PASSWORD=ct_redis_pwd
+#     JUDGE0_POSTGRES_PASSWORD=ct_pg_pwd
+#     JUDGE0_MEM_LIMIT=512000000       # 512MB，对抗校验必调
+#     JUDGE0_CPU_TIME_LIMIT=5          # 5秒超时，对齐现有TIMEOUT_SECONDS
+#     # 判题后端切换开关（backend代码中使用）
+#     JUDGE_BACKEND=self                # 用现有subprocess runner（默认，调试稳定）
+#     # JUDGE_BACKEND=judge0            # 用Judge0沙箱（多语言/生产用）
+# ──────────────────────────────────────────────────────────
+
+services:
+  # ── Judge0 依赖：PostgreSQL ──
+  judge0-db:
+    image: postgres:15-alpine
+    container_name: cta-judge0-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD}
+      POSTGRES_DB: judge0
+    volumes:
+      - judge0_postgres_data:/var/lib/postgresql/data
+    networks:
+      - cta-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Judge0 依赖：Redis ──
+  judge0-redis:
+    image: redis:7-alpine
+    container_name: cta-judge0-redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${JUDGE0_REDIS_PASSWORD} --appendonly yes
+    volumes:
+      - judge0_redis_data:/data
+    networks:
+      - cta-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${JUDGE0_REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Judge0 判题沙箱引擎 ──
+  judge0:
+    image: judge0/judge0:1.13.1
+    container_name: cta-judge0
+    restart: unless-stopped
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    ports:
+      - "2358:2358"  # 暴露端口，Windows镜像模式下可通过localhost:2358访问
+    environment:
+      # 数据库配置
+      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD}
+      REDIS_PASSWORD: ${JUDGE0_REDIS_PASSWORD}
+      # 资源限制（核心！对齐你的判题需求）
+      MEMORY_LIMIT: ${JUDGE0_MEM_LIMIT}        # 512MB，默认128MB太小
+      CPU_TIME_LIMIT: ${JUDGE0_CPU_TIME_LIMIT} # 5秒超时
+      CPU_EXTRA_TIME: 1                         # 额外缓冲时间
+      MAX_PROCESSES_PER_USER: 64                # 限制进程数，防恶意代码
+      # 安全配置
+      NETWORK_ENABLED: false                    # 禁用网络，符合R10安全要求
+      ALLOW_REQUEST_ORIGIN: "*"
+    privileged: true  # 必须！Judge0的Isolate沙箱需要特权模式
+    networks:
+      - cta-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:2358/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  # ── 后端 API ──
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: code-tutor-agent-backend:latest
+    container_name: cta-backend
+    ports:
+      - "8765:8765"
+    volumes:
+      # 开发时挂载源码实现 hot-reload
+      - ../src:/app/src
+      - ../data:/app/data
+    env_file:
+      - ../.env
+    environment:
+      - UVICORN_RELOAD=true
+      - TZ=Asia/Shanghai
+      # 新增：Judge0连接配置（compose内部用服务名通信）
+      - JUDGE0_BASE_URL=http://judge0:2358
+      # 新增：判题后端切换开关（从.env读取，默认用现有runner）
+      - JUDGE_BACKEND=${JUDGE_BACKEND:-self}
+    depends_on:
+      judge0:
+        condition: service_healthy
+    networks:
+      - cta-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── 前端 Dev Server ──
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    image: code-tutor-agent-frontend:latest
+    container_name: cta-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./nginx-frontend.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - cta-network
+
+# 持久化卷（存储Judge0的数据库和缓存数据，重启不丢失）
+volumes:
+  judge0_postgres_data:
+    driver: local
+  judge0_redis_data:
+    driver: local
+
+# 统一网络（所有服务在同一网络，通过服务名互通）
+networks:
+  cta-network:
+    driver: bridge

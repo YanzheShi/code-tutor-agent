@@ -12,6 +12,9 @@ build/
 .env
 .env.local
 
+# === Node.js ===
+node_modules/
+
 # === IDE ===
 .idea/
 .vscode/

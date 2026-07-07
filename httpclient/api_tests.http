@@ -1,0 +1,132 @@
+# CodeTutor Agent API — HTTPie 测试文件
+# 服务地址: http://localhost:8765
+# 用法: http --pretty=format <file.http>
+
+# ═══════════════════════════════════════════
+# 1. Health Check
+# ═══════════════════════════════════════════
+
+### 健康检查
+GET http://localhost:8765/health
+Accept: application/json
+
+
+# ═══════════════════════════════════════════
+# 2. LeetCode URL Parser
+# ═══════════════════════════════════════════
+
+### 解析 LeetCode 题目 (中文站)
+POST http://localhost:8765/leetcode/parse
+Content-Type: application/json
+
+{
+  "url": "https://leetcode.cn/problems/two-sum/"
+}
+
+### 解析 LeetCode 题目 (国际站)
+POST http://localhost:8765/leetcode/parse
+Content-Type: application/json
+
+{
+  "url": "https://leetcode.com/problems/two-sum/"
+}
+
+
+# ═══════════════════════════════════════════
+# 3. Problem Listing
+# ═══════════════════════════════════════════
+
+### 列出数据库中的题目
+GET http://localhost:8765/problems
+Accept: application/json
+
+
+# ═══════════════════════════════════════════
+# 4. Create Session (普通模式 — 按主题/难度生成)
+# ═══════════════════════════════════════════
+
+### 创建会话 — 指定主题和难度
+POST http://localhost:8765/session
+Content-Type: application/json
+
+{
+  "topic": "数组",
+  "difficulty": "medium",
+  "mode": "practice"
+}
+
+### 创建会话 — 使用 LeetCode 题目数据 (fast-path)
+POST http://localhost:8765/session
+Content-Type: application/json
+
+{
+  "topic": "数组",
+  "difficulty": "medium",
+  "mode": "practice",
+  "leetcode": {
+    "title": "两数之和",
+    "description": "给定一个整数数组 nums 和一个整数目标值 target，请你在该数组中找出和为目标值 target 的那两个整数，并返回它们的数组下标。",
+    "topic": "数组",
+    "difficulty": "easy",
+    "starter_code": "def twoSum(nums: list[int], target: int) -> list[int]:\n    pass",
+    "parsed_test_cases": [
+      {
+        "input_args": "[2, 7, 11, 15]",
+        "expected_output": "[0, 1]",
+        "explanation": "nums[0] + nums[1] == 9, 所以返回 [0, 1]"
+      },
+      {
+        "input_args": "[3, 2, 4]",
+        "expected_output": "[1, 2]",
+        "explanation": "nums[1] + nums[2] == 6"
+      }
+    ]
+  }
+}
+
+
+# ═══════════════════════════════════════════
+# 5. Create Session from Existing Problem
+# ═══════════════════════════════════════════
+
+### 基于已有题目创建会话 (problem_id=1)
+POST http://localhost:8765/session/by-problem/1
+Content-Type: application/json
+
+
+# ═══════════════════════════════════════════
+# 6. Submit Code (judge + tutor)
+# ═══════════════════════════════════════════
+
+### 提交代码 — 通过 LangGraph judge+tutor
+# 先用上面的 "创建会话" 拿到 session_id，替换下面的 {sid}
+POST http://localhost:8765/session/{sid}/submit
+Content-Type: application/json
+
+{
+  "code": "def twoSum(nums: list[int], target: int) -> list[int]:\n    seen = {}\n    for i, num in enumerate(nums):\n        complement = target - num\n        if complement in seen:\n            return [seen[complement], i]\n        seen[num] = i\n    return []",
+  "language": "python"
+}
+
+
+# ═══════════════════════════════════════════
+# 7. Run Code (visible test cases only)
+# ═══════════════════════════════════════════
+
+### 快速运行 — 仅跑可见测试用例，不经过 judge/tutor
+POST http://localhost:8765/session/{sid}/run
+Content-Type: application/json
+
+{
+  "code": "def twoSum(nums: list[int], target: int) -> list[int]:\n    for i in range(len(nums)):\n        for j in range(i + 1, len(nums)):\n            if nums[i] + nums[j] == target:\n                return [i, j]\n    return []",
+  "language": "python"
+}
+
+
+# ═══════════════════════════════════════════
+# 8. Poll Session State
+# ═══════════════════════════════════════════
+
+### 轮询会话状态 (生成进度 / 题目信息 / 提交结果)
+GET http://localhost:8765/session/{sid}/state
+Accept: application/json

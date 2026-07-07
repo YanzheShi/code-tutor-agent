@@ -1,0 +1,32 @@
+# ──────────────────────────────────────────────────────────
+#  Code Tutor Agent — 生产模式的 docker-compose override
+#  用法:
+#     docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d
+# ──────────────────────────────────────────────────────────
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes: []
+    environment:
+      - UVICORN_RELOAD=false
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+    environment:
+      - API_URL=http://backend:8765
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: "0.25"

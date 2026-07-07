@@ -1,0 +1,179 @@
+"""LangGraph SessionState and related types.
+
+This is the **single source of truth** for the conversational state
+that flows through the StateGraph.  Every node reads from and writes
+to these fields.
+"""
+
+from __future__ import annotations
+
+from typing import List, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+
+# ──────────────────────────────────────────────
+#  Sub-types carried inside SessionState
+# ──────────────────────────────────────────────
+
+
+class ProblemMeta(BaseModel):
+    """Lightweight problem descriptor carried in session state.
+
+    The full problem (description, test cases, reference solutions) is
+    stored in the problem DB; this is the cross-reference plus metadata
+    the graph needs for routing decisions.
+    """
+
+    problem_id: int = Field(description="Primary key in the problems table")
+    title: str = Field(description="Problem title")
+    topic: str = Field(description="Knowledge-point tag, e.g. '双指针'")
+    difficulty: str = Field(description="easy / medium / hard")
+    description: str = Field(description="Full problem statement text")
+    starter_code: str = Field(
+        default="",
+        description="LeetCode-style template stub for the editor",
+    )
+    visible_test_cases: list[dict] = Field(
+        default_factory=list,
+        description="Non-hidden test cases shown to the user",
+    )
+    description_html: str = Field(
+        default="",
+        description="Original HTML version of description (rich-text rendering)",
+    )
+
+    # --- 暗数据 (PRD §六) ---
+    novelty_score: float = Field(
+        default=7.0, ge=0.0, le=10.0,
+        description="Novelty rating assigned by Critic (0-10, ≥7 passes R03)",
+    )
+
+
+class JudgeResult(BaseModel):
+    """Outcome of one judge pass (base or adversarial or review).
+
+    D3: 支持多阶段判题。每个 Submission 可以包含多个 JudgeResult，
+    分别对应 base / adversarial_scale / adversarial_boundary / review 阶段。
+
+    面试考点：为什么每个阶段一个 JudgeResult 而不是一个大的？
+        — 路由需要细粒度控制：基础挂了→辅导，对抗挂了→辅导但提示不同，
+          全部通过→评审。每个阶段的 verdict 独立决定下一跳。
+    """
+
+    status: Literal["AC", "WA", "TLE", "RE", "CE"] = Field(
+        description="Verdict: Accepted / Wrong Answer / TLE / Runtime Error / Compile Error"
+    )
+    phase: Literal["base", "adversarial_scale", "adversarial_boundary", "review"] = Field(
+        default="base",
+        description="Which phase produced this result",
+    )
+    detail: str = Field(default="", description="Human-readable reason / diff info")
+    runtime_ms: float = Field(default=0.0, description="Execution time in milliseconds")
+    memory_kb: float = Field(default=0.0, description="Peak memory in kilobytes")
+
+
+class Submission(BaseModel):
+    """One code submission from the user, stored in order."""
+
+    index: int = Field(description="1-based submission number within this session")
+    code: str = Field(description="Source code submitted by the user")
+    language: str = Field(default="python", description="Programming language")
+    judge_results: list[JudgeResult] = Field(
+        default_factory=list,
+        description="Results from base + adversarial judge passes",
+    )
+    hint_level_given: int = Field(
+        default=0, ge=0, le=4,
+        description="Hint level the tutor gave *after* this submission",
+    )
+
+
+class Message(BaseModel):
+    """A single message in the tutor conversation pane."""
+
+    role: Literal["user", "tutor", "system"] = Field(description="Who said it")
+    content: str = Field(description="Message body")
+    metadata: dict = Field(default_factory=dict, description="Extra structured data")
+
+
+# ──────────────────────────────────────────────
+#  Main session state
+# ──────────────────────────────────────────────
+
+
+class SessionState(BaseModel):
+    """LangGraph conversational state for one tutoring session.
+
+    Every node in the graph reads/writes these fields through the
+    checkpointer-managed state dictionary.
+
+    **Lifecycle**:
+
+        1. Planner sets *problem* → status = ``awaiting_submit``
+        2. User submits code → Judge runs, Tutor gives hint
+        3. Loop until AC → status = ``done`` → Planner picks next topic
+    """
+
+    session_id: str = Field(description="Unique session / thread_id")
+    # ── User preferences (set on create, consumed by planner+generator) ──
+    topic: str = Field(default="数组", description="User-selected knowledge point")
+    difficulty: str = Field(default="easy", description="User-selected difficulty")
+    mode: str = Field(default="practice", description="practice / interview / debug_theatre")
+    status: Literal[
+        "awaiting_problem", "awaiting_submit", "judging",
+        "tutoring", "done", "error",
+    ] = Field(default="awaiting_problem")
+
+    # ── Problem ──
+    problem: Optional[ProblemMeta] = Field(
+        default=None,
+        description="Current problem (set by Generator node)",
+    )
+
+    # ── Submissions ──
+    submissions: list[Submission] = Field(
+        default_factory=list,
+        description="All submissions, in chronological order",
+    )
+
+    # ── Tutor state ──
+    hint_level: int = Field(
+        default=0, ge=0, le=4,
+        description="Current hint level (0=no hint yet, 4=almost answer)",
+    )
+    tutor_messages: list[Message] = Field(
+        default_factory=list,
+        description="Conversation visible in the tutor panel",
+    )
+
+    # ── Routing hints (internal, set by Judge → consumed by Tutor) ──
+    last_verdict: Optional[str] = Field(
+        default=None,
+        description="Shortcut: latest judge verdict for easy routing",
+    )
+    adversarial_triggered: bool = Field(
+        default=False,
+        description="Did the adversarial phase run on the latest AC submission?",
+    )
+
+    # ── Error handling ──
+    error_message: str = Field(default="", description="Populated when status=error")
+
+    # ── 生成进度（前端轮询显示）──
+    progress_messages: list[str] = Field(
+        default_factory=list,
+        description="Progress log during generation, e.g. ['正在生成题目…', '自验证通过…']",
+    )
+
+    # ── LeetCode import (set when user provides a LC URL) ──
+    leetcode: Optional[dict] = Field(
+        default=None,
+        description="Parsed LeetCode problem data from /leetcode/parse endpoint",
+    )
+
+    # ── Review / extra (set by judge, consumed by tutor) ──
+    last_review_payload: Optional[dict] = Field(
+        default=None,
+        description="Most recent code review payload (set by judge, consumed by tutor)",
+    )
