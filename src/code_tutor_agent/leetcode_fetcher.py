@@ -177,18 +177,19 @@ def fetch_problem(slug: str, domain: str = "leetcode.cn") -> LeetCodeProblem:
     desc = full_text[:desc_end].strip()
 
     # ── 解析 Examples ──
-    # 优先使用 LeetCode 提供的 exampleTestcases 结构化字段
-    raw_examples = q.get("exampleTestcases") or ""
-    examples = [e.strip() for e in raw_examples.split("\n") if e.strip()]
-
-    # 如果结构化字段为空，则从 HTML 的 <pre> 标签中兜底提取
-    if not examples and content_html:
+    # 优先从 HTML <pre> 标签提取完整格式（含 Input/Output 文本）
+    examples = []
+    if content_html:
         examples_raw = re.findall(r"<pre>(.*?)</pre>", content_html, re.DOTALL)
         for ex in examples_raw:
-            # 对 <pre> 内容单独做一次清洗
             ex_clean = _html_to_text(ex)
-            if ex_clean:
+            if ex_clean and ("Input" in ex_clean or "输入" in ex_clean):
                 examples.append(ex_clean)
+
+    # 如果 HTML 中没有格式化的示例，回退到 GraphQL 的 exampleTestcases
+    if not examples:
+        raw_examples = q.get("exampleTestcases") or ""
+        examples = [e.strip() for e in raw_examples.split("\n") if e.strip()]
 
     # ── 解析 Constraints ──
     constraints = []
@@ -293,6 +294,7 @@ def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
     return {
         "title": p.title,
         "description": p.description,
+        "description_html": p.content_html or "",
         "difficulty": p.difficulty.lower(),
         "examples": p.examples,
         "constraints": p.constraints,
@@ -307,54 +309,85 @@ def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
 def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> list[dict]:
     """Parse LeetCode example text into structured test cases.
 
-    Input format from LeetCode <pre> tags::
+    Handles two formats:
+
+    1. Formatted text (from HTML <pre> tags)::
 
         Input: nums = [2,7,11,15], target = 9
         Output: [0,1]
 
-        Input: height = [1,8,6,2,5,4,8,3,7]
-        Output: 49
+    2. Raw values (from LeetCode GraphQL ``exampleTestcases``)::
 
-    Returns list of dicts with ``input_args``, ``expected_output``, ``explanation``.
+        [2,7,11,15]     ← arg 1 of test case 1
+        9                ← arg 2 of test case 1
+        [0,1]            ← expected output of test case 1
+        [3,2,4]          ← arg 1 of test case 2
+        ...
+
+    For format 2, the number of input arguments is inferred from the
+    ``starter_code`` method signature.
     """
     import re
 
     test_cases = []
-    for ex in examples:
-        lines = ex.strip().split("\n")
-        input_line = ""
-        output_line = ""
-        for line in lines:
-            line = line.strip()
-            if line.startswith("输入") or line.startswith("Input"):
-                input_line = line
-            elif line.startswith("输出") or line.startswith("Output"):
-                output_line = line
 
-        if not input_line or not output_line:
+    # ── Try format 1: formatted Input/Output lines ──
+    has_formatted = any("Input" in ex or "输入" in ex for ex in examples)
+    if has_formatted:
+        for ex in examples:
+            lines = ex.strip().split("\n")
+            input_line = ""
+            output_line = ""
+            for line in lines:
+                line = line.strip()
+                if line.startswith("输入") or line.startswith("Input"):
+                    input_line = line
+                elif line.startswith("输出") or line.startswith("Output"):
+                    output_line = line
+
+            if not input_line or not output_line:
+                continue
+
+            input_str = re.sub(r"^(?:输入|Input)\s*[:：]\s*", "", input_line).strip()
+            parts = _split_input_args(input_str)
+            input_args = []
+            for part in parts:
+                eq_match = re.search(r"=\s*(.*)", part)
+                if eq_match:
+                    input_args.append(eq_match.group(1).strip())
+                else:
+                    input_args.append(part.strip())
+            output_val = re.sub(r"^(?:输出|Output)\s*[:：]\s*", "", output_line).strip()
+            test_cases.append({
+                "input_args": input_args,
+                "expected_output": output_val,
+                "explanation": f"LeetCode 示例 {len(test_cases) + 1}",
+                "is_hidden": False,
+            })
+        return test_cases
+
+    # ── Format 2: raw values from exampleTestcases ──
+    # Determine number of input args from starter_code method signature
+    sig_match = re.search(r"def\s+\w+\s*\(self\s*,\s*([^)]+)\)", starter_code)
+    num_args = 0
+    if sig_match:
+        params = sig_match.group(1).split(",")
+        num_args = len([p for p in params if p.strip() and not p.strip().startswith("*")])
+    if num_args == 0:
+        num_args = 1  # fallback
+
+    # Group by (num_args + 1) lines per test case
+    # Each group: num_args input lines + 1 output line
+    step = num_args + 1
+    for i in range(0, len(examples), step):
+        group = examples[i:i + step]
+        if len(group) < step:
             continue
-
-        # Parse Input: extract values after "=" or ":"
-        input_str = re.sub(r"^(?:输入|Input)\s*[:：]\s*", "", input_line).strip()
-
-        # Split by ', ' outside brackets
-        parts = _split_input_args(input_str)
-
-        input_args = []
-        for part in parts:
-            eq_match = re.search(r"=\s*(.*)", part)
-            if eq_match:
-                val = eq_match.group(1).strip()
-            else:
-                val = part.strip()
-            input_args.append(val)
-
-        # Parse Output
-        output_val = re.sub(r"^(?:输出|Output)\s*[:：]\s*", "", output_line).strip()
-
+        input_args = group[:num_args]
+        expected_output = group[num_args].strip()
         test_cases.append({
             "input_args": input_args,
-            "expected_output": output_val,
+            "expected_output": expected_output,
             "explanation": f"LeetCode 示例 {len(test_cases) + 1}",
             "is_hidden": False,
         })
