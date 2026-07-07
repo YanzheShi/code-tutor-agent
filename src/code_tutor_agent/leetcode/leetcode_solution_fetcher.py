@@ -1,19 +1,27 @@
 """
 Fetch LeetCode official/community solutions via GraphQL.
-复用 leetcode_fetcher.py 里的 _post_with_retry / _html_to_text。
+
+Usage:
+    # As module
+    from code_tutor_agent.leetcode.leetcode_solution_fetcher import fetch_official_solution
+    sol = fetch_official_solution("two-sum", "leetcode.cn")
+
+    # As PoC script
+    PYTHONPATH=src python -m code_tutor_agent.leetcode.leetcode_solution_fetcher two-sum
 """
+from __future__ import annotations
 
 import json
 import logging
 import urllib.request
 from typing import Optional
 
-from src.code_tutor_agent.leetcode.leetcode_fetcher import _post_with_retry, _html_to_text
+from code_tutor_agent.leetcode.leetcode_fetcher import _post_with_retry, _html_to_text
 
 logger = logging.getLogger("LeetCodeSolution")
 
 GRAPHQL_URL_CN = "https://leetcode.cn/graphql/"
-GRAPHQL_URL_COM = "https://leetcode.com/graphql/"
+GRAPHQL_URL_COM = "https://leetcode.com/graphql"
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -22,27 +30,13 @@ UA = (
 )
 
 
-def _build_request(url: str, query: str, variables: dict, slug: str, domain: str):
-    """构造带反爬头的 GraphQL 请求。"""
-    payload = json.dumps({"query": query, "variables": variables}).encode()
-    return urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "User-Agent": UA,
-            "Accept": "application/json",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Origin": f"https://{domain}",
-            "Referer": f"https://{domain}/problems/{slug}/solution/",
-        },
-    )
+# ── GraphQL: 官方题解 ──
+# NOTE: leetcode.cn uses ArticleNode as the solution type, which only supports:
+#   id, title, content, contentTypeId, canSeeDetail
+# leetcode.com supports additional fields: paidOnly, hasVideoSolution,
+#   paidOnlyVideo, rating { ... }, topic { ... }
 
-
-# ── 路径①：从题目接口顺带取官方题解 ──
-# leetcode_solution_fetcher.py（仅展示改动的核心部分）
-
-Q_OFFICIAL_FROM_QUESTION = """
+Q_OFFICIAL_FROM_QUESTION = """\
 query OfficialSolution($titleSlug: String!) {
   question(titleSlug: $titleSlug) {
     solution {
@@ -50,59 +44,40 @@ query OfficialSolution($titleSlug: String!) {
       title
       content
       contentTypeId
-      paidOnly
-      hasVideoSolution
-      paidOnlyVideo
       canSeeDetail
-      topic {
-        id
-        commentCount
-        topLevelCommentCount
-        viewCount
-        subscribed
-        solutionTags { name slug }
-        post {
-          id
-          status
-          creationDate
-          author { username isActive }
-        }
-      }
     }
   }
 }
 """
 
-def fetch_official_solution(slug: str, domain: str = "leetcode.cn") -> Optional[dict]:
-    """通过 question.solution 字段拿官方题解（对齐 alfa-leetcode-api）。"""
-    # ⚠️ 关键修复1：cn 站带尾斜杠，com 站不带
-    if domain == "leetcode.cn":
-        url = "https://leetcode.cn/graphql/"
-    else:
-        url = "https://leetcode.com/graphql"
 
-    # ⚠️ 关键修复2：请求体必须带 operationName，cn 站校验更严
+def fetch_official_solution(slug: str, domain: str = "leetcode.cn") -> Optional[dict]:
+    """Fetch the official solution for a LeetCode problem via GraphQL.
+
+    Args:
+        slug: Problem title slug (e.g. "two-sum").
+        domain: "leetcode.cn" or "leetcode.com".
+
+    Returns:
+        Dict with id, title, content_html, content_text, can_see_detail,
+        or None if no solution exists.
+    """
+    # leetcode.cn requires trailing slash on /graphql/
+    url = f"https://{domain}/graphql" if domain == "leetcode.com" else f"https://{domain}/graphql/"
+
     payload = json.dumps({
         "query": Q_OFFICIAL_FROM_QUESTION,
         "variables": {"titleSlug": slug},
-        "operationName": "OfficialSolution",   # ← 必填
+        "operationName": "OfficialSolution",
     }).encode()
 
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/125.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": UA,
         "Accept": "application/json",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Origin": f"https://{domain}" ,
-        "Referer": f"https://{domain}/problems/{slug}/solution/" ,
-        # ⚠️ 关键修复3：部分 cn 站题解接口需要 csrftoken
-        # 若仍 403/400，取消下面注释并先 GET 一次题目页拿 cookie
-        # "x-csrftoken": "<从 cookie 里取>",
-        # "Cookie": "csrftoken=...; LEETCODE_SESSION=...",
+        "Origin": f"https://{domain}",
+        "Referer": f"https://{domain}/problems/{slug}/solution/",
     }
 
     req = urllib.request.Request(url, data=payload, headers=headers)
@@ -114,22 +89,22 @@ def fetch_official_solution(slug: str, domain: str = "leetcode.cn") -> Optional[
     q = (data.get("data") or {}).get("question") or {}
     sol = q.get("solution")
     if not sol:
-        logger.warning(f"题 '{slug}' 暂无官方题解（新题/付费题/未登录）")
+        logger.warning("Problem '%s' has no official solution (new/paid/not logged in)", slug)
         return None
 
-    content = sol.get("content") or ""   # ← 不再有 contentTranslated
+    content_html = sol.get("content") or ""
     return {
         "id": sol.get("id", ""),
         "title": sol.get("title", ""),
-        "content_html": content,
-        "content_text": _html_to_text(content),
-        "paid_only": sol.get("paidOnly", False),
-        "topic_id": (sol.get("topic") or {}).get("id"),
-        "tags": [t.get("name") for t in
-                 ((sol.get("topic") or {}).get("solutionTags") or [])],
+        "content_html": content_html,
+        "content_text": _html_to_text(content_html),
+        "can_see_detail": sol.get("canSeeDetail", False),
     }
-# ── 路径②：拉题解列表 ──
-Q_SOLUTION_TOPICS = """
+
+
+# ── GraphQL: 社区题解列表 ──
+
+Q_SOLUTION_TOPICS = """\
 query questionSolutionTopics(
   $questionSlug: String!
   $first: Int!
@@ -157,6 +132,24 @@ query questionSolutionTopics(
 }
 """
 
+
+def _build_request(url: str, query: str, variables: dict, slug: str, domain: str):
+    """Build a GraphQL request with anti-crawl headers."""
+    payload = json.dumps({"query": query, "variables": variables}).encode()
+    return urllib.request.Request(
+        url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": UA,
+            "Accept": "application/json",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Origin": f"https://{domain}",
+            "Referer": f"https://{domain}/problems/{slug}/solution/",
+        },
+    )
+
+
 def fetch_solution_list(
     slug: str,
     domain: str = "leetcode.cn",
@@ -164,7 +157,13 @@ def fetch_solution_list(
     skip: int = 0,
     order_by: str = "MOST_RECENT",
 ) -> list[dict]:
-    """拉取某题的题解列表（官方通常在第一条）。"""
+    """Fetch community solution list for a problem.
+
+    NOTE: The community solution GraphQL schema differs between leetcode.cn and
+    leetcode.com, and may require authentication. This is a placeholder that
+    works on leetcode.com with the correct query schema. For leetcode.cn the
+    query types need discovery (see `questionSolutions` on leetcode.com).
+    """
     url = GRAPHQL_URL_CN if domain == "leetcode.cn" else GRAPHQL_URL_COM
     req = _build_request(
         url,
@@ -199,8 +198,9 @@ def fetch_solution_list(
     return results
 
 
-# ── 路径③：拉单个题解正文 ──
-Q_SOLUTION_DETAIL = """
+# ── GraphQL: 单篇社区题解正文 ──
+
+Q_SOLUTION_DETAIL = """\
 query solutionDetail($slug: String!, $titleSlug: String!) {
   solution(slug: $slug, titleSlug: $titleSlug) {
     title
@@ -213,12 +213,13 @@ query solutionDetail($slug: String!, $titleSlug: String!) {
 }
 """
 
+
 def fetch_solution_detail(
     solution_slug: str,
     question_slug: str,
     domain: str = "leetcode.cn",
 ) -> dict:
-    """根据题解 slug 拉取完整正文。"""
+    """Fetch the full body of a community solution by its slug."""
     url = GRAPHQL_URL_CN if domain == "leetcode.cn" else GRAPHQL_URL_COM
     req = _build_request(
         url,
@@ -243,31 +244,47 @@ def fetch_solution_detail(
     }
 
 
-# ── 测试入口 ──
+# ── PoC / CLI entry point ──
+
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("slug", help="题目 slug，如 two-sum")
-    parser.add_argument("--domain", default="leetcode.cn",
-                        choices=["leetcode.cn", "leetcode.com"])
-    parser.add_argument("--mode", default="official",
-                        choices=["official", "list", "detail"],
-                        help="official=只取官方题解；list=拉题解列表；detail=需配 --solution-slug")
-    parser.add_argument("--solution-slug", default=None,
-                        help="mode=detail 时必填")
+    parser = argparse.ArgumentParser(description="Fetch LeetCode solutions")
+    parser.add_argument("slug", help="Problem title slug, e.g. two-sum")
+    parser.add_argument(
+        "--domain", default="leetcode.cn",
+        choices=["leetcode.cn", "leetcode.com"],
+    )
+    parser.add_argument(
+        "--mode", default="official",
+        choices=["official", "list", "detail"],
+        help="official=official solution; list=community list; detail=needs --solution-slug",
+    )
+    parser.add_argument("--solution-slug", default=None)
     args = parser.parse_args()
 
     if args.mode == "official":
         sol = fetch_official_solution(args.slug, args.domain)
-        print(json.dumps(sol, ensure_ascii=False, indent=2) if sol else "无官方题解")
+        if sol:
+            print(f"Title: {sol['title']}")
+            print(f"Content length: {len(sol['content_html'])} chars")
+            print(f"Can see detail: {sol['can_see_detail']}")
+            print()
+            print("=== Content (first 500 chars) ===")
+            print(sol["content_text"][:500])
+        else:
+            print("No official solution found.")
+
     elif args.mode == "list":
         lst = fetch_solution_list(args.slug, args.domain)
         for i, s in enumerate(lst, 1):
             print(f"{i}. {s['title']}  [{s['slug']}]")
             print(f"   {s['url']}")
+
     elif args.mode == "detail":
         if not args.solution_slug:
-            raise SystemExit("mode=detail 需要 --solution-slug")
+            raise SystemExit("mode=detail requires --solution-slug")
         d = fetch_solution_detail(args.solution_slug, args.slug, args.domain)
-        print(json.dumps(d, ensure_ascii=False, indent=2))
+        print(f"Title: {d['title']}")
+        print(f"Author: {d['author']}")
+        print(f"Content length: {len(d['content_html'])} chars")
