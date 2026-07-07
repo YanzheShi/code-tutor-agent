@@ -30,11 +30,21 @@ chroma_db/              # 向量库（代码默认路径）
 data/chroma_db/
 data/chroma/
 data/vault/             # 个人笔记，不进 git
+data/db/                # SQLite 数据库文件
 data/*.db
 data/checkpoints/       # LangGraph checkpointer
 logs/                   # 运行日志
 models/                 # reranker 模型 ~1.1GB
 eval/results/           # 评测结果
+# 运行时状态文件
+current_problem.json
+awaiting_problem
+awaiting_submit
+judging
+tutoring
+memory_graph.json
+my_solution.py
+day3_note.md
 
 # === Notebook 检查点 ===
 notebooks/.ipynb_checkpoints/
