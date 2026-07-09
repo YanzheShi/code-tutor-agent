@@ -1,8 +1,8 @@
-"""Planner node — MVP: hardcoded rules (no LLM).
+"""规划节点 — MVP：硬编码规则（无 LLM）。
 
-The planner sits at the START of each round and decides *what* to
-practice next.  For D1 it emits a fixed topic/difficulty; D5 will
-replace this with a real rule engine reading user profiles.
+规划节点位于每轮 START 处，决定接下来练什么。
+D1 阶段输出固定的 topic/difficulty；
+后续将替换为基于用户画像的规则引擎。
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from code_tutor_agent.schemas.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-# ── Hardcoded topic rotation for MVP ──
+# ── MVP 硬编码主题轮转 ──
 _TOPIC_QUEUE = [
     ("two_sum", "数组+哈希表", "easy"),
     ("sliding_window", "滑动窗口", "medium"),
@@ -41,7 +41,7 @@ def planner_node(state: SessionState) -> Command:
     Returns:
         Command with ``goto`` and updated state fields.
     """
-    # ── If a problem is already loaded, go straight to awaiting_submit ──
+    # ── 如果题目已加载，直接跳到 awaiting_submit ──
     if state.problem:
         logger.info("Problem already loaded — skipping generation, goto=wait_for_submit_node")
         return Command(

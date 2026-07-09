@@ -1,4 +1,4 @@
-"""Shared dependencies for API routers."""
+"""API 路由的共享依赖：get_graph() 单例 + 进度存储器。"""
 from __future__ import annotations
 
 import logging

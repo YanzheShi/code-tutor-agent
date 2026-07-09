@@ -1,4 +1,4 @@
-"""对抗策略引擎 — Adversarial Strategy Engine
+"""对抗策略引擎 — 对抗策略引擎
 
 **设计决策**（面试考点）：
 

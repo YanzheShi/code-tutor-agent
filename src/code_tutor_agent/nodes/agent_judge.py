@@ -1,25 +1,12 @@
-"""Agent judge node — LangGraph node for LLM-driven judging via Judge0.
+"""Agent 判题节点 — 通过 Judge0 进行 LLM 驱动的判题 LangGraph 节点。
 
-This node replaces the traditional mechanical judge_node when in agent mode.
-Instead of directly comparing expected vs actual outputs, it:
-  1. Runs the user's code against test cases via Judge0
-  2. Passes the raw results to an LLM for interpretation
-  3. The LLM produces warm, educational feedback with repair suggestions
-  4. Routes to agent_tutor_node for the next step in the loop
+该节点在 agent 模式下替代传统的机械判题节点 judge_node。
+它不直接比较期望输出与实际输出，而是：
+  1. 通过 Judge0 对测试用例执行用户代码
+  2. 将原始结果传给 LLM 进行解读
 
-**Graph topology (agent mode)**:
-
-    agent_dialog_node → planner_node → generator_node → wait_for_submit_node
-          → agent_judge_node [HERE] → agent_tutor_node → (loop back)
-
-**Judge cycle loop**:
-
-    agent_judge_node → agent_tutor_node
-         │                              │
-         │  AC?  → done (可换题)        │
-         │  WA?  → wait_for_submit_node ←── 用户修改代码后再次提交
-         ▼                              │
-    (回到 agent_judge_node, judge_cycle+1)
+节点流转：
+    wait_for_submit_node → agent_judge_node → agent_tutor_node
 """
 
 from __future__ import annotations

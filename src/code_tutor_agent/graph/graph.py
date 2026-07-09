@@ -1,4 +1,4 @@
-"""CodeTutor Agent — LangGraph StateGraph definition."""
+"""CodeTutor Agent — LangGraph StateGraph 定义与编译。"""
 from __future__ import annotations
 
 import logging
@@ -51,7 +51,7 @@ def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph
 
     # ── Start router: chat, agent mode, or normal ──
     def start_router(state: SessionState) -> str:
-        # If there's a pending user message not yet answered → route to chat_node
+        # 如果有未回复的用户消息 → 路由到 chat_node
         msgs = state.messages or []
         if msgs:
             last = msgs[-1]
@@ -60,7 +60,7 @@ def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph
                 if isinstance(last, HumanMessage) or role == "user":
                     logger.info("start_router → chat message pending, goto=chat_node")
                     return "chat_node"
-        # Agent mode
+        # Agent 模式
         if state.mode == "agent":
             logger.info("start_router → agent mode, goto=agent_dialog_node")
             return "agent_dialog_node"
@@ -84,7 +84,7 @@ def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph
     builder.add_conditional_edges("wait_for_submit_node", wait_for_submit_router)
     builder.add_edge("judge_node", "tutor_node")
     builder.add_edge("agent_judge_node", "agent_tutor_node")
-    # Chat node returns to END (checkpointer saves state automatically)
+    # chat_node 回到 END（checkpointer 自动保存状态）
     builder.add_edge("chat_node", END)
 
     return builder

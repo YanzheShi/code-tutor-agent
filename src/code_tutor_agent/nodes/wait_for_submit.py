@@ -1,7 +1,12 @@
-"""Wait-for-submission node — pauses the graph and collects user code.
+"""等待提交节点 — 暂停 graph 并收集用户代码。
 
-This is the single point where LG's ``interrupt()`` is called so the
-graph can pause and wait for the frontend to POST /submit.
+这是调用 LangGraph ``interrupt()`` 的唯一位置，
+使 graph 暂停并等待前端 POST /submit。
+
+节点流转：
+    generator_node → wait_for_submit_node（interrupt 暂停）
+        ├── agent 模式 → agent_judge_node
+        └── 普通模式 → judge_node
 """
 
 from __future__ import annotations

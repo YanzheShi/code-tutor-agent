@@ -1,16 +1,16 @@
-"""Judge0 REST API client — wraps the WSL Judge0 CE service.
+"""Judge0 REST API 客户端 — 封装 WSL 上的 Judge0 CE 服务。
 
-Provides two entry points:
-  1. ``run_code(source_code, stdin)`` — 1:1 Judge0 submission, returns raw result.
-  2. ``submit_test_cases(source_code, test_cases)`` — batch run with harness,
-     returns list[dict] compatible with ``RunnerResult`` / ``JudgeResult``.
+提供两个入口：
+  1. ``run_code(source_code, stdin)`` — 1:1 Judge0 提交，返回原始结果
+  2. ``submit_test_cases(source_code, test_cases)`` — 批量判题，
+     返回兼容 ``RunnerResult`` / ``JudgeResult`` 的 list[dict]
 
-Both pass ``enable_per_process_and_thread_time_limit=true`` and
-``enable_per_process_and_thread_memory_limit=true`` so isolate runs with
-soft limits (``-m``/``-t``) instead of cgroup-v1 ``--cg`` — works on WSL's
-cgroup v2 without privileged mode.
+两者都传入 ``enable_per_process_and_thread_time_limit=true`` 和
+``enable_per_process_and_thread_memory_limit=true``，
+使 isolate 使用软限制（``-m``/``-t``）而非 cgroup-v1 ``--cg`` ——
+在不需特权模式的 WSL cgroup v2 上正常工作。
 
-Node flow:
+节点调用链路：
     judge_node → submit_test_cases(user_code, test_cases)
     generator_node → submit_test_cases(brute_code, sample_tcs)
 """

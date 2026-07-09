@@ -1,4 +1,4 @@
-"""Session state → JSON-safe dict (DTO layer)."""
+"""会话状态序列化：LangGraph state → JSON 安全字典（DTO 层）。"""
 from __future__ import annotations
 
 from typing import Any

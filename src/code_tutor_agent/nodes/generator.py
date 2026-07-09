@@ -1,32 +1,32 @@
-"""Generator node — Day2 simplified flow.
+"""生成器节点 — Day2 简化流程。
 
-**Flow (written in code comments for traceability):**
+**流程图（代码注释中确保可追溯）：**
 
     START → planner_node → generator_node → wait_for_submit_node
                                                      │
-                                            [user writes code]
+                                            [用户写代码]
                                                      │
                                                      ▼
-                                               judge_node (uses full test suite)
+                                               judge_node（使用全量测试用例）
                                                      │
                                                      ▼
                                                tutor_node → planner / wait
 
-**Generator_node internal flow:**
+**生成器节点内部流程：**
 
-    1. LLM generates: problem description + optimal_solution + starter_code + function_signature
-           (No test cases, no brute_solution — those are generated locally later.)
-        2. Parse function_signature → determine parameter types
-        3. Generate 2 random inputs via Python random
-        4. Run optimal_solution on those 2 inputs → get expected_output
-    5. These 2 (input, expected) pairs → sample test cases (visible to user)
-    6. Save problem to DB with sample test cases
-    7. Return state with status="awaiting_submit"
+    1. LLM 生成：题目描述 + optimal_solution + starter_code + function_signature
+           （不生成测试用例和 brute_solution — 这些后续本地生成）
+    2. 解析 function_signature → 确定参数类型
+    3. 通过 Python random 生成 2 组随机输入
+    4. 用 optimal_solution 跑这 2 组输入 → 得到期望输出
+    5. 这 2 组（输入, 期望输出）对 → 示例测试用例（用户可见）
+    6. 将题目连同示例用例保存到 DB
+    7. 返回状态 status="awaiting_submit"
 
-    → Background (API layer, after graph returns):
-    8. Generate 10+ random inputs, run brute force → base test cases
-    9. LLM generates boundary test cases
-    10. Merge both → update DB with full test suite
+    → 后台（graph 返回后，由 API 层执行）：
+    8. 生成 10+ 组随机输入，运行参考解 → 基础测试用例
+    9. LLM 生成边界测试用例
+    10. 合并两者 → 更新 DB 中的全量测试套件
 """
 
 from __future__ import annotations
@@ -173,14 +173,14 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
     topic = state.topic
     difficulty = state.difficulty
 
-    # ── Path A: LeetCode import (skip LLM generation) ──
+    # ── 路径 A：LeetCode 导入（跳过 LLM 生成）──
     lc_data = state.leetcode
     if lc_data:
         logger.info("LeetCode data detected — skipping LLM generation")
         _progress(sid, "📥 使用 LeetCode 题目…")
         return _generate_from_leetcode(sid, lc_data, progress_cb)
 
-    # ── Path B: Normal LLM generation (existing flow) ──
+    # ── 路径 B：正常 LLM 生成（现有流程）──
     problem_dict: dict[str, Any] | None = None
     problem_obj: Problem | None = None
 
@@ -259,7 +259,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         sample_tcs = problem_dict.get("test_cases", [])[:2]
         sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
 
-    # ── Persist to DB — save with sample test cases, full suite added later ──
+    # ── 持久化到 DB — 先保存示例用例，完整用例后续补充 ──
     # The full test_suite will be generated in the background (API layer)
     # and saved via update_problem_test_cases()
     if problem_dict:
@@ -305,7 +305,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
 
     _progress(sid, "✅ 题目已就绪！")
 
-    # ── Return state — graph routes to wait_for_submit_node ──
+    # ── 返回 state — graph 路由到 wait_for_submit_node ──
     # The background test generation is triggered by the API layer
     # after _graph.invoke() returns (see _run_generation in api/main.py)
     update = {

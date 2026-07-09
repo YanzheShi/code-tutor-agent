@@ -1,8 +1,6 @@
-"""Per-session generation progress store.
+"""每个会话的生成进度存储。
 
-Thread-safe shared dict that both graph and generator nodes write to,
-and the API reads from for polling.  Avoids circular imports between
-``graph.py`` and ``nodes/generator.py``.
+线程安全的共享字典，graph 节点和 API 端点同时读写。
 """
 
 # sid → list of progress message strings

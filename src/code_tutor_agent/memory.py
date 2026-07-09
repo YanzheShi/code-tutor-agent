@@ -1,4 +1,4 @@
-"""Memory system: local JSON-based knowledge graph for persistent insights."""
+"""记忆系统：基于本地 JSON 的知识图谱，用于持久化洞察。"""
 
 import json
 import os

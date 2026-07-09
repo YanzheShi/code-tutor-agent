@@ -1,35 +1,10 @@
-"""Agent dialog node — LangGraph node for multi-turn conversation
-to determine the user's problem preferences (topic + difficulty).
+"""Agent 对话节点 — 多轮对话 LangGraph 节点，用于确定用户的问题偏好（topic + difficulty）。
 
-This node is the entry point for Agent Tutor Mode sessions.
-It manages the initial dialog phase before problem generation.
+该节点是 Agent 导师模式的入口。
+它在出题前管理初始对话阶段。
 
-**Graph topology (agent mode)**:
-
-    START → agent_dialog_node [HERE]
-          → planner_node → generator_node → wait_for_submit_node
-          → agent_judge_node → agent_tutor_node → (loop back)
-
-**Node behavior**:
-
-    1. First visit (agent_dialog_complete=False):
-       - Send initial greeting via build_initial_message()
-       - Store in agent_dialog_history + tutor_messages
-       - Set status = "dialog"
-       - goto="__end__" (graph pauses, waits for SSE chat rounds)
-
-    2. Subsequent visit (after SSE chat endpoint sets agent_dialog_complete=True):
-       - Detect completion flag
-       - Set status = "awaiting_problem"
-       - goto="planner_node" (generation flow starts)
-
-    Between visits, the SSE chat endpoint (/session/{sid}/chat/stream)
-    handles the conversation:
-      - Saves user messages → calls analyze_user_intent()
-      - If not ready → appends AI's next question, updates state
-      - If ready → sets agent_dialog_complete=True, topic, difficulty
-              → re-invokes graph → agent_dialog_node runs again
-              → routes to planner_node
+节点流转（详见 docstring 末尾的拓扑图）：
+    START → agent_dialog_node → [循环直到对话完成] → planner_node
 """
 
 from __future__ import annotations

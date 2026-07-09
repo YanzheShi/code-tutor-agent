@@ -1,4 +1,4 @@
-"""Background generation services — runs graph + test generation."""
+"""后台生成服务：执行 graph.invoke + 随机测试用例 + LLM 边界用例生成。"""
 from __future__ import annotations
 
 import asyncio
@@ -61,7 +61,7 @@ async def _generate_complex_tests(problem_id: int, sid: str):
         logger.warning("Problem %d not found", problem_id)
         return
 
-    # Try optimal_solution first, then brute_solution (backward compat)
+    # 优先尝试 optimal_solution，再降级到 brute_solution（向后兼容）
     brute_code = full.get("optimal_solution", "") or full.get("brute_solution", "")
     func_sig = full.get("function_signature", "")
     if not brute_code:

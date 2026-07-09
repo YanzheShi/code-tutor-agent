@@ -1,8 +1,7 @@
-"""Static problem pool — fallback when the generator's self-verification loop
-exhausts its retries.
+"""静态题库 — 当生成器自验证循环耗尽重试次数时的 fallback。
 
-Each entry is a minimal dict in the exact shape returned by the LLM generator,
-so the rest of the pipeline (save_problem, judge, etc.) works with no changes.
+每个条目是精简字典，结构与 LLM 生成器返回的完全一致，
+因此后续流程（save_problem、judge 等）无需任何改动即可正常工作。
 """
 
 from __future__ import annotations

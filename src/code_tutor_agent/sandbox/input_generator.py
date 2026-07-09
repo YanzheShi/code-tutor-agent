@@ -1,10 +1,9 @@
-"""Random input generator for brute force test case creation.
+"""随机输入生成器 — 用于暴力解生成测试用例。
 
-Day2 flow: after LLM generates problem + brute force code, this module
-generates random valid inputs, runs the brute force code to get expected
-outputs, producing (input_args, expected_output) pairs as test cases.
+Day2 流程：LLM 生成题目 + 参考解后，本模块生成随机合法输入，
+用参考解跑出期望输出，产出 (input_args, expected_output) 对作为测试用例。
 
-Usage:
+用法：
     from code_tutor_agent.sandbox.input_generator import generate_random_inputs
     inputs = generate_random_inputs(function_sig="nums: List[int], target: int -> List[int]", count=5)
 """

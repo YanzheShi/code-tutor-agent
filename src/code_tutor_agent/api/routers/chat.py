@@ -40,7 +40,7 @@ async def chat_with_tutor_stream(sid: str, body: dict):
     mode = values.get("mode", "")
     agent_done = values.get("agent_dialog_complete", False)
 
-    # Agent dialog mode: only if not already complete
+    # Agent 对话模式：仅当对话未完成时
     if status == "dialog" and mode == "agent" and not agent_done:
         history = list(values.get("agent_dialog_history", []))
         history.append(Message(role="user", content=message))
@@ -72,7 +72,7 @@ async def chat_with_tutor_stream(sid: str, body: dict):
                 async def _safe_invoke():
                     try:
                         # invoke(None, config) doesn't pick up update_state changes
-                        # Pass current checkpoint state explicitly
+                        # 显式传入当前 checkpoint 状态
                         cur = graph.get_state(config)
                         await _asyncio.to_thread(graph.invoke, dict(cur.values), config)
                     except Exception as e:
@@ -100,17 +100,17 @@ async def chat_with_tutor_stream(sid: str, body: dict):
         )
 
     # ── Normal tutoring chat ──
-    # Check if graph is paused at an interrupt (wait_for_submit_node).
-    # If so, astream won't work — fall back to direct LLM streaming.
+    # 检查 graph 是否在 interrupt 处暂停（wait_for_submit_node）。
+    # 如果是，astream 不可用 — 降级为直接 LLM 流式输出。
     state_snap = graph.get_state(config)
     has_interrupt = bool(state_snap.next)
 
     if has_interrupt:
-        # Direct LLM streaming (graph is at interrupt, can't astream chat)
+        # 直接 LLM 流式输出（graph 在 interrupt 处，无法 astream）
         from code_tutor_agent.config import get_llm
         llm = get_llm("agnes-stream", temperature=0.7)
 
-        # Reflect recent messages in prompt
+        # 在 prompt 中反映最近的消息
         problem = values.get("problem")
         title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
 
@@ -131,7 +131,7 @@ async def chat_with_tutor_stream(sid: str, body: dict):
                 logger.warning("Direct chat LLM failed: %s", exc)
                 yield "data: 【抱歉，我现在无法回答。请稍后再试。】\n\n"
 
-            # Save to state manually
+            # 手动保存到 state
             reply = "".join(full)
             tutor_msgs = list(values.get("tutor_messages", []))
             tutor_msgs.append({"role": "user", "content": message})

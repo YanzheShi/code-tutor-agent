@@ -1,4 +1,4 @@
-"""FastAPI entry point — ``uv run code-tutor-api`` target."""
+"""FastAPI 入口：``uv run code-tutor-api`` 的目标函数。"""
 
 import uvicorn
 from dotenv import load_dotenv

@@ -10,7 +10,7 @@ import os
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
-# Load .env at module load time so LLM_CONFIGS picks up env vars
+# 在模块加载时加载 .env，使 LLM_CONFIGS 能读取环境变量
 load_dotenv()
 
 # 模型别名 -> 具体配置的映射表

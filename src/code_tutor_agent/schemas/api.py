@@ -1,7 +1,6 @@
-"""FastAPI request / response schemas.
+"""FastAPI 请求 / 响应 Schema。
 
-These are **not** part of the LangGraph state — they are the wire
-contract between the HTTP layer and the client.
+这些**不属于** LangGraph state —— 它们是 HTTP 层与客户端之间的通信契约。
 """
 
 from __future__ import annotations

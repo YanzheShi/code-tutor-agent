@@ -37,7 +37,7 @@ async def create_session(body: CreateSessionRequest | None = None):
         if body.leetcode:
             initial_dict["leetcode"] = body.leetcode
 
-    # LeetCode fast-path
+    # LeetCode 快速路径
     if body and body.leetcode and body.leetcode.get("parsed_test_cases"):
         return run_fast_path(sid, body.model_dump() if hasattr(body, "model_dump") else body, graph, config)
 
@@ -66,7 +66,7 @@ async def submit_code(sid: str, body: SubmitRequest):
     state = graph.get_state(config)
     values = state.values
 
-    # Persist submission
+    # 持久化提交记录
     try:
         problem = values.get("problem")
         subs = values.get("submissions", [])
@@ -76,7 +76,13 @@ async def submit_code(sid: str, body: SubmitRequest):
             from code_tutor_agent.db.database import save_submission
             verdict = getattr(last_sub, "last_verdict", "") or getattr(last_sub, "verdict", "") or values.get("last_verdict", "")
             if verdict:
-                save_submission(pid, body.code, verdict, getattr(last_sub, "judge_results", []))
+                raw_results = getattr(last_sub, "judge_results", [])
+                serialised = [
+                    r.model_dump() if hasattr(r, "model_dump") else r
+                    for r in raw_results
+                ]
+                last_row_id = save_submission(pid, body.code, verdict, serialised)
+                logger.info("saved submission successfully lastrowid,  %s", last_row_id)
     except Exception as exc:
         logger.warning("Failed to persist submission: %s", exc)
 

@@ -1,6 +1,6 @@
-"""Code-Tutor MCP Server — used by the tutor agent during conversation.
+"""Code-Tutor MCP Server — 导师对话时 LLM 调用的判题工具集。
 
-Provides tools the LLM tutor can call to judge student code:
+提供 tools the LLM tutor can call to judge student code:
 
 - ``judge_code``         — (primary) run a LeetCode-style solution against test cases
 - ``judge_run_code``     — execute arbitrary code snippet

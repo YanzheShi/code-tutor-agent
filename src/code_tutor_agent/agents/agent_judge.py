@@ -1,15 +1,14 @@
-"""Agent judge agent — LLM-driven code analysis and warm feedback generation.
+"""Agent 判题 Agent — LLM 驱动的代码分析和温暖反馈生成。
 
-After running the user's code against test cases via Judge0,
-this module asks the LLM to interpret the raw results and produce
-educational, encouraging feedback with specific repair suggestions.
+通过 Judge0 对测试用例执行用户代码后，
+本模块让 LLM 解读原始结果，生成有教育意义的鼓励性反馈和具体修复建议。
 
-The flow:
-    1. Raw Judge0 results come in (pass/fail/runtime per test case)
-    2. LLM reads the code + results + problem description
-    3. LLM produces structured analysis with warm feedback
-    4. If code failed → repair suggestion
-    5. If code passed → optimization suggestions
+流程：
+    1. Judge0 原始结果输入（每个用例的 pass/fail/runtime）
+    2. LLM 读取代码 + 结果 + 题目描述
+    3. LLM 生成结构化分析（含温暖反馈）
+    4. 如果代码失败 → 修复建议
+    5. 如果代码通过 → 优化建议
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from code_tutor_agent.sandbox.runner import RunnerResult
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────
-#  Structured output model
+#  结构化输出模型
 # ──────────────────────────────────────────────
 
 
@@ -49,7 +48,7 @@ class JudgeAnalysis(BaseModel):
 
 
 # ──────────────────────────────────────────────
-#  Prompt
+#  Prompt 模板
 # ──────────────────────────────────────────────
 
 JUDGE_ANALYSIS_SYSTEM = """你是 AI 编程导师，负责分析学生提交的代码和判题结果。
@@ -131,7 +130,7 @@ JUDGE_ANALYSIS_USER = """## 题目
 
 
 # ──────────────────────────────────────────────
-#  Core function
+#  核心函数
 # ──────────────────────────────────────────────
 
 
@@ -209,7 +208,7 @@ def analyze_judge_results(
         return analysis
     except Exception as exc:
         logger.warning("LLM judge analysis failed: %s — using fallback", exc)
-        # Fallback: derive verdict mechanically
+        # 降级：机械判断 verdict
         all_pass = all(r.status == "Passed" for r in results)
         if all_pass:
             return JudgeAnalysis(
@@ -219,7 +218,7 @@ def analyze_judge_results(
                 should_retry=False,
             )
         else:
-            # Find first failure reason
+            # 找到第一个失败原因
             fail_details = []
             for r in results:
                 if r.status != "Passed":

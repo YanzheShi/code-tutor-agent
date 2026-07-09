@@ -1,24 +1,10 @@
-"""Chat node — LangGraph node for streaming chat conversations.
+"""聊天节点 — 流式聊天对话的 LangGraph 节点。
 
-This node handles user chat messages by routing them through the
-LangGraph state machine, allowing the InMemorySaver checkpointer to
-automatically manage message history.
+该节点处理用户聊天消息，通过 LangGraph 状态机路由，
+让 InMemorySaver checkpointer 自动管理消息历史。
 
-**How it works**:
-
-    1. Frontend sends a chat message via SSE endpoint
-    2. SSE endpoint adds the message to state via ``update_state()``
-    3. SSE endpoint invokes the graph → routes to this node
-    4. This node reads the pending user message from ``state.messages``
-    5. Calls the LLM with streaming
-    6. Pushes each token via ``StreamWriter`` (SSE streams them to frontend)
-    7. Appends the AI response to ``state.messages``
-    8. Checkpointer saves the updated state automatically
-
-**Graph topology**:
-
-    start_router → (normal flow) | (chat_node if new user message)
-                → chat_node → (back to previous state)
+节点流转：
+    start_router → chat_node → END
 """
 
 from __future__ import annotations

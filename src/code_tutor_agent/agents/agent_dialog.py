@@ -1,11 +1,11 @@
-"""Agent dialog agent — LLM-driven conversation to determine user preferences.
+"""Agent 对话 Agent — LLM 驱动的对话，用于确定用户偏好。
 
-Flow:
-    1. SSE handler receives user message → appends to history
-    2. Calls ``stream_dialog_response()`` (async generator)
-       - First: non-streaming ``analyze_user_intent()`` → reliable structured output
-       - Then: streams the ``next_message`` via a real streaming LLM call
-    3. After streaming, caller reads ``DialogIntent`` for routing decisions
+流程：
+    1. SSE 处理器接收用户消息 → 追加到历史
+    2. 调用 ``stream_dialog_response()``（异步生成器）
+       - 先：非流式 ``analyze_user_intent()`` → 可靠的结构化输出
+       - 后：通过真正的流式 LLM 调用，流式输出 ``next_message``
+    3. 流式输出结束后，调用方读取 ``DialogIntent`` 进行路由决策
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from code_tutor_agent.schemas.state import Message
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────
-#  Structured output model
+#  结构化输出模型
 # ──────────────────────────────────────────────
 
 
@@ -37,7 +37,7 @@ class DialogIntent(BaseModel):
 
 
 # ──────────────────────────────────────────────
-#  Prompts
+#  Prompt 模板
 # ──────────────────────────────────────────────
 
 AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是通过多轮对话了解用户想练习什么类型的算法题。
@@ -100,7 +100,7 @@ CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了�
 
 
 # ──────────────────────────────────────────────
-#  Core functions
+#  核心函数
 # ──────────────────────────────────────────────
 
 
@@ -165,7 +165,7 @@ async def stream_dialog_response(
     """
     transcript = _build_transcript(history)
 
-    # Build a natural conversational prompt (no JSON output)
+    # 构建自然对话 prompt（不输出 JSON）
     system = CHAT_STREAM_SYSTEM
     user_prompt = f"## 对话历史\n\n{transcript}\n\n## 当前消息\n{history[-1].content if history else ''}\n\n请回复。"
 
@@ -184,7 +184,7 @@ async def stream_dialog_response(
 
 
 # ──────────────────────────────────────────────
-#  Message builders
+#  消息构建
 # ──────────────────────────────────────────────
 
 

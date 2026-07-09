@@ -1,6 +1,6 @@
-"""Problem generator agent: produces coding problems via LLM structured output.
+"""题目生成 Agent：通过 LLM 结构化输出生成编程题。
 
-D2: supports the expanded Problem model with optimal solution.
+D2：支持扩展后的 Problem 模型（含 optimal_solution）。
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.warning("No optimal_solution — cannot verify")
         return False
 
-    # Check for chain-of-thought leakage in description
+    # 检查描述中是否有思考过程泄漏
     desc = problem_dict.get("description", "")
     cot_keywords = ["让我们", "再试一个", "试一个", "选择", "这道题", "其实", "但是", "再试", "经典的", "标准题"]
     if any(kw in desc for kw in cot_keywords):
@@ -55,13 +55,13 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.warning("optimal_solution syntax error: %s", exc)
         return False
 
-    # Auto-generate starter_code from optimal_solution if LLM didn't provide a proper one
+    # 如果 LLM 没有提供合法的 starter_code，从 optimal_solution 自动生成
     sc = problem_dict.get("starter_code", "") or ""
     if not sc or "class Solution" not in sc or "def " not in sc:
         logger.info("starter_code is missing or invalid — deriving from optimal_solution")
-        # Extract method signature from optimal_solution
+        # 从 optimal_solution 提取方法签名
         import re
-        # Match: class Solution:\n    def method_name(self, params) -> return_type:
+        # 匹配：class Solution:\n    def method_name(self, params) -> return_type:
         method_match = re.search(
             r'class Solution:\s+def (\w+)\(self([^)]*)\)\s*(?:->\s*(\w+(?:\[.*?\])?))?',
             optimal,
@@ -71,14 +71,14 @@ def verify_problem(problem_dict: dict) -> bool:
             params = method_match.group(2).strip()
             ret_type = method_match.group(3)
             ret_anno = f" -> {ret_type}" if ret_type else ""
-            # Generate proper starter_code: class + method signature + pass
+            # 生成正确的 starter_code：class + 方法签名 + pass
             sc_generated = f"class Solution:\n    def {method_name}(self, {params}){ret_anno}:\n        pass\n"
             problem_dict["starter_code"] = sc_generated
-            # Also generate function_signature from the method
+            # 同时从方法生成 function_signature
             sig_parts = optimal.split("def " + method_name, 1)
             if len(sig_parts) > 1:
                 sig_line = sig_parts[1].split("\n")[0].strip()
-                # Remove 'self, ' prefix
+                # 去掉 'self, ' 前缀
                 sig_line = re.sub(r'^\(self,\s*', '(', sig_line)
                 sig_line = re.sub(r'^\(self\)', '()', sig_line)
                 problem_dict["function_signature"] = sig_line
@@ -135,6 +135,6 @@ def generate_problem(
 
         logger.warning("Self-verification failed on attempt %d — retrying", attempt + 1)
 
-    # Return last attempt even if verification failed
+    # 即使验证失败也返回最后一次尝试的结果
     logger.warning("Max retries reached — returning last generated problem")
     return problem

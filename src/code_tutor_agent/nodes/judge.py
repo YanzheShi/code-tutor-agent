@@ -1,4 +1,4 @@
-"""Judge node — multi-phase judging (D3)
+"""判题节点 — 多阶段判题（D3）
 
 三阶段判题流程（PRD §3.2）：
 

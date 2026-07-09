@@ -1,21 +1,20 @@
-"""LangGraph SessionState and related types.
+"""LangGraph SessionState 及相关类型。
 
-This is the **single source of truth** for the conversational state
-that flows through the StateGraph.  Every node reads from and writes
-to these fields.
+这是流经 StateGraph 的会话状态的**单一数据源**。
+每个节点读写这些字段。
 
-**Lifecycle by mode:**
+**各模式生命周期：**
 
-Normal mode (practice / interview):
+普通模式（practice / interview）：
     START → planner_node → generator_node → wait_for_submit_node
-          → judge_node → tutor_node → (loop back to wait)
+          → judge_node → tutor_node →（循环回到 wait）
 
-Agent mode:
-    START → agent_dialog_node (多轮对话收集需求)
+Agent 模式：
+    START → agent_dialog_node（多轮对话收集需求）
           → planner_node → generator_node → wait_for_submit_node
-          → agent_judge_node (LLM + MCP 判题)
-          → agent_tutor_node (温暖反馈 + 修复建议)
-          → (AC → done) | (未通过 → wait_for_submit_node 循环)
+          → agent_judge_node（LLM + MCP 判题）
+          → agent_tutor_node（温暖反馈 + 修复建议）
+          →（AC → done）|（未通过 → wait_for_submit_node 循环）
 """
 
 from __future__ import annotations

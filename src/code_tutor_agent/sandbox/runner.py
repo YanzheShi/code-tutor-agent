@@ -1,10 +1,9 @@
-"""Sandbox runner — executes reference solutions against test cases.
+"""沙箱执行器 — 对测试用例执行参考解。
 
-D2: Used by the generator's self-verification loop to validate
-both optimal_solution (must pass) and brute_solution (must TLE
-on large input).
+D2：被生成器的自验证循环使用，用于验证
+optimal_solution（必须通过）和参考解。
 
-Windows-compatible: uses subprocess + timeout instead of resource.RLIMIT.
+兼容 Windows：使用 subprocess + timeout 替代 resource.RLIMIT。
 """
 
 from __future__ import annotations
