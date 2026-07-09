@@ -1,8 +1,8 @@
 """Generation prompts for the self-verifying problem generator (D2).
 
-Two prompts:
+Three prompts:
 
-1. **generate** — produces a full Problem with optimal + brute solutions
+1. **generate** — produces a full Problem with optimal solution
 2. **fix_expected** — given a failing test case, repairs the expected output
 3. **critic_novelty** — rates the problem on novelty (R03)
 """
@@ -11,15 +11,17 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 
 ## 输出要求
 
+**重要：不要输出任何思考过程、不要自我讨论、不要列举候选题目。直接输出最终确定的题目。**
+
 必须包含以下所有字段（严格 JSON / Pydantic 结构）：
 
 ### 1. 题目描述（用户可见）
 - `title`: 简洁标题
-- `description`: **HTML 格式**的完整题目描述，含背景、输入输出定义
-  - 使用 `<p>` 包裹段落
-  - 重要术语用 `<strong>` 或 `<code>` 包裹
-  - 公式中的上标用 `<sup>`（如 10<sup>4</sup>）
+- `description`: **纯文本格式**的完整题目描述，含背景、输入输出定义
+  - 使用中文描述
+  - 重要术语用中文引号或加粗标记
   - 不包含示例和约束部分（这些在后面的独立字段中）
+  - **只写题目本身，不写你如何选择这道题的过程**
 - `difficulty`: easy / medium / hard
 - `topic`: 知识点标签
 - `examples`: 2~3 个示例，**每个示例使用 LeetCode 格式**：
@@ -36,18 +38,19 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   ```
 - `constraints`: 约束条件列表
 
-### 2. 暴力解代码（用户不可见，用于生成测试用例）
-- `brute_solution`: **正确但简单**的暴力解代码（class Solution 风格）
-  - 只求**正确**，不求效率（O(n²) 甚至 O(n³) 都行）
+### 2. 最优解代码（用户不可见，用于生成测试用例 + AC 后展示）
+- `optimal_solution`: **正确且高效**的最优解代码（class Solution 风格）
+  - 使用最合适的算法和数据结构（如哈希表、双指针、动态规划等）
   - 必须是可运行的合法 Python 代码
   - 方法签名必须准确（参数名、类型、返回值）
-  - 不需要考虑性能，越简单直接的实现越好
+  - 时间复杂度应为题目范围内的最优（如 O(n)、O(n log n)）
+  - 算法思想要体现面试考点（如空间换时间、状态转移等）
 
 ### 3. 模板代码（用户可见，编辑器初始内容）
 - `starter_code`: 一段 LeetCode 风格的类/方法定义，用户在此基础上填写实现
   - 包含正确的函数签名、参数名、返回类型注解
   - 方法体只写 `pass` 或 `...`，留给用户实现
-  - **不要加 `from typing import ...`** 等导入语句，系统会在后台自动注入 `from typing import *` 和 `TreeNode`/`ListNode`/`Node`
+  - **不要加 `from typing import ...`** 等导入语句
 
 ### 4. 函数签名描述（用于解析示例输入）
 - `function_signature`: 描述方法的参数类型和返回类型，格式如：
@@ -56,28 +59,13 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 
 ## 代码风格约定
 - 使用 LeetCode 风格：`class Solution: def method(self, ...):`
-- 参考解必须正确、可运行，不能有语法错误
-- `brute_solution` 要简单易懂，不要用任何高级数据结构
+- 最优解代码必须正确、可运行，不能有语法错误
+- `optimal_solution` 要用最优算法
 
 ## 输出限制
-- 不要生成 `optimal_solution`、`test_cases`、`adversarial_spec`、`novelty_score`
+- 不要生成 `test_cases`、`adversarial_spec`、`novelty_score`
 - 这些会由系统后续自动生成
-
-## 示例格式示例
-```
-Input: nums = [2,7,11,15], target = 9
-Output: [0,1]
-```
-```
-Input: height = [1,8,6,2,5,4,8,3,7]
-Output: 49
-```
-```
-Input: x = 121
-Output: true
-解释：121 从左向右读和从右向左读是一样的，因此是回文数。
-```
-"""
+- **不要输出思考过程、候选题目列举、或自我讨论**"""
 
 GENERATE_PROBLEM_USER = """请生成一道编程题。
 
@@ -85,7 +73,7 @@ GENERATE_PROBLEM_USER = """请生成一道编程题。
 - 知识点：{topic}
 - 难度：{difficulty}
 
-请严格按照要求输出题目信息，包含暴力解代码和函数签名描述。"""
+请严格按照要求输出题目信息，包含最优解代码和函数签名描述。"""
 
 
 FIX_EXPECTED_SYSTEM = """你是题目设计助手。一道自生成题目的参考解通过了代码检查，

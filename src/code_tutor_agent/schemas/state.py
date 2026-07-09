@@ -3,6 +3,19 @@
 This is the **single source of truth** for the conversational state
 that flows through the StateGraph.  Every node reads from and writes
 to these fields.
+
+**Lifecycle by mode:**
+
+Normal mode (practice / interview):
+    START → planner_node → generator_node → wait_for_submit_node
+          → judge_node → tutor_node → (loop back to wait)
+
+Agent mode:
+    START → agent_dialog_node (多轮对话收集需求)
+          → planner_node → generator_node → wait_for_submit_node
+          → agent_judge_node (LLM + MCP 判题)
+          → agent_tutor_node (温暖反馈 + 修复建议)
+          → (AC → done) | (未通过 → wait_for_submit_node 循环)
 """
 
 from __future__ import annotations
@@ -79,6 +92,14 @@ class Submission(BaseModel):
     index: int = Field(description="1-based submission number within this session")
     code: str = Field(description="Source code submitted by the user")
     language: str = Field(default="python", description="Programming language")
+    verdict: str = Field(
+        default="",
+        description="Collapsed verdict for this submission (AC/WA/TLE/RE/CE), set by judge node",
+    )
+    timestamp: str = Field(
+        default="",
+        description="ISO-8601 timestamp when the submission was created",
+    )
     judge_results: list[JudgeResult] = Field(
         default_factory=list,
         description="Results from base + adversarial judge passes",
@@ -110,19 +131,30 @@ class SessionState(BaseModel):
 
     **Lifecycle**:
 
+    Normal mode:
         1. Planner sets *problem* → status = ``awaiting_submit``
         2. User submits code → Judge runs, Tutor gives hint
-        3. Loop until AC → status = ``done`` → Planner picks next topic
+        3. Loop until AC → status = ``done``
+
+    Agent mode:
+        1. agent_dialog_node 多轮对话 → status = ``dialog``
+        2. 确定 topic/difficulty → planner → generator
+        3. 用户提交 → agent_judge_node → agent_tutor_node
+        4. 未通过 → 回到 wait_for_submit (循环)
+        5. AC → done
     """
 
     session_id: str = Field(description="Unique session / thread_id")
     # ── User preferences (set on create, consumed by planner+generator) ──
     topic: str = Field(default="数组", description="User-selected knowledge point")
     difficulty: str = Field(default="easy", description="User-selected difficulty")
-    mode: str = Field(default="practice", description="practice / interview / debug_theatre")
+    mode: Literal["practice", "interview", "debug_theatre", "agent"] = Field(
+        default="practice",
+        description="Session mode: normal modes vs agent-driven (dialog + MCP judging)",
+    )
     status: Literal[
         "awaiting_problem", "awaiting_submit", "judging",
-        "tutoring", "done", "error",
+        "tutoring", "dialog", "done", "error",
     ] = Field(default="awaiting_problem")
 
     # ── Problem ──
@@ -157,6 +189,30 @@ class SessionState(BaseModel):
         description="Did the adversarial phase run on the latest AC submission?",
     )
 
+    # ── Agent mode fields ──
+    # These are only used when mode == "agent"
+
+    agent_dialog_history: list[Message] = Field(
+        default_factory=list,
+        description="Agent mode: dialog transcript before problem generation (出题前对话)",
+    )
+    agent_dialog_complete: bool = Field(
+        default=False,
+        description="Agent mode: set to True when dialog is done and we're ready to generate a problem",
+    )
+    repair_suggestion: str = Field(
+        default="",
+        description="Agent mode: repair suggestion from the last agent judge cycle",
+    )
+    warm_feedback: str = Field(
+        default="",
+        description="Agent mode: warm feedback from the last agent judge cycle",
+    )
+    judge_cycle: int = Field(
+        default=0,
+        description="Agent mode: how many judge cycles have completed (1-based)",
+    )
+
     # ── Error handling ──
     error_message: str = Field(default="", description="Populated when status=error")
 
@@ -176,4 +232,17 @@ class SessionState(BaseModel):
     last_review_payload: Optional[dict] = Field(
         default=None,
         description="Most recent code review payload (set by judge, consumed by tutor)",
+    )
+
+    # ── Run results (set by POST /session/{sid}/run) ──
+    last_run_results: list = Field(
+        default_factory=list,
+        description="Most recent run-code results (survives page reload); set by run endpoint",
+    )
+
+    # ── LangChain message history (managed by checkpointer) ──
+    messages: list = Field(
+        default_factory=list,
+        description="LangChain-style message list (HumanMessage, AIMessage). "
+                    "Managed by InMemorySaver checkpointer, not manually.",
     )

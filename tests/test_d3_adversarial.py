@@ -122,6 +122,30 @@ class TestBoundaryGeneration:
         # Should still generate other boundary types
         assert len(cases) >= 3
 
+    def test_single_number_boundary_has_wrong_expected(self):
+        """singleNumber 的边界用例预期值不应硬编码 — 已在 run_adversarial_suite 中修复。
+
+        之前边界生成器硬写了 max() 作为 expected_output，对 singleNumber 错误。
+        修复后 expected_output 为空，由 run_adversarial_suite 用 optimal_solution 计算。
+        """
+        problem = {
+            "title": "只出现一次的数字",
+            "description": "给定非空整数数组，除了某个元素只出现一次外，其余每个元素均出现两次",
+            "constraints": ["1 <= nums.length <= 3 * 10^4", "-3 * 10^4 <= nums[i] <= 3 * 10^4"],
+            "test_cases": [
+                {"input_args": ["[2,2,1]"], "expected_output": "1"},
+            ],
+        }
+        cases = generate_boundary_cases(problem)
+        for c in cases:
+            # 所有边界用例的 expected_output 现在都为空字符串
+            # （由 run_adversarial_suite 用参考解填充）
+            assert c["expected_output"] == "", (
+                f"边界用例 expected_output 不应硬编码: {c.get('explanation', '')} → {c['expected_output']}"
+            )
+            assert c["input_args"], f"边界用例缺少 input_args: {c}"
+            assert c["explanation"], f"边界用例缺少 explanation: {c}"
+
 
 # ═══════════════════════════════════════════════
 #  Adversarial suite integration tests

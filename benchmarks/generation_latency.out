@@ -1,0 +1,1002 @@
+2026-07-08 07:33:44,091 INFO ============================================================
+2026-07-08 07:33:44,092 INFO Topic: 数组 (medium)
+2026-07-08 07:33:44,092 INFO ============================================================
+2026-07-08 07:33:44,092 INFO   Running Strategy A (two-phase)...
+2026-07-08 07:33:44,092 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:33:45,839 INFO LLM call attempt 1/1 …
+2026-07-08 07:33:56,412 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:33:56,424 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:33:56,424 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:33:56,425 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,425 INFO   router → local subprocess
+2026-07-08 07:33:56,525 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,525 INFO   router → local subprocess
+2026-07-08 07:33:56,637 INFO \u25b6 generate_random_inputs() — sig=arr: List[int] -> int, count=12, params=['arr']
+2026-07-08 07:33:56,637 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,637 INFO   router → local subprocess
+2026-07-08 07:33:56,740 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,740 INFO   router → local subprocess
+2026-07-08 07:33:56,834 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,834 INFO   router → local subprocess
+2026-07-08 07:33:56,929 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:56,929 INFO   router → local subprocess
+2026-07-08 07:33:57,048 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,048 INFO   router → local subprocess
+2026-07-08 07:33:57,152 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,152 INFO   router → local subprocess
+2026-07-08 07:33:57,244 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,244 INFO   router → local subprocess
+2026-07-08 07:33:57,342 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,343 INFO   router → local subprocess
+2026-07-08 07:33:57,440 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,440 INFO   router → local subprocess
+2026-07-08 07:33:57,546 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,546 INFO   router → local subprocess
+2026-07-08 07:33:57,649 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,649 INFO   router → local subprocess
+2026-07-08 07:33:57,752 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:33:57,752 INFO   router → local subprocess
+2026-07-08 07:36:04,180 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:04,181 INFO     A #1: OK (12.3s LLM)
+2026-07-08 07:36:04,181 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:04,182 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:04,674 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:04,676 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:04,676 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:04,676 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:04,677 INFO   router → local subprocess
+2026-07-08 07:36:04,760 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:04,760 INFO   router → local subprocess
+2026-07-08 07:36:04,844 INFO \u25b6 generate_random_inputs() — sig=height: List[int] -> int, count=12, params=['height']
+2026-07-08 07:36:04,844 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:04,844 INFO   router → local subprocess
+2026-07-08 07:36:04,944 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:04,944 INFO   router → local subprocess
+2026-07-08 07:36:05,044 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,044 INFO   router → local subprocess
+2026-07-08 07:36:05,146 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,146 INFO   router → local subprocess
+2026-07-08 07:36:05,251 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,251 INFO   router → local subprocess
+2026-07-08 07:36:05,352 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,352 INFO   router → local subprocess
+2026-07-08 07:36:05,455 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,455 INFO   router → local subprocess
+2026-07-08 07:36:05,547 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,547 INFO   router → local subprocess
+2026-07-08 07:36:05,646 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,646 INFO   router → local subprocess
+2026-07-08 07:36:05,745 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,745 INFO   router → local subprocess
+2026-07-08 07:36:05,849 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,849 INFO   router → local subprocess
+2026-07-08 07:36:05,948 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:05,948 INFO   router → local subprocess
+2026-07-08 07:36:10,666 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:10,667 INFO     A #2: OK (0.5s LLM)
+2026-07-08 07:36:10,667 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:10,668 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:11,310 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:11,312 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:11,312 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:11,312 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,312 INFO   router → local subprocess
+2026-07-08 07:36:11,390 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,390 INFO   router → local subprocess
+2026-07-08 07:36:11,470 INFO \u25b6 generate_random_inputs() — sig=height: List[int] -> int, count=12, params=['height']
+2026-07-08 07:36:11,470 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,470 INFO   router → local subprocess
+2026-07-08 07:36:11,582 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,582 INFO   router → local subprocess
+2026-07-08 07:36:11,682 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,682 INFO   router → local subprocess
+2026-07-08 07:36:11,788 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,788 INFO   router → local subprocess
+2026-07-08 07:36:11,887 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,887 INFO   router → local subprocess
+2026-07-08 07:36:11,992 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:11,992 INFO   router → local subprocess
+2026-07-08 07:36:12,082 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,082 INFO   router → local subprocess
+2026-07-08 07:36:12,174 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,174 INFO   router → local subprocess
+2026-07-08 07:36:12,277 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,277 INFO   router → local subprocess
+2026-07-08 07:36:12,373 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,373 INFO   router → local subprocess
+2026-07-08 07:36:12,476 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,476 INFO   router → local subprocess
+2026-07-08 07:36:12,582 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:12,582 INFO   router → local subprocess
+2026-07-08 07:36:13,118 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:13,119 INFO     A #3: OK (0.6s LLM)
+2026-07-08 07:36:13,119 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:13,120 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:13,592 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:13,597 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:13,597 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:13,597 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:13,597 INFO   router → local subprocess
+2026-07-08 07:36:13,687 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:13,687 INFO   router → local subprocess
+2026-07-08 07:36:13,767 INFO \u25b6 generate_random_inputs() — sig=height: List[int] -> int, count=12, params=['height']
+2026-07-08 07:36:13,767 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:13,767 INFO   router → local subprocess
+2026-07-08 07:36:13,856 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:13,856 INFO   router → local subprocess
+2026-07-08 07:36:13,957 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:13,957 INFO   router → local subprocess
+2026-07-08 07:36:14,053 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,053 INFO   router → local subprocess
+2026-07-08 07:36:14,153 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,153 INFO   router → local subprocess
+2026-07-08 07:36:14,249 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,249 INFO   router → local subprocess
+2026-07-08 07:36:14,338 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,338 INFO   router → local subprocess
+2026-07-08 07:36:14,437 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,437 INFO   router → local subprocess
+2026-07-08 07:36:14,532 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,532 INFO   router → local subprocess
+2026-07-08 07:36:14,621 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,621 INFO   router → local subprocess
+2026-07-08 07:36:14,720 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,720 INFO   router → local subprocess
+2026-07-08 07:36:14,817 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:14,817 INFO   router → local subprocess
+2026-07-08 07:36:15,338 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:15,339 INFO     A #4: OK (0.5s LLM)
+2026-07-08 07:36:15,339 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:15,340 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:15,901 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:15,902 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:15,902 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:15,903 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:15,903 INFO   router → local subprocess
+2026-07-08 07:36:15,981 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:15,981 INFO   router → local subprocess
+2026-07-08 07:36:16,063 INFO \u25b6 generate_random_inputs() — sig=height: List[int] -> int, count=12, params=['height']
+2026-07-08 07:36:16,063 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,063 INFO   router → local subprocess
+2026-07-08 07:36:16,166 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,166 INFO   router → local subprocess
+2026-07-08 07:36:16,253 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,254 INFO   router → local subprocess
+2026-07-08 07:36:16,352 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,352 INFO   router → local subprocess
+2026-07-08 07:36:16,450 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,450 INFO   router → local subprocess
+2026-07-08 07:36:16,547 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,547 INFO   router → local subprocess
+2026-07-08 07:36:16,645 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,645 INFO   router → local subprocess
+2026-07-08 07:36:16,744 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,744 INFO   router → local subprocess
+2026-07-08 07:36:16,829 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,829 INFO   router → local subprocess
+2026-07-08 07:36:16,933 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:16,933 INFO   router → local subprocess
+2026-07-08 07:36:17,042 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:17,042 INFO   router → local subprocess
+2026-07-08 07:36:17,145 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:17,145 INFO   router → local subprocess
+2026-07-08 07:36:17,669 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:17,670 INFO     A #5: OK (0.6s LLM)
+2026-07-08 07:36:17,670 INFO   Running Strategy B (single-phase)...
+2026-07-08 07:36:17,670 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:17,671 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:18,132 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:18,134 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:18,134 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:18,134 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:18,134 INFO   router → local subprocess
+2026-07-08 07:36:18,214 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:18,214 INFO   router → local subprocess
+2026-07-08 07:36:18,303 INFO     B #1: OK (0.5s LLM)
+2026-07-08 07:36:18,303 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:18,304 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:21,336 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:21,338 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:21,338 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:21,339 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:21,339 INFO   router → local subprocess
+2026-07-08 07:36:21,421 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:21,421 INFO   router → local subprocess
+2026-07-08 07:36:21,502 INFO     B #2: OK (3.0s LLM)
+2026-07-08 07:36:21,502 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:21,504 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:21,933 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:21,934 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:21,935 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:21,935 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:21,935 INFO   router → local subprocess
+2026-07-08 07:36:22,015 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:22,015 INFO   router → local subprocess
+2026-07-08 07:36:22,097 INFO     B #3: OK (0.4s LLM)
+2026-07-08 07:36:22,097 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:22,099 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:23,956 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:23,956 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:23,958 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:23,958 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:23,958 INFO   router → local subprocess
+2026-07-08 07:36:24,043 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:24,043 INFO   router → local subprocess
+2026-07-08 07:36:24,126 INFO     B #4: OK (1.9s LLM)
+2026-07-08 07:36:24,126 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:24,127 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:24,548 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:24,549 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:24,549 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:24,550 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:24,550 INFO   router → local subprocess
+2026-07-08 07:36:24,634 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:24,634 INFO   router → local subprocess
+2026-07-08 07:36:24,743 INFO     B #5: OK (0.4s LLM)
+2026-07-08 07:36:24,743 INFO   Running Strategy B-enhanced...
+2026-07-08 07:36:24,743 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:24,745 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:27,299 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:27,300 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:27,300 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:27,300 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:27,300 INFO   router → local subprocess
+2026-07-08 07:36:27,379 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:27,379 INFO   router → local subprocess
+2026-07-08 07:36:27,463 INFO     BE #1: OK (2.6s LLM)
+2026-07-08 07:36:27,463 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:27,464 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:27,877 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:27,879 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:27,879 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:27,879 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:27,879 INFO   router → local subprocess
+2026-07-08 07:36:27,959 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:27,959 INFO   router → local subprocess
+2026-07-08 07:36:28,041 INFO     BE #2: OK (0.4s LLM)
+2026-07-08 07:36:28,041 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:28,042 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:28,465 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:28,466 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:28,466 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:28,466 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:28,466 INFO   router → local subprocess
+2026-07-08 07:36:28,548 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:28,548 INFO   router → local subprocess
+2026-07-08 07:36:28,630 INFO     BE #3: OK (0.4s LLM)
+2026-07-08 07:36:28,630 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:28,631 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:29,024 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:29,024 INFO Retrying request to /chat/completions in 0.442905 seconds
+2026-07-08 07:36:29,853 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:29,853 INFO Retrying request to /chat/completions in 0.796222 seconds
+2026-07-08 07:36:31,035 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:31,037 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233629469390504fE8E0wPa)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:31,038 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:31,038 WARNING Strategy B-enhanced attempt 1 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:31,038 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:31,040 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:31,440 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:31,440 INFO Retrying request to /chat/completions in 0.483709 seconds
+2026-07-08 07:36:32,309 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:32,309 INFO Retrying request to /chat/completions in 0.797258 seconds
+2026-07-08 07:36:33,506 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:33,506 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233631938868197NFSxIXQU)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:33,507 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:33,507 WARNING Strategy B-enhanced attempt 2 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:33,507 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:33,508 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:33,895 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:33,896 INFO Retrying request to /chat/completions in 0.492586 seconds
+2026-07-08 07:36:34,785 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:34,785 INFO Retrying request to /chat/completions in 0.811583 seconds
+2026-07-08 07:36:36,000 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:36,000 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233634431435154peffhlt6)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:36,001 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:36,001 WARNING Strategy B-enhanced attempt 3 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:36,001 INFO     BE #4: FAIL (7.4s LLM)
+2026-07-08 07:36:36,001 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:36,002 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:36,399 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:36,399 INFO Retrying request to /chat/completions in 0.440670 seconds
+2026-07-08 07:36:37,229 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:37,230 INFO Retrying request to /chat/completions in 0.904107 seconds
+2026-07-08 07:36:38,525 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:38,526 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202607072336369591238327dYdQLvG)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:38,526 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:38,526 WARNING Strategy B-enhanced attempt 1 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:38,526 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:38,528 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:38,920 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:38,921 INFO Retrying request to /chat/completions in 0.441909 seconds
+2026-07-08 07:36:39,760 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:39,760 INFO Retrying request to /chat/completions in 0.828061 seconds
+2026-07-08 07:36:40,981 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:40,981 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233639408699524n5j9xnbU)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:40,981 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:40,981 WARNING Strategy B-enhanced attempt 2 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:40,981 INFO \u25b6 generate_problem() — topic=数组 difficulty=medium
+2026-07-08 07:36:40,983 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:41,365 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:41,365 INFO Retrying request to /chat/completions in 0.454080 seconds
+2026-07-08 07:36:42,217 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:42,217 INFO Retrying request to /chat/completions in 0.994886 seconds
+2026-07-08 07:36:43,603 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:43,603 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026070723364229638178bsy2W3ia)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:43,603 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:43,603 WARNING Strategy B-enhanced attempt 3 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:43,603 INFO     BE #5: FAIL (7.6s LLM)
+2026-07-08 07:36:43,603 INFO ============================================================
+2026-07-08 07:36:43,603 INFO Topic: 双指针 (easy)
+2026-07-08 07:36:43,605 INFO ============================================================
+2026-07-08 07:36:43,605 INFO   Running Strategy A (two-phase)...
+2026-07-08 07:36:43,605 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:36:43,606 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:44,003 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:44,003 INFO Retrying request to /chat/completions in 0.395919 seconds
+2026-07-08 07:36:44,799 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:44,800 INFO Retrying request to /chat/completions in 0.860347 seconds
+2026-07-08 07:36:46,048 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:46,048 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233644482620461d6Kk3S70)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:36:46,048 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:36:46,048 WARNING Strategy A attempt 1 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:36:46,048 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:36:46,049 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:46,495 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:46,495 INFO Retrying request to /chat/completions in 0.390376 seconds
+2026-07-08 07:36:47,283 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:47,283 INFO Retrying request to /chat/completions in 0.904630 seconds
+2026-07-08 07:36:55,425 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:55,428 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:36:55,428 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:36:55,429 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,429 INFO   router → local subprocess
+2026-07-08 07:36:55,540 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,540 INFO   router → local subprocess
+2026-07-08 07:36:55,632 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,632 INFO   router → local subprocess
+2026-07-08 07:36:55,740 INFO \u25b6 generate_random_inputs() — sig=s: str -> bool, count=12, params=['s']
+2026-07-08 07:36:55,740 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,741 INFO   router → local subprocess
+2026-07-08 07:36:55,833 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,833 INFO   router → local subprocess
+2026-07-08 07:36:55,930 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:55,930 INFO   router → local subprocess
+2026-07-08 07:36:56,013 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,013 INFO   router → local subprocess
+2026-07-08 07:36:56,104 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,104 INFO   router → local subprocess
+2026-07-08 07:36:56,205 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,205 INFO   router → local subprocess
+2026-07-08 07:36:56,290 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,290 INFO   router → local subprocess
+2026-07-08 07:36:56,372 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,372 INFO   router → local subprocess
+2026-07-08 07:36:56,469 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,469 INFO   router → local subprocess
+2026-07-08 07:36:56,571 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,571 INFO   router → local subprocess
+2026-07-08 07:36:56,666 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,666 INFO   router → local subprocess
+2026-07-08 07:36:56,751 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:36:56,752 INFO   router → local subprocess
+2026-07-08 07:36:59,548 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:36:59,549 INFO     A #1: OK (11.8s LLM)
+2026-07-08 07:36:59,549 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:36:59,551 INFO LLM call attempt 1/1 …
+2026-07-08 07:36:59,944 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:36:59,944 INFO Retrying request to /chat/completions in 0.420413 seconds
+2026-07-08 07:37:00,766 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:00,766 INFO Retrying request to /chat/completions in 0.946159 seconds
+2026-07-08 07:37:02,174 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:02,176 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:02,176 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:02,176 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,176 INFO   router → local subprocess
+2026-07-08 07:37:02,266 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,266 INFO   router → local subprocess
+2026-07-08 07:37:02,347 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,347 INFO   router → local subprocess
+2026-07-08 07:37:02,429 INFO \u25b6 generate_random_inputs() — sig=s: str -> bool, count=12, params=['s']
+2026-07-08 07:37:02,429 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,429 INFO   router → local subprocess
+2026-07-08 07:37:02,534 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,534 INFO   router → local subprocess
+2026-07-08 07:37:02,627 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,627 INFO   router → local subprocess
+2026-07-08 07:37:02,727 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,727 INFO   router → local subprocess
+2026-07-08 07:37:02,816 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,816 INFO   router → local subprocess
+2026-07-08 07:37:02,903 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:02,903 INFO   router → local subprocess
+2026-07-08 07:37:03,000 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,000 INFO   router → local subprocess
+2026-07-08 07:37:03,086 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,086 INFO   router → local subprocess
+2026-07-08 07:37:03,177 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,177 INFO   router → local subprocess
+2026-07-08 07:37:03,274 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,274 INFO   router → local subprocess
+2026-07-08 07:37:03,375 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,375 INFO   router → local subprocess
+2026-07-08 07:37:03,475 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:03,475 INFO   router → local subprocess
+2026-07-08 07:37:03,961 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:03,961 INFO Retrying request to /chat/completions in 0.491059 seconds
+2026-07-08 07:37:05,067 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:05,068 INFO     A #2: OK (2.6s LLM)
+2026-07-08 07:37:05,068 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:05,069 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:08,229 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:08,230 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:08,231 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:08,231 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,231 INFO   router → local subprocess
+2026-07-08 07:37:08,318 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,318 INFO   router → local subprocess
+2026-07-08 07:37:08,401 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,401 INFO   router → local subprocess
+2026-07-08 07:37:08,483 INFO \u25b6 generate_random_inputs() — sig=s: str -> bool, count=12, params=['s']
+2026-07-08 07:37:08,483 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,483 INFO   router → local subprocess
+2026-07-08 07:37:08,584 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,584 INFO   router → local subprocess
+2026-07-08 07:37:08,685 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,685 INFO   router → local subprocess
+2026-07-08 07:37:08,789 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,789 INFO   router → local subprocess
+2026-07-08 07:37:08,893 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,893 INFO   router → local subprocess
+2026-07-08 07:37:08,994 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:08,994 INFO   router → local subprocess
+2026-07-08 07:37:09,095 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,095 INFO   router → local subprocess
+2026-07-08 07:37:09,184 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,184 INFO   router → local subprocess
+2026-07-08 07:37:09,277 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,277 INFO   router → local subprocess
+2026-07-08 07:37:09,374 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,374 INFO   router → local subprocess
+2026-07-08 07:37:09,479 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,479 INFO   router → local subprocess
+2026-07-08 07:37:09,586 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:09,586 INFO   router → local subprocess
+2026-07-08 07:37:10,076 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:10,076 INFO Retrying request to /chat/completions in 0.432661 seconds
+2026-07-08 07:37:10,958 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:10,959 INFO     A #3: OK (3.2s LLM)
+2026-07-08 07:37:10,959 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:10,960 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:11,405 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:11,406 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:11,406 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:11,407 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,407 INFO   router → local subprocess
+2026-07-08 07:37:11,488 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,488 INFO   router → local subprocess
+2026-07-08 07:37:11,572 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,572 INFO   router → local subprocess
+2026-07-08 07:37:11,655 INFO \u25b6 generate_random_inputs() — sig=s: str -> bool, count=12, params=['s']
+2026-07-08 07:37:11,655 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,655 INFO   router → local subprocess
+2026-07-08 07:37:11,764 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,764 INFO   router → local subprocess
+2026-07-08 07:37:11,870 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,870 INFO   router → local subprocess
+2026-07-08 07:37:11,976 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:11,977 INFO   router → local subprocess
+2026-07-08 07:37:12,083 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,084 INFO   router → local subprocess
+2026-07-08 07:37:12,188 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,188 INFO   router → local subprocess
+2026-07-08 07:37:12,287 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,287 INFO   router → local subprocess
+2026-07-08 07:37:12,372 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,372 INFO   router → local subprocess
+2026-07-08 07:37:12,463 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,463 INFO   router → local subprocess
+2026-07-08 07:37:12,557 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,557 INFO   router → local subprocess
+2026-07-08 07:37:12,653 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,653 INFO   router → local subprocess
+2026-07-08 07:37:12,741 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:12,741 INFO   router → local subprocess
+2026-07-08 07:37:13,262 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:13,263 INFO     A #4: OK (0.4s LLM)
+2026-07-08 07:37:13,263 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:13,265 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:14,706 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:14,708 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:14,709 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:14,709 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:14,709 INFO   router → local subprocess
+2026-07-08 07:37:14,796 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:14,796 INFO   router → local subprocess
+2026-07-08 07:37:14,884 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:14,884 INFO   router → local subprocess
+2026-07-08 07:37:14,962 INFO \u25b6 generate_random_inputs() — sig=s: str -> bool, count=12, params=['s']
+2026-07-08 07:37:14,962 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:14,962 INFO   router → local subprocess
+2026-07-08 07:37:15,050 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,050 INFO   router → local subprocess
+2026-07-08 07:37:15,155 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,155 INFO   router → local subprocess
+2026-07-08 07:37:15,257 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,257 INFO   router → local subprocess
+2026-07-08 07:37:15,356 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,356 INFO   router → local subprocess
+2026-07-08 07:37:15,456 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,456 INFO   router → local subprocess
+2026-07-08 07:37:15,551 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,551 INFO   router → local subprocess
+2026-07-08 07:37:15,644 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,644 INFO   router → local subprocess
+2026-07-08 07:37:15,744 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,744 INFO   router → local subprocess
+2026-07-08 07:37:15,840 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,840 INFO   router → local subprocess
+2026-07-08 07:37:15,939 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:15,939 INFO   router → local subprocess
+2026-07-08 07:37:16,027 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:16,027 INFO   router → local subprocess
+2026-07-08 07:37:16,714 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:16,715 INFO     A #5: OK (1.4s LLM)
+2026-07-08 07:37:16,715 INFO   Running Strategy B (single-phase)...
+2026-07-08 07:37:16,715 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:16,716 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:21,461 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:21,464 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:21,465 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:21,465 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:21,465 INFO   router → local subprocess
+2026-07-08 07:37:21,560 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:21,561 INFO   router → local subprocess
+2026-07-08 07:37:21,646 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:21,646 INFO   router → local subprocess
+2026-07-08 07:37:21,737 INFO     B #1: OK (4.8s LLM)
+2026-07-08 07:37:21,737 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:21,739 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:22,237 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:22,238 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:22,239 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:22,239 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:22,239 INFO   router → local subprocess
+2026-07-08 07:37:22,327 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:22,327 INFO   router → local subprocess
+2026-07-08 07:37:22,418 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:22,418 INFO   router → local subprocess
+2026-07-08 07:37:22,505 INFO     B #2: OK (0.5s LLM)
+2026-07-08 07:37:22,505 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:22,506 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:23,047 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:23,049 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:23,049 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:23,050 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,050 INFO   router → local subprocess
+2026-07-08 07:37:23,135 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,135 INFO   router → local subprocess
+2026-07-08 07:37:23,221 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,221 INFO   router → local subprocess
+2026-07-08 07:37:23,303 INFO     B #3: OK (0.5s LLM)
+2026-07-08 07:37:23,303 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:23,305 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:23,724 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:23,726 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:23,726 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:23,726 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,726 INFO   router → local subprocess
+2026-07-08 07:37:23,807 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,807 INFO   router → local subprocess
+2026-07-08 07:37:23,891 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:23,891 INFO   router → local subprocess
+2026-07-08 07:37:23,977 INFO     B #4: OK (0.4s LLM)
+2026-07-08 07:37:23,977 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:23,980 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:24,418 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:24,419 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:24,419 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:24,420 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:24,420 INFO   router → local subprocess
+2026-07-08 07:37:24,513 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:24,513 INFO   router → local subprocess
+2026-07-08 07:37:24,598 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:24,598 INFO   router → local subprocess
+2026-07-08 07:37:24,673 INFO     B #5: OK (0.4s LLM)
+2026-07-08 07:37:24,673 INFO   Running Strategy B-enhanced...
+2026-07-08 07:37:24,673 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:24,675 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:25,132 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:25,133 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:25,134 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:25,134 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:25,134 INFO   router → local subprocess
+2026-07-08 07:37:25,212 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:25,212 INFO   router → local subprocess
+2026-07-08 07:37:25,298 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:25,298 INFO   router → local subprocess
+2026-07-08 07:37:25,379 INFO     BE #1: OK (0.5s LLM)
+2026-07-08 07:37:25,379 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:25,381 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:25,886 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:25,888 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:25,888 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:25,888 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:25,888 INFO   router → local subprocess
+2026-07-08 07:37:25,999 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:25,999 INFO   router → local subprocess
+2026-07-08 07:37:26,090 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:26,090 INFO   router → local subprocess
+2026-07-08 07:37:26,182 INFO     BE #2: OK (0.5s LLM)
+2026-07-08 07:37:26,182 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:26,184 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:26,599 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:26,599 INFO Retrying request to /chat/completions in 0.382207 seconds
+2026-07-08 07:37:27,417 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:27,418 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:27,420 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:27,420 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:27,420 INFO   router → local subprocess
+2026-07-08 07:37:27,503 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:27,503 INFO   router → local subprocess
+2026-07-08 07:37:27,590 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:27,590 INFO   router → local subprocess
+2026-07-08 07:37:27,680 INFO     BE #3: OK (1.2s LLM)
+2026-07-08 07:37:27,680 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:27,682 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:28,150 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:28,151 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:28,151 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:28,151 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:28,151 INFO   router → local subprocess
+2026-07-08 07:37:28,233 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:28,233 INFO   router → local subprocess
+2026-07-08 07:37:28,320 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:28,320 INFO   router → local subprocess
+2026-07-08 07:37:28,418 INFO     BE #4: OK (0.5s LLM)
+2026-07-08 07:37:28,418 INFO \u25b6 generate_problem() — topic=双指针 difficulty=easy
+2026-07-08 07:37:28,420 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:39,416 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:37:39,418 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:37:39,418 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:37:39,418 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:39,418 INFO   router → local subprocess
+2026-07-08 07:37:39,508 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:39,508 INFO   router → local subprocess
+2026-07-08 07:37:39,601 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:37:39,601 INFO   router → local subprocess
+2026-07-08 07:37:39,683 INFO     BE #5: OK (11.0s LLM)
+2026-07-08 07:37:39,683 INFO ============================================================
+2026-07-08 07:37:39,683 INFO Topic: 动态规划 (medium)
+2026-07-08 07:37:39,683 INFO ============================================================
+2026-07-08 07:37:39,683 INFO   Running Strategy A (two-phase)...
+2026-07-08 07:37:39,683 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:39,685 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:40,082 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:40,083 INFO Retrying request to /chat/completions in 0.493890 seconds
+2026-07-08 07:37:40,972 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:40,973 INFO Retrying request to /chat/completions in 0.840871 seconds
+2026-07-08 07:37:42,217 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:42,217 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233740652245638hfcKwkYo)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:42,217 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:42,217 WARNING Strategy A attempt 1 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:42,217 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:42,219 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:42,632 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:42,632 INFO Retrying request to /chat/completions in 0.449497 seconds
+2026-07-08 07:37:43,467 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:43,467 INFO Retrying request to /chat/completions in 0.946334 seconds
+2026-07-08 07:37:44,815 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:44,815 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202607072337432501791284QnK6zgG)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:44,815 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:44,815 WARNING Strategy A attempt 2 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:44,815 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:44,817 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:45,207 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:45,207 INFO Retrying request to /chat/completions in 0.439847 seconds
+2026-07-08 07:37:46,049 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:46,049 INFO Retrying request to /chat/completions in 0.939507 seconds
+2026-07-08 07:37:47,425 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:47,426 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233745855766962u6HhSQOe)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:47,426 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:47,426 WARNING Strategy A attempt 3 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:47,426 INFO     A #1: FAIL (7.7s LLM)
+2026-07-08 07:37:47,426 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:47,428 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:47,819 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:47,819 INFO Retrying request to /chat/completions in 0.487239 seconds
+2026-07-08 07:37:48,690 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:48,690 INFO Retrying request to /chat/completions in 0.954643 seconds
+2026-07-08 07:37:50,035 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:50,035 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 202607072337484660435329Q9PGF1x)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:50,035 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:50,035 WARNING Strategy A attempt 1 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:50,035 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:50,036 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:50,438 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:50,439 INFO Retrying request to /chat/completions in 0.447089 seconds
+2026-07-08 07:37:51,290 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:51,290 INFO Retrying request to /chat/completions in 0.950809 seconds
+2026-07-08 07:37:52,633 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:52,633 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 2026070723375167930180sMZPKwFv)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:52,633 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:52,633 WARNING Strategy A attempt 2 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:52,633 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:52,634 INFO LLM call attempt 1/1 …
+2026-07-08 07:37:53,031 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:53,032 INFO Retrying request to /chat/completions in 0.450006 seconds
+2026-07-08 07:37:53,879 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:53,879 INFO Retrying request to /chat/completions in 0.867987 seconds
+2026-07-08 07:37:55,148 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:37:55,148 WARNING LLM structured output failed: Error code: 429 - {'error': {'code': '', 'message': 'You’ve reached the API rate limit for free users. Upgrade to a Token Plan to unlock higher limits and continue using the API without interruption. (request id: 20260707233753587311546pMpPqsU8)', 'type': 'AgnesAI_error'}}
+2026-07-08 07:37:55,148 WARNING Max retries reached — returning last generated problem
+2026-07-08 07:37:55,148 WARNING Strategy A attempt 3 failed: cannot access local variable 'problem' where it is not associated with a value
+2026-07-08 07:37:55,148 INFO     A #2: FAIL (7.7s LLM)
+2026-07-08 07:37:55,148 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:37:55,150 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:01,638 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:01,639 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:01,639 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:01,640 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:01,640 INFO   router → local subprocess
+2026-07-08 07:38:01,748 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:01,749 INFO   router → local subprocess
+2026-07-08 07:38:01,844 INFO \u25b6 generate_random_inputs() — sig=grid: List[List[int]] -> int, count=12, params=['grid']
+2026-07-08 07:38:01,844 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:01,844 INFO   router → local subprocess
+2026-07-08 07:38:01,949 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:01,949 INFO   router → local subprocess
+2026-07-08 07:38:02,050 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,050 INFO   router → local subprocess
+2026-07-08 07:38:02,155 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,156 INFO   router → local subprocess
+2026-07-08 07:38:02,257 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,257 INFO   router → local subprocess
+2026-07-08 07:38:02,362 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,362 INFO   router → local subprocess
+2026-07-08 07:38:02,468 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,468 INFO   router → local subprocess
+2026-07-08 07:38:02,568 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,568 INFO   router → local subprocess
+2026-07-08 07:38:02,657 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,657 INFO   router → local subprocess
+2026-07-08 07:38:02,764 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,764 INFO   router → local subprocess
+2026-07-08 07:38:02,869 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,869 INFO   router → local subprocess
+2026-07-08 07:38:02,972 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:02,972 INFO   router → local subprocess
+2026-07-08 07:38:08,225 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:08,226 INFO     A #3: OK (6.5s LLM)
+2026-07-08 07:38:08,226 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:08,228 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:08,757 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:08,758 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:08,758 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:08,759 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:08,759 INFO   router → local subprocess
+2026-07-08 07:38:08,842 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:08,842 INFO   router → local subprocess
+2026-07-08 07:38:08,920 INFO \u25b6 generate_random_inputs() — sig=grid: List[List[int]] -> int, count=12, params=['grid']
+2026-07-08 07:38:08,920 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:08,920 INFO   router → local subprocess
+2026-07-08 07:38:09,022 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,023 INFO   router → local subprocess
+2026-07-08 07:38:09,131 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,131 INFO   router → local subprocess
+2026-07-08 07:38:09,235 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,235 INFO   router → local subprocess
+2026-07-08 07:38:09,339 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,339 INFO   router → local subprocess
+2026-07-08 07:38:09,430 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,430 INFO   router → local subprocess
+2026-07-08 07:38:09,531 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,531 INFO   router → local subprocess
+2026-07-08 07:38:09,621 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,621 INFO   router → local subprocess
+2026-07-08 07:38:09,718 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,718 INFO   router → local subprocess
+2026-07-08 07:38:09,814 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,814 INFO   router → local subprocess
+2026-07-08 07:38:09,916 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:09,916 INFO   router → local subprocess
+2026-07-08 07:38:10,011 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:10,011 INFO   router → local subprocess
+2026-07-08 07:38:10,635 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:10,636 INFO     A #4: OK (0.5s LLM)
+2026-07-08 07:38:10,636 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:10,637 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:15,730 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:15,732 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:15,732 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:15,732 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:15,732 INFO   router → local subprocess
+2026-07-08 07:38:15,812 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:15,812 INFO   router → local subprocess
+2026-07-08 07:38:15,894 INFO \u25b6 generate_random_inputs() — sig=grid: List[List[int]] -> int, count=12, params=['grid']
+2026-07-08 07:38:15,895 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:15,895 INFO   router → local subprocess
+2026-07-08 07:38:15,998 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:15,998 INFO   router → local subprocess
+2026-07-08 07:38:16,103 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,103 INFO   router → local subprocess
+2026-07-08 07:38:16,210 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,210 INFO   router → local subprocess
+2026-07-08 07:38:16,316 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,316 INFO   router → local subprocess
+2026-07-08 07:38:16,400 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,400 INFO   router → local subprocess
+2026-07-08 07:38:16,498 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,498 INFO   router → local subprocess
+2026-07-08 07:38:16,593 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,593 INFO   router → local subprocess
+2026-07-08 07:38:16,688 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,688 INFO   router → local subprocess
+2026-07-08 07:38:16,786 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,787 INFO   router → local subprocess
+2026-07-08 07:38:16,882 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,882 INFO   router → local subprocess
+2026-07-08 07:38:16,972 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:16,972 INFO   router → local subprocess
+2026-07-08 07:38:17,536 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:17,537 INFO     A #5: OK (5.1s LLM)
+2026-07-08 07:38:17,537 INFO   Running Strategy B (single-phase)...
+2026-07-08 07:38:17,537 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:17,538 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:17,975 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:17,976 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:17,977 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:17,977 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:17,977 INFO   router → local subprocess
+2026-07-08 07:38:18,059 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:18,059 INFO   router → local subprocess
+2026-07-08 07:38:18,144 INFO     B #1: OK (0.4s LLM)
+2026-07-08 07:38:18,144 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:18,145 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:18,592 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:18,593 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:18,594 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:18,594 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:18,594 INFO   router → local subprocess
+2026-07-08 07:38:18,681 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:18,681 INFO   router → local subprocess
+2026-07-08 07:38:18,775 INFO     B #2: OK (0.5s LLM)
+2026-07-08 07:38:18,775 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:18,777 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:19,199 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:19,201 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:19,201 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:19,202 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:19,202 INFO   router → local subprocess
+2026-07-08 07:38:19,291 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:19,291 INFO   router → local subprocess
+2026-07-08 07:38:19,372 INFO     B #3: OK (0.4s LLM)
+2026-07-08 07:38:19,373 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:19,374 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:19,764 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:38:19,764 INFO Retrying request to /chat/completions in 0.453688 seconds
+2026-07-08 07:38:20,604 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-07-08 07:38:20,605 INFO Retrying request to /chat/completions in 0.973121 seconds
+2026-07-08 07:38:23,796 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:23,797 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:23,798 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:23,798 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:23,798 INFO   router → local subprocess
+2026-07-08 07:38:23,882 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:23,882 INFO   router → local subprocess
+2026-07-08 07:38:23,969 INFO     B #4: OK (4.4s LLM)
+2026-07-08 07:38:23,969 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:23,970 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:24,992 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:24,995 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:24,995 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:24,995 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:24,995 INFO   router → local subprocess
+2026-07-08 07:38:25,088 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:25,088 INFO   router → local subprocess
+2026-07-08 07:38:25,181 INFO     B #5: OK (1.0s LLM)
+2026-07-08 07:38:25,181 INFO   Running Strategy B-enhanced...
+2026-07-08 07:38:25,181 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:25,182 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:26,310 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:26,312 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:26,312 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:26,312 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:26,312 INFO   router → local subprocess
+2026-07-08 07:38:26,402 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:26,402 INFO   router → local subprocess
+2026-07-08 07:38:26,489 INFO     BE #1: OK (1.1s LLM)
+2026-07-08 07:38:26,489 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:26,491 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:26,950 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:26,952 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:26,952 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:26,953 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:26,953 INFO   router → local subprocess
+2026-07-08 07:38:27,048 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:27,048 INFO   router → local subprocess
+2026-07-08 07:38:27,139 INFO     BE #2: OK (0.5s LLM)
+2026-07-08 07:38:27,139 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:27,141 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:30,419 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:30,421 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:30,421 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:30,421 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:30,421 INFO   router → local subprocess
+2026-07-08 07:38:30,506 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:30,506 INFO   router → local subprocess
+2026-07-08 07:38:30,590 INFO     BE #3: OK (3.3s LLM)
+2026-07-08 07:38:30,590 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:30,591 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:31,029 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:31,031 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:31,031 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:31,032 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:31,032 INFO   router → local subprocess
+2026-07-08 07:38:31,124 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:31,124 INFO   router → local subprocess
+2026-07-08 07:38:31,209 INFO     BE #4: OK (0.4s LLM)
+2026-07-08 07:38:31,209 INFO \u25b6 generate_problem() — topic=动态规划 difficulty=medium
+2026-07-08 07:38:31,210 INFO LLM call attempt 1/1 …
+2026-07-08 07:38:31,642 INFO HTTP Request: POST https://apihub.agnes-ai.com/v1/chat/completions "HTTP/1.1 200 OK"
+2026-07-08 07:38:31,644 INFO \u25b6 verify_problem() — checking brute_solution compiles
+2026-07-08 07:38:31,644 INFO \u2713 brute_solution compiles OK
+2026-07-08 07:38:31,645 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:31,645 INFO   router → local subprocess
+2026-07-08 07:38:31,732 INFO \u25b6 run_solution() — 1 test cases, timeout=10.0s
+2026-07-08 07:38:31,733 INFO   router → local subprocess
+2026-07-08 07:38:31,818 INFO     BE #5: OK (0.4s LLM)
+2026-07-08 07:38:31,818 INFO 
+2026-07-08 07:38:31,818 INFO Strategy A (two-phase) summary (13/15 succeeded):
+2026-07-08 07:38:31,818 INFO   LLM call:     avg=3.5s  median=1.4s  min=0.4s  max=12.3s
+2026-07-08 07:38:31,818 INFO   Parse+validate: avg=0.2s  median=0.2s
+2026-07-08 07:38:31,818 INFO   Examples:     avg=2.4  min=2  max=3
+2026-07-08 07:38:31,819 INFO   Phase2 (bg):  avg=12.3s  median=1.8s
+2026-07-08 07:38:31,819 INFO 
+2026-07-08 07:38:31,819 INFO Strategy B (single-phase) summary (15/15 succeeded):
+2026-07-08 07:38:31,819 INFO   LLM call:     avg=1.3s  median=0.5s  min=0.4s  max=4.8s
+2026-07-08 07:38:31,819 INFO   Parse+validate: avg=0.2s  median=0.2s
+2026-07-08 07:38:31,819 INFO   Examples:     avg=2.3  min=2  max=3
+2026-07-08 07:38:31,819 INFO 
+2026-07-08 07:38:31,819 INFO Strategy B-enhanced (more examples) summary (13/15 succeeded):
+2026-07-08 07:38:31,819 INFO   LLM call:     avg=1.8s  median=0.5s  min=0.4s  max=11.0s
+2026-07-08 07:38:31,819 INFO   Parse+validate: avg=0.2s  median=0.2s
+2026-07-08 07:38:31,819 INFO   Examples:     avg=2.4  min=2  max=3
+2026-07-08 07:38:31,819 INFO 
+
+============================================================
+2026-07-08 07:38:31,819 INFO COMPARISON SUMMARY
+2026-07-08 07:38:31,819 INFO ============================================================
+2026-07-08 07:38:31,819 INFO 
+  [数组 medium]
+2026-07-08 07:38:31,819 INFO   A (two-phase):            3.5s avg LLM, 2.4s avg examples, bg= 12.3s
+2026-07-08 07:38:31,819 INFO   B (single):               1.3s avg LLM, 2.3s avg examples
+2026-07-08 07:38:31,819 INFO   B-enhanced:               1.8s avg LLM, 2.4s avg examples
+2026-07-08 07:38:31,819 INFO   A TTFT:                   3.5s (user wait)
+2026-07-08 07:38:31,819 INFO   B TTFT:                   1.3s (user wait)
+2026-07-08 07:38:31,819 INFO   B-enhanced TTFT:          1.8s (user wait)
+2026-07-08 07:38:31,819 INFO   A total:                  15.9s (full suite ready)
+2026-07-08 07:38:31,819 INFO   B total:                  1.3s (full suite ready)
+2026-07-08 07:38:31,819 INFO   B-enhanced total:         1.8s (full suite ready)
+2026-07-08 07:38:31,819 INFO 
+  [双指针 easy]
+2026-07-08 07:38:31,819 INFO   A (two-phase):            3.5s avg LLM, 2.4s avg examples, bg= 12.3s
+2026-07-08 07:38:31,819 INFO   B (single):               1.3s avg LLM, 2.3s avg examples
+2026-07-08 07:38:31,819 INFO   B-enhanced:               1.8s avg LLM, 2.4s avg examples
+2026-07-08 07:38:31,819 INFO   A TTFT:                   3.5s (user wait)
+2026-07-08 07:38:31,819 INFO   B TTFT:                   1.3s (user wait)
+2026-07-08 07:38:31,819 INFO   B-enhanced TTFT:          1.8s (user wait)
+2026-07-08 07:38:31,820 INFO   A total:                  15.9s (full suite ready)
+2026-07-08 07:38:31,820 INFO   B total:                  1.3s (full suite ready)
+2026-07-08 07:38:31,820 INFO   B-enhanced total:         1.8s (full suite ready)
+2026-07-08 07:38:31,820 INFO 
+  [动态规划 medium]
+2026-07-08 07:38:31,820 INFO   A (two-phase):            3.5s avg LLM, 2.4s avg examples, bg= 12.3s
+2026-07-08 07:38:31,820 INFO   B (single):               1.3s avg LLM, 2.3s avg examples
+2026-07-08 07:38:31,820 INFO   B-enhanced:               1.8s avg LLM, 2.4s avg examples
+2026-07-08 07:38:31,820 INFO   A TTFT:                   3.5s (user wait)
+2026-07-08 07:38:31,820 INFO   B TTFT:                   1.3s (user wait)
+2026-07-08 07:38:31,820 INFO   B-enhanced TTFT:          1.8s (user wait)
+2026-07-08 07:38:31,820 INFO   A total:                  15.9s (full suite ready)
+2026-07-08 07:38:31,820 INFO   B total:                  1.3s (full suite ready)
+2026-07-08 07:38:31,820 INFO   B-enhanced total:         1.8s (full suite ready)

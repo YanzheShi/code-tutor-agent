@@ -55,6 +55,7 @@ def wait_for_submit_node(state: SessionState) -> dict:
         index=len(state.submissions) + 1,
         code=code,
         language=language,
+        timestamp=__import__("datetime").datetime.now().isoformat(),
     )
 
     logger.info(

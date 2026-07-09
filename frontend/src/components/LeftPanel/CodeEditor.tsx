@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 
 export default function CodeEditor({
@@ -11,20 +11,11 @@ export default function CodeEditor({
   starterCode?: string;
 }) {
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
-  const initialised = useRef(false);
 
   const handleMount: OnMount = (editor) => {
     editorRef.current = editor;
     (window as unknown as Record<string, unknown>).__ct_editor = editor;
   };
-
-  // Populate starter code when problem changes
-  useEffect(() => {
-    if (starterCode && !initialised.current) {
-      initialised.current = true;
-      onChange(starterCode);
-    }
-  }, [starterCode, onChange]);
 
   return (
     <Editor

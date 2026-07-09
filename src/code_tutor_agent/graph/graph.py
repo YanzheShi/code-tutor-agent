@@ -1,37 +1,14 @@
-"""CodeTutor Agent — LangGraph StateGraph definition.
-
-D1 minimal topology (one session round):
-
-.. code-block::
-
-    START ──→ planner_node ──→ generator_node ──→ wait_for_submit_node
-                                                      │
-                                                 [interrupt — user writes code]
-                                                      │
-                                                      ▼
-                                                judge_node
-                                                      │
-                                                      ▼
-                                                tutor_node
-                                                      │
-                                          ┌───────────┴───────────┐
-                                          │                       │
-                                     (AC) │                   (WAIT)
-                                          ▼                       ▼
-                                     planner_node     wait_for_submit_node
-                                                          (next round)
-"""
-
+"""CodeTutor Agent — LangGraph StateGraph definition."""
 from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 from collections.abc import Callable
 from typing import Any
 
 from dotenv import load_dotenv
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
 
@@ -40,57 +17,75 @@ from code_tutor_agent.nodes.judge import judge_node
 from code_tutor_agent.nodes.planner import planner_node
 from code_tutor_agent.nodes.tutor import tutor_node
 from code_tutor_agent.nodes.wait_for_submit import wait_for_submit_node
+
+from code_tutor_agent.nodes.agent_dialog import agent_dialog_node
+from code_tutor_agent.nodes.agent_judge import agent_judge_node
+from code_tutor_agent.nodes.agent_tutor import agent_tutor_node
+from code_tutor_agent.nodes.chat import chat_node
+
 from code_tutor_agent.schemas.state import SessionState
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# ── Checkpointer path (relative to project root) ──
-_CHECKPOINT_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "data", "checkpoints", "checkpoints.sqlite",
-)
-
 
 def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph:
-    """Construct the ``StateGraph`` with all nodes and edges.
-
-    Args:
-        progress_cb: Optional callback fired by generator_node to report
-                     progress messages (shown in the frontend during generation).
-    """
     if progress_cb is None:
-        progress_cb = lambda msg: None  # no-op by default
+        progress_cb = lambda msg: None
 
-    # Bind progress callback into generator
     def generator_wrapper(state: SessionState) -> dict[str, Any]:
-        logger.info("▶ generator_wrapper()")
         return _raw_generator(state, progress_cb)
 
     builder = StateGraph(SessionState)
 
-    # ── Register nodes ──
+    # ── Register all nodes ──
     builder.add_node("planner_node", planner_node)
     builder.add_node("generator_node", generator_wrapper)
     builder.add_node("wait_for_submit_node", wait_for_submit_node)
     builder.add_node("judge_node", judge_node)
     builder.add_node("tutor_node", tutor_node)
+    builder.add_node("agent_dialog_node", agent_dialog_node)
+    builder.add_node("agent_judge_node", agent_judge_node)
+    builder.add_node("agent_tutor_node", agent_tutor_node)
+    builder.add_node("chat_node", chat_node)
 
-    # ── Conditional router: planner can skip generator if problem already loaded ──
+    # ── Start router: chat, agent mode, or normal ──
+    def start_router(state: SessionState) -> str:
+        # If there's a pending user message not yet answered → route to chat_node
+        msgs = state.messages or []
+        if msgs:
+            last = msgs[-1]
+            if isinstance(last, (HumanMessage, dict)):
+                role = last.get("role", "") if isinstance(last, dict) else "human"
+                if isinstance(last, HumanMessage) or role == "user":
+                    logger.info("start_router → chat message pending, goto=chat_node")
+                    return "chat_node"
+        # Agent mode
+        if state.mode == "agent":
+            logger.info("start_router → agent mode, goto=agent_dialog_node")
+            return "agent_dialog_node"
+        logger.info("start_router → normal mode, goto=planner_node")
+        return "planner_node"
+
     def planner_router(state: SessionState) -> str:
-        """Route to generator_node unless a problem is already loaded."""
         if state.problem:
-            logger.info("planner_router → problem loaded, goto=wait_for_submit_node")
             return "wait_for_submit_node"
-        logger.info("planner_router → goto=generator_node")
         return "generator_node"
 
+    def wait_for_submit_router(state: SessionState) -> str:
+        if state.mode == "agent":
+            return "agent_judge_node"
+        return "judge_node"
+
     # ── Edges ──
-    builder.add_edge("__start__", "planner_node")
+    builder.add_conditional_edges("__start__", start_router)
     builder.add_conditional_edges("planner_node", planner_router)
     builder.add_edge("generator_node", "wait_for_submit_node")
-    builder.add_edge("wait_for_submit_node", "judge_node")
+    builder.add_conditional_edges("wait_for_submit_node", wait_for_submit_router)
     builder.add_edge("judge_node", "tutor_node")
-    # tutor_node uses Command(goto=...) to route back to planner or wait
+    builder.add_edge("agent_judge_node", "agent_tutor_node")
+    # Chat node returns to END (checkpointer saves state automatically)
+    builder.add_edge("chat_node", END)
 
     return builder
 
@@ -99,26 +94,9 @@ def compile_graph(
     conn_string: str | None = None,
     progress_cb: Callable[[str], None] | None = None,
 ) -> CompiledStateGraph:
-    """Build and compile the graph with a SqliteSaver checkpointer.
-
-    Opens a persistent SQLite connection that stays alive for the
-    lifetime of the returned graph object.
-
-    Args:
-        conn_string: SQLite connection string.  Defaults to
-                     ``checkpoints.sqlite`` in the project root.
-        progress_cb: Optional callback for generation progress messages.
-
-    Returns:
-        A compiled ``StateGraph`` ready for ``invoke()``.
-    """
-    logger.info("▶ compile_graph() — conn=%s", conn_string or _CHECKPOINT_PATH)
+    logger.info("▶ compile_graph() — using InMemorySaver")
     builder = _build_graph(progress_cb)
-    conn_string = conn_string or _CHECKPOINT_PATH
-    conn = sqlite3.connect(conn_string, check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
-
+    checkpointer = InMemorySaver()
     graph = builder.compile(checkpointer=checkpointer)
-
-    logger.info("Graph compiled — checkpointer=%s (conn open=%s)", conn_string, True)
+    logger.info("Graph compiled — InMemorySaver checkpointer")
     return graph

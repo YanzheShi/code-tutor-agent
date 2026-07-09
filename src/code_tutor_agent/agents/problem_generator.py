@@ -1,6 +1,6 @@
 """Problem generator agent: produces coding problems via LLM structured output.
 
-D2: supports the expanded Problem model with dual solutions + adversarial spec.
+D2: supports the expanded Problem model with optimal solution.
 """
 
 from __future__ import annotations
@@ -28,24 +28,65 @@ def _extract_code(solution_text: str) -> str:
 
 
 def verify_problem(problem_dict: dict) -> bool:
-    """Day2: verify that brute_solution compiles and runs.
+    """Day2: verify that optimal_solution compiles and runs.
 
     No test cases exist yet at generation time — those are generated
-    locally later.  We just check that the brute_solution is valid
-    Python and can be imported.
+    locally later.  We just check that the optimal_solution is valid
+    Python and that the description doesn't contain chain-of-thought.
+    Also checks starter_code is valid; if not, derives it from optimal_solution.
     """
-    logger.info("▶ verify_problem() — checking brute_solution compiles")
-    brute = _extract_code(problem_dict.get("brute_solution", ""))
-    if not brute:
-        logger.warning("No brute_solution — cannot verify")
+    logger.info("▶ verify_problem() — checking optimal_solution compiles")
+    optimal = _extract_code(problem_dict.get("optimal_solution", ""))
+    if not optimal:
+        logger.warning("No optimal_solution — cannot verify")
         return False
+
+    # Check for chain-of-thought leakage in description
+    desc = problem_dict.get("description", "")
+    cot_keywords = ["让我们", "再试一个", "试一个", "选择", "这道题", "其实", "但是", "再试", "经典的", "标准题"]
+    if any(kw in desc for kw in cot_keywords):
+        logger.warning("Description contains chain-of-thought — rejecting")
+        return False
+
     try:
-        compile(brute, "<brute_solution>", "exec")
-        logger.info("✓ brute_solution compiles OK")
-        return True
+        compile(optimal, "<optimal_solution>", "exec")
+        logger.info("✓ optimal_solution compiles OK")
     except SyntaxError as exc:
-        logger.warning("brute_solution syntax error: %s", exc)
+        logger.warning("optimal_solution syntax error: %s", exc)
         return False
+
+    # Auto-generate starter_code from optimal_solution if LLM didn't provide a proper one
+    sc = problem_dict.get("starter_code", "") or ""
+    if not sc or "class Solution" not in sc or "def " not in sc:
+        logger.info("starter_code is missing or invalid — deriving from optimal_solution")
+        # Extract method signature from optimal_solution
+        import re
+        # Match: class Solution:\n    def method_name(self, params) -> return_type:
+        method_match = re.search(
+            r'class Solution:\s+def (\w+)\(self([^)]*)\)\s*(?:->\s*(\w+(?:\[.*?\])?))?',
+            optimal,
+        )
+        if method_match:
+            method_name = method_match.group(1)
+            params = method_match.group(2).strip()
+            ret_type = method_match.group(3)
+            ret_anno = f" -> {ret_type}" if ret_type else ""
+            # Generate proper starter_code: class + method signature + pass
+            sc_generated = f"class Solution:\n    def {method_name}(self, {params}){ret_anno}:\n        pass\n"
+            problem_dict["starter_code"] = sc_generated
+            # Also generate function_signature from the method
+            sig_parts = optimal.split("def " + method_name, 1)
+            if len(sig_parts) > 1:
+                sig_line = sig_parts[1].split("\n")[0].strip()
+                # Remove 'self, ' prefix
+                sig_line = re.sub(r'^\(self,\s*', '(', sig_line)
+                sig_line = re.sub(r'^\(self\)', '()', sig_line)
+                problem_dict["function_signature"] = sig_line
+            logger.info("Generated starter_code from optimal_solution: %s(...)", method_name)
+        else:
+            logger.warning("Could not parse method from optimal_solution — keeping as-is")
+
+    return True
 
 
 def generate_problem(
@@ -68,7 +109,7 @@ def generate_problem(
         A fully populated Problem instance.
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
-    llm = get_llm(model_alias, temperature=0.7)
+    llm = get_llm(model_alias, temperature=0.2)
     structured_llm = llm.with_structured_output(Problem)
 
     prompt = ChatPromptTemplate.from_messages([

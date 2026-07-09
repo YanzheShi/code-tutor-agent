@@ -49,6 +49,10 @@ def _write_default_pool() -> None:
             "time_complexity": "O(n)",
             "space_complexity": "O(n)",
             "novelty_score": 4.0,
+            "alternative_solutions": [
+                "class Solution:\n    def solve(self, nums, target):\n        # 暴力枚举 O(n²)\n        for i in range(len(nums)):\n            for j in range(i + 1, len(nums)):\n                if nums[i] + nums[j] == target:\n                    return [i, j]\n        return []",
+                "class Solution:\n    def solve(self, nums, target):\n        # 两遍哈希表：先建索引，再查找\n        seen = {}\n        for i, num in enumerate(nums):\n            seen[num] = i\n        for i, num in enumerate(nums):\n            complement = target - num\n            if complement in seen and seen[complement] != i:\n                return [i, seen[complement]]\n        return []",
+            ],
         },
         {
             "title": "最大子数组和",
@@ -74,6 +78,9 @@ def _write_default_pool() -> None:
             "time_complexity": "O(n)",
             "space_complexity": "O(1)",
             "novelty_score": 5.0,
+            "alternative_solutions": [
+                "class Solution:\n    def solve(self, nums):\n        # 分治法：最大子数组要么全在左半/右半，要么跨越中点 O(n log n)\n        return self._max_sub(nums, 0, len(nums) - 1)\n\n    def _max_sub(self, nums, l, r):\n        if l == r:\n            return nums[l]\n        m = (l + r) // 2\n        left_max = self._max_sub(nums, l, m)\n        right_max = self._max_sub(nums, m + 1, r)\n        # 跨越中点的最大和\n        cross = 0\n        cur = 0\n        for i in range(m, l - 1, -1):\n            cur += nums[i]\n            cross = max(cross, cur)\n        cur = 0\n        for i in range(m + 1, r + 1):\n            cur += nums[i]\n            cross = max(cross, cur)\n        return max(left_max, right_max, cross)",
+            ],
         },
         {
             "title": "找出数组中的最大值",
@@ -97,6 +104,10 @@ def _write_default_pool() -> None:
             "time_complexity": "O(n)",
             "space_complexity": "O(1)",
             "novelty_score": 3.0,
+            "alternative_solutions": [
+                "class Solution:\n    def solve(self, nums):\n        # 用内置函数（仅展示，面试慎用）\n        return max(nums)",
+                "class Solution:\n    def solve(self, nums):\n        # 排序后取末尾（面试考点：不可修改原数组）\n        return sorted(nums)[-1]",
+            ],
         },
     ]
     os.makedirs(os.path.dirname(_POOL_PATH), exist_ok=True)

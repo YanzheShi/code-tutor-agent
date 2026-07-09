@@ -6,65 +6,65 @@
 Ported from Day2 plan (Prompt B).
 """
 
-GENERATE_BOUNDARY_SYSTEM = """You are a programming problem test-case designer.
-Given a problem and its brute-force solution, generate boundary/extreme test cases.
+GENERATE_BOUNDARY_SYSTEM = """你是一个编程题目测试用例设计师。
+根据给定的题目及其最优解，生成边界/极端测试用例。
 
-## Requirements
+## 要求
 
-Create test cases that thoroughly test edge conditions:
+生成充分覆盖边界条件的测试用例：
 
-1. **Empty / zero input** — empty array, zero, null-equivalent values
-2. **Single element** — the smallest non-trivial input
-3. **Min/Max values** — values at constraint boundaries (e.g. 10^4 elements, 10^9 values)
-4. **Duplicates** — repeated values that could break naive solutions
-5. **Already sorted / reverse sorted** — if ordering matters
-6. **Negative numbers** — if constraints allow negatives
-7. **All same value** — uniform input, check tie-breaking
-8. **Large input (performance check)** — at the upper bound of the problem constraints
+1. **空输入 / 零值** — 空数组、零值、null 等效值
+2. **单元素** — 最小的非平凡输入
+3. **最小/最大值** — 处于约束边界的值（如 10^4 个元素、10^9 的数值）
+4. **重复值** — 可能导致朴素算法出错的重复元素
+5. **已排序 / 逆序** — 如果排序影响结果
+6. **负数** — 如果约束允许负数
+7. **全部相同值** — 均匀输入，检查并列情况的处理
+8. **大规模输入（性能检查）** — 达到问题约束的上限
 
-## Format
+## 格式
 
-Output a JSON array of test cases (no markdown fences, pure JSON):
+输出一个 JSON 数组格式的测试用例（不要用 markdown 代码块，纯 JSON）：
 
 ```json
 [
   {
     "input_args": ["[1,2,3]", "5"],
     "expected_output": "[0,1]",
-    "explanation": "Standard case, target exists at indices 0 and 1"
+    "explanation": "标准用例，target 存在于索引 0 和 1"
   }
 ]
 ```
 
-- `input_args`: Array of string-encoded argument values (each one valid Python literal).
-- `expected_output`: String-encoded expected return value (must be a valid Python expression).
-- `explanation`: Chinese or English, brief description of which boundary is covered.
+- `input_args`: 字符串编码的参数值数组（每个值必须是合法的 Python 字面量）。
+- `expected_output`: 字符串编码的期望返回值（必须是合法的 Python 表达式）。
+- `explanation`: 中文或英文，简要说明覆盖的是哪种边界情况。
 
-## Constraints
+## 约束
 
-- Each test case must produce a **unique** input (no duplicates across cases).
-- expected_output must be **accurate** — it will be validated by running the brute-force solution.
-- Generate at least 6 boundary cases, at most 10.
-- Follow the same method signature as the problem's brute solution.
+- 每个测试用例的输入必须**唯一**（用例之间不能重复）。
+- expected_output 必须**准确** — 它将运行最优解进行验证。
+- 至少生成 6 个边界用例，最多 10 个。
+- 方法签名需与题目的最优解保持一致。
 """
 
-GENERATE_BOUNDARY_USER = """## Problem
+GENERATE_BOUNDARY_USER = """## 题目
 
-**Title**: {title}
-**Description**: {description}
-**Difficulty**: {difficulty}
-**Function signature**: {function_signature}
-**Constraints**: {constraints}
+**标题**: {title}
+**描述**: {description}
+**难度**: {difficulty}
+**函数签名**: {function_signature}
+**约束条件**: {constraints}
 
-## Brute-force solution code
+## 最优解代码
 
 ```python
-{brute_code}
+{optimal_code}
 ```
 
-## Existing example test cases (for context, do NOT duplicate)
+## 已有示例测试用例（仅供参考，请勿重复）
 
 {existing_cases}
 
-Generate {count} boundary/extreme test cases. Return only the JSON array, no extra text.
+请生成 {count} 个边界/极端测试用例。仅返回 JSON 数组，不要附加其他文字。
 """

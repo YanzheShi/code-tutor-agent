@@ -2,11 +2,11 @@
 
 LLM now only generates:
 - title / description / difficulty / topic / examples / constraints
-- brute_solution (simple brute force for test generation)
+- optimal_solution (for test generation and AC display)
 - starter_code (LeetCode template)
 - function_signature (for random input generator)
 
-Test cases, optimal solution, adversarial spec are generated locally later.
+Test cases, brute_solution, adversarial spec are generated locally later.
 """
 
 from __future__ import annotations
@@ -53,7 +53,11 @@ class Problem(BaseModel):
     )
     optimal_solution: str = Field(
         default="",
-        description="最优解代码（暂不使用，保留兼容）",
+        description="最优解代码（AC 后显示给用户）",
+    )
+    alternative_solutions: list[str] = Field(
+        default_factory=list,
+        description="备选解法（仅显示用，不参与判题）",
     )
     novelty_score: float = Field(
         default=7.0, ge=0.0, le=10.0,

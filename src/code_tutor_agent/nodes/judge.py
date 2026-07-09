@@ -233,6 +233,9 @@ def _route_to_tutor(
     设置 ``last_verdict`` 和 ``adversarial_triggered`` 供
     tutor_node 决策 hint_level 使用。
     """
+    # Record verdict on the submission itself (for submission history display)
+    submission.verdict = verdict
+
     # 记录 hint_level_given（会在 tutor 中更新）
     update = {
         "submissions": state.submissions,

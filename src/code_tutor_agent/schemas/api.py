@@ -130,6 +130,7 @@ class LeetCodeParseResponse(BaseModel):
     """Result of parsing a LeetCode problem."""
 
     title: str
+    url: str = ""
     description: str
     description_html: str = ""  # 原始 HTML 格式，前端渲染富文本
     difficulty: str

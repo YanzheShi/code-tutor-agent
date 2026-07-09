@@ -16,7 +16,7 @@ const DIFFICULTIES = [
   { id: 'hard', label: 'Hard', color: 'bg-red-900/50 text-red-400 border-red-700' },
 ];
 
-type Tab = 'ai' | 'existing' | 'leetcode';
+type Tab = 'ai' | 'existing' | 'leetcode' | 'agent';
 
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string };
 
@@ -66,6 +66,7 @@ export default function WelcomeScreen({
         <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1">
           {[
             { id: 'ai' as Tab, label: 'AI 出题' },
+            { id: 'agent' as Tab, label: '🤖 Agent 导师' },
             { id: 'existing' as Tab, label: '从题库选' },
             { id: 'leetcode' as Tab, label: 'LeetCode 链接' },
             ...(onOpenAdmin ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
@@ -204,6 +205,31 @@ export default function WelcomeScreen({
               className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
             >
               解析并开始
+            </button>
+          </section>
+        )}
+
+        {/* ── Agent 导师模式 ── */}
+        {tab === 'agent' && (
+          <section className="text-center">
+            <div className="mb-4 rounded-lg border border-ct-border bg-slate-800/30 p-6">
+              <p className="text-lg font-medium text-ct-text">🧑‍🏫 Agent 导师模式</p>
+              <p className="mt-2 text-sm text-ct-muted">
+                与 AI 导师直接对话，告诉 TA 你想练什么类型、难度、具体方向的题目。
+                AI 会通过多轮对话了解你的需求，然后为你量身生成一道题。
+              </p>
+              <ul className="mt-3 space-y-1 text-left text-xs text-ct-muted">
+                <li>💬 自然对话，告诉 AI 你想练什么</li>
+                <li>🎯 AI 会追问细节，确保题目贴合你的需求</li>
+                <li>🧠 提交后 AI 判题，给出温暖反馈和修复建议</li>
+                <li>🔄 未通过可以多次修改，AI 持续辅导直到 AC</li>
+              </ul>
+            </div>
+            <button
+              onClick={() => onStart('', '', 'agent')}
+              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90"
+            >
+              开始对话
             </button>
           </section>
         )}

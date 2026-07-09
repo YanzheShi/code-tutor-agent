@@ -1,0 +1,1 @@
+"""Sandbox layer — code execution via Judge0 or local subprocess, adversarial testing."""

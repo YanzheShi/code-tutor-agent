@@ -31,21 +31,23 @@ def init_db() -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS problems (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL UNIQUE,
-            topic TEXT NOT NULL,
-            difficulty TEXT NOT NULL,
-            description TEXT NOT NULL,
-            test_cases_json TEXT NOT NULL,
-            optimal_solution TEXT NOT NULL DEFAULT '',
-            brute_solution TEXT DEFAULT '',
-            adversarial_spec_json TEXT DEFAULT '',
-            time_complexity TEXT DEFAULT '',
-            space_complexity TEXT DEFAULT '',
-            novelty_score REAL DEFAULT 7.0,
-            solution TEXT NOT NULL DEFAULT '',
-            starter_code TEXT NOT NULL DEFAULT '',
-            visible_test_cases_json TEXT NOT NULL DEFAULT '[]',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                title TEXT NOT NULL UNIQUE,
+                topic TEXT NOT NULL,
+                difficulty TEXT NOT NULL,
+                description TEXT NOT NULL,
+                test_cases_json TEXT NOT NULL,
+                optimal_solution TEXT NOT NULL DEFAULT '',
+                brute_solution TEXT DEFAULT '',
+                adversarial_spec_json TEXT DEFAULT '',
+                time_complexity TEXT DEFAULT '',
+                space_complexity TEXT DEFAULT '',
+                novelty_score REAL DEFAULT 7.0,
+                starter_code TEXT NOT NULL DEFAULT '',
+                visible_test_cases_json TEXT NOT NULL DEFAULT '[]',
+                source TEXT NOT NULL DEFAULT 'generated',
+                source_url TEXT DEFAULT '',
+                alternative_solutions TEXT NOT NULL DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
 
@@ -53,6 +55,9 @@ def init_db() -> None:
     for col_sql in [
         "ALTER TABLE problems ADD COLUMN starter_code TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN visible_test_cases_json TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE problems ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'",
+        "ALTER TABLE problems ADD COLUMN source_url TEXT DEFAULT ''",
+        "ALTER TABLE problems ADD COLUMN alternative_solutions TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
     ]:
@@ -60,6 +65,12 @@ def init_db() -> None:
             cursor.execute(col_sql)
         except sqlite3.OperationalError:
             pass
+
+    # -- Migration: drop redundant solution column (SQLite 3.35+) --
+    try:
+        cursor.execute("ALTER TABLE problems DROP COLUMN solution")
+    except sqlite3.OperationalError:
+        pass
 
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS submissions (
@@ -94,12 +105,20 @@ def save_problem(problem_dict: dict) -> int:
         conn.close()
         return existing["id"]
 
+    if "alternative_solutions" not in problem_dict:
+        alt = problem_dict.get("alternative_solutions", [])
+    else:
+        alt = problem_dict["alternative_solutions"]
+    if not isinstance(alt, str):
+        alt = json.dumps(alt, ensure_ascii=False)
+
     cursor.execute("""
             INSERT INTO problems
                 (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
                  optimal_solution, brute_solution, adversarial_spec_json,
-                 time_complexity, space_complexity, novelty_score, solution, starter_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 time_complexity, space_complexity, novelty_score, starter_code,
+                 source, source_url, alternative_solutions)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             problem_dict["title"],
             problem_dict["topic"],
@@ -114,8 +133,10 @@ def save_problem(problem_dict: dict) -> int:
             problem_dict.get("time_complexity", ""),
             problem_dict.get("space_complexity", ""),
             problem_dict.get("novelty_score", 7.0),
-            problem_dict.get("solution", problem_dict.get("optimal_solution", "")),
             problem_dict.get("starter_code", ""),
+            problem_dict.get("source", "generated"),
+            problem_dict.get("source_url", ""),
+            alt,
         ))
 
     problem_id = cursor.lastrowid
@@ -141,7 +162,8 @@ def get_problem_by_id(problem_id: int) -> Optional[dict[str, Any]]:
     result["test_cases"] = json.loads(result.get("test_cases_json", "[]"))
     result["visible_test_cases"] = json.loads(result.get("visible_test_cases_json", "[]"))
     if result.get("adversarial_spec_json"):
-            result["adversarial_spec"] = json.loads(result["adversarial_spec_json"])
+        result["adversarial_spec"] = json.loads(result["adversarial_spec_json"])
+    result["alternative_solutions"] = json.loads(result.get("alternative_solutions", "[]"))
     return result
 
 

@@ -1,3 +1,11 @@
+"""LLM configuration: model alias -> provider, temperature, base URL.
+
+Reads from .env:
+- AGNES_API_KEY, AGNES_BASE_URL
+- LLM_MODEL_AGNES, LLM_MODEL_AGNES_STREAM
+- OPENAI_API_KEY etc.
+"""
+
 import os
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model

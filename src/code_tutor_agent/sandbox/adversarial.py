@@ -245,7 +245,7 @@ def generate_boundary_cases(problem_dict: dict) -> list[dict]:
     if base_inputs.get("min_n", 1) == 0:
         cases.append({
             "input_args": _adapt_args(base_inputs, []),
-            "expected_output": base_inputs.get("empty_expected", "[]"),
+            "expected_output": "",
             "explanation": "空数组输入边界",
         })
 
@@ -253,7 +253,7 @@ def generate_boundary_cases(problem_dict: dict) -> list[dict]:
     if base_inputs.get("min_n", 1) <= 1:
         cases.append({
             "input_args": _adapt_args(base_inputs, base_inputs.get("single_val", [0])),
-            "expected_output": base_inputs.get("single_expected", "0"),
+            "expected_output": "",
             "explanation": "单元素边界",
         })
 
@@ -262,21 +262,21 @@ def generate_boundary_cases(problem_dict: dict) -> list[dict]:
     max_val = base_inputs.get("max_val", 10**9)
     cases.append({
         "input_args": _adapt_args(base_inputs, [min_val, max_val]),
-        "expected_output": str(max_val),
+        "expected_output": "",
         "explanation": f"极值边界（最小 {min_val}，最大 {max_val}）",
     })
 
     # ── 重复元素 ──
     cases.append({
         "input_args": _adapt_args(base_inputs, [5, 5, 5, 5]),
-        "expected_output": "5",
+        "expected_output": "",
         "explanation": "全部重复元素",
     })
 
     # ── 负数 ──
     cases.append({
         "input_args": _adapt_args(base_inputs, [-3, -1, -7, -5]),
-        "expected_output": "-1",
+        "expected_output": "",
         "explanation": "负数输入",
     })
 
@@ -287,7 +287,7 @@ def generate_boundary_cases(problem_dict: dict) -> list[dict]:
         large = [rnd.randint(-10**6, 10**6) for _ in range(1000)]
         cases.append({
             "input_args": _adapt_args(base_inputs, large),
-            "expected_output": str(max(large)),
+            "expected_output": "",
             "explanation": "1000 元素快速性能侦测",
         })
 
@@ -612,21 +612,41 @@ def run_adversarial_suite(
     suite.weakness = analyze_code_weakness(user_code)
     logger.info("Weakness: %s (conf=%.2f)", suite.weakness["weakness_type"], suite.weakness["confidence"])
 
-    # ── Step 2: 边界对抗（纯规则） ──
+    # ── Step 2: 边界对抗（纯规则生成输入，用参考解算预期值） ──
     boundary_cases = generate_boundary_cases(problem_dict)
-    suite.boundary_results = run_solution(user_code, boundary_cases, timeout=BOUNDARY_TIMEOUT)
-    boundary_pass = all(r.status == "Passed" for r in suite.boundary_results)
-    logger.info(
-        "Boundary: %d/%d passed",
-        sum(1 for r in suite.boundary_results if r.status == "Passed"),
-        len(suite.boundary_results),
-    )
+    if not boundary_cases:
+        logger.warning("No boundary cases generated — skipping boundary adversarial")
+    else:
+        # 用题目的 optimal_solution 计算真实 expected_output
+        # 避免硬编码的预期值对不同语义的题目出错（Bug: singleNumber）
+        ref_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
+        if not ref_code:
+            logger.warning("No reference solution available — skipping boundary adversarial")
+        else:
+            validated_cases = []
+            for bc in boundary_cases:
+                ref_results = run_solution(ref_code, [bc], timeout=BOUNDARY_TIMEOUT)
+                if ref_results and ref_results[0].detail and ref_results[0].status == "Passed":
+                    bc["expected_output"] = ref_results[0].detail
+                    validated_cases.append(bc)
+                else:
+                    logger.warning("Boundary case failed on ref: %s — skipping", bc.get("explanation", ""))
+            if not validated_cases:
+                logger.warning("No valid boundary cases after ref validation — skipping")
+            else:
+                suite.boundary_results = run_solution(user_code, validated_cases, timeout=BOUNDARY_TIMEOUT)
+                boundary_pass = all(r.status == "Passed" for r in suite.boundary_results)
+                logger.info(
+                    "Boundary: %d/%d passed",
+                    sum(1 for r in suite.boundary_results if r.status == "Passed"),
+                    len(suite.boundary_results),
+                )
 
-    if not boundary_pass:
-        suite.all_passed = False
-        # 边界挂了就不跑规模了（节约 token）
-        logger.warning("Boundary failed — skipping scale adversarial")
-        return suite
+                if not boundary_pass:
+                    suite.all_passed = False
+                    # 边界挂了就不跑规模了（节约 token）
+                    logger.warning("Boundary failed — skipping scale adversarial")
+                    return suite
 
     # ── Step 3: 规模对抗（LLM + 规则） ──
     scale_case = generate_scale_adversarial(problem_dict, user_code, suite.weakness)

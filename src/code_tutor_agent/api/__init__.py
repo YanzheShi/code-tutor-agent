@@ -1,0 +1,1 @@
+"""API layer — FastAPI app, routers, serializers, and background services."""

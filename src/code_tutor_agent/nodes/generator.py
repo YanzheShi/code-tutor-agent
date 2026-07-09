@@ -14,11 +14,11 @@
 
 **Generator_node internal flow:**
 
-    1. LLM generates: problem description + brute_solution + starter_code + function_signature
-       (No test cases, no optimal solution — those are generated locally later.)
-    2. Parse function_signature → determine parameter types
-    3. Generate 2 random inputs via Python random
-    4. Run brute_solution on those 2 inputs → get expected_output
+    1. LLM generates: problem description + optimal_solution + starter_code + function_signature
+           (No test cases, no brute_solution — those are generated locally later.)
+        2. Parse function_signature → determine parameter types
+        3. Generate 2 random inputs via Python random
+        4. Run optimal_solution on those 2 inputs → get expected_output
     5. These 2 (input, expected) pairs → sample test cases (visible to user)
     6. Save problem to DB with sample test cases
     7. Return state with status="awaiting_submit"
@@ -93,10 +93,10 @@ def _generate_from_leetcode(
     visible_tcs = _parse_examples_to_test_cases(examples, "")
     logger.info("Parsed %d visible test cases from LeetCode examples", len(visible_tcs))
 
-    # We don't have brute_solution from LeetCode, so save a placeholder.
+    # We don't have optimal_solution from LeetCode, so save a placeholder.
     # The background test generation will need to derive expected outputs
     # differently — but for now the problem is still usable (user can run
-    # and submit; the full test suite generation will be skipped if no brute).
+    # and submit; the full test suite generation will be skipped if no optimal).
     problem_dict = {
         "title": title,
         "topic": topic,
@@ -198,9 +198,9 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
             _progress(sid, f"⚠️ LLM 调用失败，重试中…")
             continue
 
-        brute_code = problem_dict.get("brute_solution", "")
+        brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
         if not brute_code:
-            logger.warning("No brute_solution in output — retrying")
+            logger.warning("No optimal_solution in output — retrying")
             continue
 
         # ── Step 2: Parse LLM examples into test cases ──
@@ -218,7 +218,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
             _progress(sid, "⚠️ 示例解析失败，重新生成…")
             continue
 
-        # ── Step 3: Run brute_solution on examples → get expected outputs ──
+        # ── Step 3: Run optimal_solution on examples → get expected outputs ──
         all_ok = True
         for tc in sample_tcs:
             input_args = tc.get("input_args", [])
@@ -266,6 +266,12 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         problem_dict["test_cases"] = sample_tcs
     problem_id = save_problem(problem_dict or {})
 
+    # If dedup happened (title already existed), reload from DB for correct starter_code
+    from code_tutor_agent.db.database import get_problem_by_id
+    db_problem = get_problem_by_id(problem_id)
+    db_starter_code = db_problem.get("starter_code", "") if db_problem else ""
+    db_optimal = db_problem.get("optimal_solution", "") if db_problem else ""
+
     # Build visible test cases (sample ones)
     visible_tcs = [
         {
@@ -283,13 +289,13 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         difficulty=problem_dict.get("difficulty", difficulty) if problem_dict else difficulty,
         description=problem_dict.get("description", "") if problem_dict else "",
         description_html=problem_dict.get("description", "") if problem_dict else "",
-        starter_code=problem_dict.get("starter_code", "") if problem_dict else "",
+        starter_code=db_starter_code or (problem_dict.get("starter_code", "") if problem_dict else ""),
         visible_test_cases=visible_tcs,
         novelty_score=problem_dict.get("novelty_score", 7.0) if problem_dict else 7.0,
     )
 
     # Store brute_code + function_signature in state for background test generation
-    brute_code = problem_dict.get("brute_solution", "") if problem_dict else ""
+    brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "") if problem_dict else ""
     func_sig = problem_dict.get("function_signature", "") if problem_dict else ""
 
     welcome_msg = TutorMsg(
