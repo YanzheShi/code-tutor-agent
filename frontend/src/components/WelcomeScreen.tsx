@@ -166,7 +166,7 @@ export default function WelcomeScreen({
                         : 'border-ct-border text-ct-muted hover:border-ct-accent/50'
                     }`}
                   >
-                    <span className="font-medium text-ct-text">{p.title}</span>
+                    <span className="font-medium text-ct-text">{p.id}. {p.title}</span>
                     <span className="ml-2 text-xs">{p.topic}</span>
                     <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
                       p.difficulty === 'easy' ? 'bg-green-900/50 text-green-400'

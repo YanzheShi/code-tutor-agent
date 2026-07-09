@@ -52,6 +52,13 @@ LLM_CONFIGS = {
         "base_url": os.getenv("AGNES_BASE_URL"),
         "api_key": os.getenv("AGNES_API_KEY"),
     },
+    "agnes-stream": {
+        "model": os.getenv("AGNES_MODEL"),
+        "model_provider": "openai",
+        "base_url": os.getenv("AGNES_BASE_URL"),
+        "api_key": os.getenv("AGNES_API_KEY"),
+        "streaming": True
+    }
 }
 
 
