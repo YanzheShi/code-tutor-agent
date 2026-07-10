@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { TabButton, VerdictBadge } from '../components/TabButton';
+import { TabButton, VerdictBadge } from '../src/components/TabButton';
 
 describe('TabButton', () => {
   it('renders label text', () => {

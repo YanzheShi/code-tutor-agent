@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import RunResults from '../components/RunResults';
+import RunResults from '../src/components/RunResults';
 
 describe('RunResults', () => {
   it('shows placeholder when no results and not running', () => {

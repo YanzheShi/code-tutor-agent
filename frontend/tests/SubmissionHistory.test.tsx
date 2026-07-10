@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import SubmissionHistory from '../components/SubmissionHistory';
+import SubmissionHistory from '../src/components/SubmissionHistory';
 
 describe('SubmissionHistory', () => {
   it('shows empty message when no submissions', () => {
