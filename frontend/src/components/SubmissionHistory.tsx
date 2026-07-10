@@ -1,9 +1,30 @@
+import { useEffect, useState } from 'react';
 import type { Submission } from '../types/session';
 
-export default function SubmissionHistory({ submissions }: { submissions: Submission[] }) {
+const BASE = 'http://localhost:8765';
+
+export default function SubmissionHistory({ problemId }: { problemId: number }) {
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetch(BASE + '/problem/' + problemId + '/submissions')
+      .then(r => r.ok ? r.json() : { submissions: [] })
+      .then(d => { if (!cancelled) { setSubmissions(d.submissions || []); setLoading(false); } })
+      .catch(() => { if (!cancelled) { setSubmissions([]); setLoading(false); } });
+    return () => { cancelled = true; };
+  }, [problemId]);
+
+  if (loading) {
+    return <div className="flex-1 overflow-y-auto p-4"><p className="text-sm text-ct-muted">加载中...</p></div>;
+  }
+
   if (submissions.length === 0) {
     return <div className="flex-1 overflow-y-auto p-4"><p className="text-sm text-ct-muted">暂无提交记录</p></div>;
   }
+
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-3">
       {[...submissions].reverse().map((s, i) => (
