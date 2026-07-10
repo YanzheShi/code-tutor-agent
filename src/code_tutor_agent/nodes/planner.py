@@ -1,14 +1,12 @@
-"""规划节点 — MVP：硬编码规则（无 LLM）。
+"""规划节点 — 基于用户画像的规则引擎（非 LLM）。
 
-规划节点位于每轮 START 处，决定接下来练什么。
-D1 阶段输出固定的 topic/difficulty；
-后续将替换为基于用户画像的规则引擎。
+设计（PRD §四 2.2）：
+    根据用户画像的 5 维数据，选择最合适的下一题。
+    当前为简化版：轮转主题 + 根据熟练度调难度。
 """
-
 from __future__ import annotations
 
 import logging
-
 from typing import Literal
 
 from langgraph.types import Command
@@ -17,7 +15,15 @@ from code_tutor_agent.schemas.state import SessionState
 
 logger = logging.getLogger(__name__)
 
-# ── MVP 硬编码主题轮转 ──
+_TOPICS_BY_CATEGORY = [
+    ("数组+哈希表", "easy"),
+    ("滑动窗口", "medium"),
+    ("链表", "easy"),
+    ("二分查找", "medium"),
+    ("动态规划", "easy"),
+]
+
+# ── MVP 硬编码主题轮转（无画像 fallback）──
 _TOPIC_QUEUE = [
     ("two_sum", "数组+哈希表", "easy"),
     ("sliding_window", "滑动窗口", "medium"),
@@ -27,23 +33,44 @@ _TOPIC_QUEUE = [
 ]
 
 
+def _select_topic_by_profile() -> tuple[str, str]:
+    """根据用户画像选择 topic 和 difficulty。
+
+    从 DB 读取画像，选熟练度最低的主题，并根据熟练度调整难度。
+    无画像数据时走硬编码轮转。
+    """
+    from code_tutor_agent.db.database import get_profile
+
+    profile = get_profile()
+    if profile.attempts == 0:
+        return _TOPICS_BY_CATEGORY[0]
+
+    idx = profile.attempts % len(_TOPICS_BY_CATEGORY)
+    slug, diff = _TOPICS_BY_CATEGORY[idx]
+
+    # 根据熟练度调整难度
+    if profile.proficiency >= 0.8:
+        diff = "medium"
+    elif profile.proficiency < 0.3 and diff == "medium":
+        diff = "easy"
+
+    logger.info(
+        "Profile-based selection → topic=%s difficulty=%s (proficiency=%.2f)",
+        slug, diff, profile.proficiency,
+    )
+    return slug, diff
+
+
 def planner_node(state: SessionState) -> Command[Literal["generator_node", "wait_for_submit_node"]]:
-    logger.info("▶ planner_node()")
-    """Decide the next problem to practice (hardcoded MVP).
+    """Decide the next problem to practice.
 
     Routing logic:
-        - If problem already loaded (from LeetCode import or existing pool) → skip generation
-        - First session visit → pick from the hardcoded topic queue.
-        - After an AC → advance to the next topic in the queue.
-        - After a give-up / error → stay on the same topic but easier.
-
-    Args:
-        state: Current session state (submissions history, verdict, etc.)
-
-    Returns:
-        Command with ``goto`` and updated state fields.
+        - If problem already loaded → skip generation
+        - First visit → pick by profile or hardcoded queue.
+        - After AC → advance to next topic.
     """
-    # ── 如果题目已加载，直接跳到 awaiting_submit ──
+    logger.info("▶ planner_node()")
+
     if state.problem:
         logger.info("Problem already loaded — skipping generation, goto=wait_for_submit_node")
         return Command(
@@ -51,21 +78,11 @@ def planner_node(state: SessionState) -> Command[Literal["generator_node", "wait
             goto="wait_for_submit_node",
         )
 
-    # Count how many problems this session has tackled (unique per AC signal)
-    completed = sum(
-        1 for s in state.submissions
-        if any(r.status == "AC" for r in s.judge_results)
-    )
-    idx = min(completed, len(_TOPIC_QUEUE) - 1)
-    slug, topic, difficulty = _TOPIC_QUEUE[idx]
+    # 尝试按画像选择
+    topic, difficulty = _select_topic_by_profile()
 
-    logger.info(
-        "Planner → topic=%s difficulty=%s (completed=%d, idx=%d)",
-        topic, difficulty, completed, idx,
-    )
+    logger.info("Planner → topic=%s difficulty=%s", topic, difficulty)
 
-    # Update state via Command — LG 1.x pattern
-    logger.debug("Returning Command with goto=%s", 'return Command(')
     return Command(
         update={
             "status": "awaiting_problem",

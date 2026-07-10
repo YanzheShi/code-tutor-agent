@@ -247,6 +247,14 @@ def _route_to_tutor(
     if review:
         update["last_review_payload"] = review
 
+    # ── 更新用户画像 ──
+    try:
+        from code_tutor_agent.db.database import update_profile_on_result
+        topic = state.problem.topic if state.problem else "未知"
+        update_profile_on_result(topic=topic, verdict=verdict)
+    except Exception:
+        logger.warning("Profile update failed (non-fatal)", exc_info=True)
+
     logger.info("Route to tutor → verdict=%s trigger=%s", verdict, trigger)
     logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="tutor_node")')
     return Command(update=update, goto="tutor_node")
