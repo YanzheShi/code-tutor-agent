@@ -196,6 +196,39 @@ def get_all_problem_ids() -> list[int]:
         raise
 
 
+def get_problems_by_ids(problem_ids: list[int]) -> list[dict[str, Any]]:
+    """Batch-fetch problems by IDs in a single query.
+
+    Deserialises JSON columns (test_cases, visible_test_cases, adversarial_spec,
+    alternative_solutions) into native Python objects, matching the shape of
+    get_problem_by_id().
+    """
+    if not problem_ids:
+        return []
+
+    placeholders = ",".join("?" * len(problem_ids))
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            f"SELECT * FROM problems WHERE id IN ({placeholders}) ORDER BY id",
+            problem_ids,
+        ).fetchall())
+
+        result = []
+        for row in rows:
+            d = dict(row)
+            d["test_cases"] = json.loads(d.get("test_cases_json", "[]"))
+            d["visible_test_cases"] = json.loads(d.get("visible_test_cases_json", "[]"))
+            if d.get("adversarial_spec_json"):
+                d["adversarial_spec"] = json.loads(d["adversarial_spec_json"])
+            d["alternative_solutions"] = json.loads(d.get("alternative_solutions", "[]"))
+            result.append(d)
+        logger.info("get_problems_by_ids() — %d problems fetched", len(result))
+        return result
+    except Exception as exc:
+        logger.error("get_problems_by_ids(%s) failed: %s", problem_ids, exc)
+        raise
+
+
 def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
     """Update test cases for an existing problem (Day2 background generation).
 

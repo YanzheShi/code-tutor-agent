@@ -52,13 +52,12 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
     if not _verify_admin(body.model_dump()):
         raise HTTPException(401, "密码错误")
 
-    from code_tutor_agent.db.database import get_all_problem_ids, get_problem_by_id
+    from code_tutor_agent.db.database import get_all_problem_ids, get_problems_by_ids
 
     ids = get_all_problem_ids()
+    problems = get_problems_by_ids(ids)
     result = []
-    for pid in ids:
-        p = get_problem_by_id(pid)
-        if p:
+    for p in problems:
             result.append(AdminProblemOut(
                 id=p["id"], title=p.get("title", ""), topic=p.get("topic", ""),
                 difficulty=p.get("difficulty", ""), description=p.get("description", ""),
