@@ -19,7 +19,8 @@ Agent 模式：
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+import operator
+from typing import Annotated, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -163,7 +164,7 @@ class SessionState(BaseModel):
     )
 
     # ── Submissions ──
-    submissions: list[Submission] = Field(
+    submissions: Annotated[list[Submission], operator.add] = Field(
         default_factory=list,
         description="All submissions, in chronological order",
     )
@@ -173,7 +174,7 @@ class SessionState(BaseModel):
         default=0, ge=0, le=4,
         description="Current hint level (0=no hint yet, 4=almost answer)",
     )
-    tutor_messages: list[Message] = Field(
+    tutor_messages: Annotated[list[Message], operator.add] = Field(
         default_factory=list,
         description="Conversation visible in the tutor panel",
     )
@@ -191,7 +192,7 @@ class SessionState(BaseModel):
     # ── Agent mode fields ──
     # These are only used when mode == "agent"
 
-    agent_dialog_history: list[Message] = Field(
+    agent_dialog_history: Annotated[list[Message], operator.add] = Field(
         default_factory=list,
         description="Agent mode: dialog transcript before problem generation (出题前对话)",
     )
@@ -216,7 +217,7 @@ class SessionState(BaseModel):
     error_message: str = Field(default="", description="Populated when status=error")
 
     # ── 生成进度（前端轮询显示）──
-    progress_messages: list[str] = Field(
+    progress_messages: Annotated[list[str], operator.add] = Field(
         default_factory=list,
         description="Progress log during generation, e.g. ['正在生成题目…', '自验证通过…']",
     )
@@ -234,7 +235,7 @@ class SessionState(BaseModel):
     )
 
     # ── Run results (set by POST /session/{sid}/run) ──
-    last_run_results: list = Field(
+    last_run_results: Annotated[list, operator.add] = Field(
         default_factory=list,
         description="Most recent run-code results (survives page reload); set by run endpoint",
     )

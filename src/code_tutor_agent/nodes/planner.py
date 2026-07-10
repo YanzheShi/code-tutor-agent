@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from typing import Literal
+
 from langgraph.types import Command
 
 from code_tutor_agent.schemas.state import SessionState
@@ -25,7 +27,7 @@ _TOPIC_QUEUE = [
 ]
 
 
-def planner_node(state: SessionState) -> Command:
+def planner_node(state: SessionState) -> Command[Literal["generator_node", "wait_for_submit_node"]]:
     logger.info("▶ planner_node()")
     """Decide the next problem to practice (hardcoded MVP).
 

@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import logging
-import os
-from collections.abc import Callable
-from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
@@ -12,7 +9,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
 
-from code_tutor_agent.nodes.generator import generator_node as _raw_generator
+from code_tutor_agent.nodes.generator import generator_node
 from code_tutor_agent.nodes.judge import judge_node
 from code_tutor_agent.nodes.planner import planner_node
 from code_tutor_agent.nodes.tutor import tutor_node
@@ -29,18 +26,12 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph:
-    if progress_cb is None:
-        progress_cb = lambda msg: None
-
-    def generator_wrapper(state: SessionState) -> dict[str, Any]:
-        return _raw_generator(state, progress_cb)
-
+def _build_graph() -> StateGraph:
     builder = StateGraph(SessionState)
 
     # ── Register all nodes ──
     builder.add_node("planner_node", planner_node)
-    builder.add_node("generator_node", generator_wrapper)
+    builder.add_node("generator_node", generator_node)
     builder.add_node("wait_for_submit_node", wait_for_submit_node)
     builder.add_node("judge_node", judge_node)
     builder.add_node("tutor_node", tutor_node)
@@ -92,10 +83,9 @@ def _build_graph(progress_cb: Callable[[str], None] | None = None) -> StateGraph
 
 def compile_graph(
     conn_string: str | None = None,
-    progress_cb: Callable[[str], None] | None = None,
 ) -> CompiledStateGraph:
     logger.info("▶ compile_graph() — using InMemorySaver")
-    builder = _build_graph(progress_cb)
+    builder = _build_graph()
     checkpointer = InMemorySaver()
     graph = builder.compile(checkpointer=checkpointer)
     logger.info("Graph compiled — InMemorySaver checkpointer")

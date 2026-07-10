@@ -32,10 +32,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
 
 from langgraph.types import Command
+from langgraph.config import get_stream_writer
 
 from code_tutor_agent.agents.problem_generator import generate_problem
 from code_tutor_agent.db.database import save_problem, update_problem_optimal_solution
@@ -74,16 +74,18 @@ def _generate_optimal_for_leetcode_sync(
     difficulty: str,
     starter_code: str,
     sid: str,
-    progress_cb: Callable[[str], None],
 ) -> None:
     """Synchronous LLM call to generate optimal_solution for a LeetCode problem.
 
     Called from _generate_from_leetcode() during graph invoke.
+    Uses get_stream_writer() for progress updates.
     """
     from code_tutor_agent.config import get_llm
 
+    writer = get_stream_writer()
+
     logger.info("Generating optimal_solution for LeetCode '%s' (%d)", title, problem_id)
-    progress_cb("🤖 正在生成最优解代码...")
+    writer("🤖 正在生成最优解代码...")
 
     prompt = (
         f"你是一个算法专家。给定以下 LeetCode 题目，请写出最优解 Python 代码（class Solution 风格）：\n\n"
@@ -117,18 +119,17 @@ def _generate_optimal_for_leetcode_sync(
         code = code.strip()
 
         update_problem_optimal_solution(problem_id, code)
-        progress_cb(f"🤖 最优解代码已生成（{len(code)} 字符）")
+        writer(f"🤖 最优解代码已生成（{len(code)} 字符）")
         logger.info("Generated optimal_solution for LeetCode problem %d (%d chars)", problem_id, len(code))
     except Exception as exc:
         logger.warning("Failed to generate optimal_solution for LeetCode problem %d: %s", problem_id, exc)
-        progress_cb("⚠️ 最优解代码生成失败（不影响做题）")
+        writer("⚠️ 最优解代码生成失败（不影响做题）")
 
 
 def _generate_from_leetcode(
     sid: str,
     lc_data: dict[str, Any],
-    progress_cb: Callable[[str], None],
-) -> Command:
+) -> Command[Literal["wait_for_submit_node"]]:
     """Build a problem directly from parsed LeetCode data.
 
     This path skips the LLM problem generation (title, description, tags,
@@ -171,7 +172,7 @@ def _generate_from_leetcode(
     problem_id = save_problem(problem_dict)
 
     # 调用 LLM 为该 LeetCode 题目生成最优解代码（同步，在当前 graph 线程中）
-    _generate_optimal_for_leetcode_sync(problem_id, title, description, difficulty, starter_code, sid, progress_cb)
+    _generate_optimal_for_leetcode_sync(problem_id, title, description, difficulty, starter_code, sid)
 
     meta = ProblemMeta(
         problem_id=problem_id,
@@ -192,7 +193,7 @@ def _generate_from_leetcode(
                 f"编辑器里已填入模板代码。写完点「运行」看示例结果，点「提交」正式判题。",
     )
 
-    progress_cb("✅ 题目已就绪！")
+    writer("✅ 题目已就绪！")
 
     return Command(
         update={
@@ -213,7 +214,7 @@ def _generate_from_leetcode(
     )
 
 
-def generator_node(state: SessionState, progress_cb: Callable[[str], None] | None = None) -> Command:
+def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node"]]:
     """Day2 generator: LLM → problem+brute → random 2 sample I/O → deliver.
 
     Graph flow (see module docstring):
@@ -227,8 +228,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
     """
     logger.info("▶ generator_node() — topic=%s, difficulty=%s", state.topic, state.difficulty)
     sid = state.session_id
-    if progress_cb is None:
-        progress_cb = lambda msg: None
+    writer = get_stream_writer()
 
     topic = state.topic
     difficulty = state.difficulty
@@ -238,6 +238,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
     if lc_data:
         logger.info("LeetCode data detected — skipping LLM generation")
         _progress(sid, "📥 使用 LeetCode 题目…")
+        writer("📥 使用 LeetCode 题目…")
         return _generate_from_leetcode(sid, lc_data, progress_cb)
 
     # ── 路径 B：正常 LLM 生成（现有流程）──
@@ -245,10 +246,12 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
     problem_obj: Problem | None = None
 
     _progress(sid, "正在调用大模型生成题目…")
+    writer("正在调用大模型生成题目…")
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         logger.info("Attempt %d/%d — LLM generate problem + brute code", attempt, MAX_ATTEMPTS)
         _progress(sid, f"第 {attempt}/{MAX_ATTEMPTS} 次尝试 — 生成中…")
+        writer(f"第 {attempt}/{MAX_ATTEMPTS} 次尝试 — 生成中…")
 
         try:
             problem_obj = generate_problem(topic=topic, difficulty=difficulty)
@@ -256,6 +259,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         except Exception as exc:
             logger.warning("LLM generation failed: %s", exc)
             _progress(sid, f"⚠️ LLM 调用失败，重试中…")
+            writer(f"⚠️ LLM 调用失败，重试中…")
             continue
 
         brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
@@ -269,6 +273,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         logger.info("Parsing %d examples, sig=%s", len(examples), func_sig)
 
         _progress(sid, "🧪 正在解析示例测试用例…")
+        writer("🧪 正在解析示例测试用例…")
 
         from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
         sample_tcs = _parse_examples_to_test_cases(examples, func_sig)
@@ -276,6 +281,7 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         if not sample_tcs:
             logger.warning("Failed to parse examples into test cases — retrying")
             _progress(sid, "⚠️ 示例解析失败，重新生成…")
+            writer("⚠️ 示例解析失败，重新生成…")
             continue
 
         # ── Step 3: Run optimal_solution on examples → get expected outputs ──
@@ -302,16 +308,19 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
         if not all_ok or not sample_tcs:
             logger.warning("Sample generation failed — retrying")
             _progress(sid, "⚠️ 示例生成失败，重新生成题目…")
+            writer("⚠️ 示例生成失败，重新生成题目…")
             continue
 
         # ── All checks passed for the lightweight generation ──
         logger.info("Lightweight generation OK — %d sample test cases", len(sample_tcs))
         _progress(sid, "✅ 题目已就绪！")
+        writer("✅ 题目已就绪！")
         break
     else:
         # ── Fallback: static pool ──
         logger.warning("All %d attempts failed — falling back to static pool", MAX_ATTEMPTS)
         _progress(sid, "⚠️ 出题超限，切换到静态题库…")
+        writer("⚠️ 出题超限，切换到静态题库…")
         problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
         if problem_dict is None:
             problem_dict = get_static_problem()
@@ -364,11 +373,12 @@ def generator_node(state: SessionState, progress_cb: Callable[[str], None] | Non
     )
 
     _progress(sid, "✅ 题目已就绪！")
+    writer("✅ 题目已就绪！")
 
     # ── 返回 state — graph 路由到 wait_for_submit_node ──
     # The background test generation is triggered by the API layer
     # after _graph.invoke() returns (see _run_generation in api/main.py)
-    update = {
+    update: dict[str, Any] = {
         "problem": meta,
         "status": "awaiting_submit",
         "submissions": [],

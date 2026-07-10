@@ -50,15 +50,13 @@ def agent_dialog_node(state: SessionState) -> Command:
     # ── First visit: send initial message and pause ──
     if not state.agent_dialog_history:
         msg = build_initial_message()
-        state.agent_dialog_history = [msg]
-        state.tutor_messages = [msg]
         logger.info("First visit — sent initial message: %s", msg.content[:60])
 
     return Command(
         update={
             "status": "dialog",
-            "agent_dialog_history": state.agent_dialog_history,
-            "tutor_messages": state.tutor_messages,
+            "agent_dialog_history": [msg] if not state.agent_dialog_history else [],
+            "tutor_messages": [msg] if not state.tutor_messages else [],
         },
         goto="__end__",
     )
