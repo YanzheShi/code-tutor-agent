@@ -92,6 +92,14 @@ def _init_db_tables(cursor) -> None:
         except sqlite3.OperationalError:
             pass
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS profiles (
+            user_id TEXT PRIMARY KEY,
+            profile_json TEXT NOT NULL DEFAULT '{}',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     try:
         cursor.execute("ALTER TABLE problems DROP COLUMN solution")
     except sqlite3.OperationalError:
@@ -346,3 +354,77 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
     except Exception as exc:
         logger.error("get_submissions_by_problem(%d) failed: %s", problem_id, exc)
         raise
+
+
+# ── User profile ──
+
+# ── User profile ──
+
+
+def get_profile(user_id: str = "default"):
+    """Read the user profile from the profiles table.
+    Returns a dict with default values if no row exists yet.
+    """
+    import json as _json
+    from .models import DBProfile
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
+        ).fetchone())
+
+        if not row:
+            logger.info("get_profile() — no profile for '%s', returning defaults", user_id)
+            return DBProfile()
+
+        data = _json.loads(row["profile_json"])
+        return DBProfile(**data)
+    except Exception as exc:
+        logger.error("get_profile(%s) failed: %s", user_id, exc)
+        return DBProfile()
+
+
+def save_profile(profile, user_id: str = "default"):
+    """Save (upsert) a user profile to the profiles table."""
+    import json as _json
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            (user_id, profile.model_dump_json()),
+        ))
+        logger.info("save_profile() — user=%s, proficiency=%.2f, attempts=%d",
+                     user_id, profile.proficiency, profile.attempts)
+    except Exception as exc:
+        logger.error("save_profile(%s) failed: %s", user_id, exc)
+        raise
+
+
+def update_profile_on_result(
+    topic: str,
+    verdict: str,
+    error_type: str = "",
+    user_id: str = "default",
+):
+    """Update the user profile after a judge result (AC, WA, or give-up)."""
+    from .models import DBProfile
+    profile = get_profile(user_id)
+    profile.attempts += 1
+    profile.forget_days = 0
+
+    alpha = 0.3
+    if verdict == "AC":
+        profile.proficiency = profile.proficiency + alpha * (1.0 - profile.proficiency)
+        profile.stability = min(1.0, profile.stability + 0.05)
+    elif verdict in ("WA", "TLE", "RE", "give_up"):
+        profile.proficiency = profile.proficiency - alpha * profile.proficiency
+        profile.proficiency = max(0.0, profile.proficiency)
+        profile.stability = max(0.0, profile.stability - 0.1)
+        if error_type:
+            if error_type not in profile.common_errors:
+                profile.common_errors.append(error_type)
+                profile.common_errors = profile.common_errors[-10:]
+
+    save_profile(profile, user_id)
+    logger.info("update_profile(%s) → verdict=%s, proficiency=%.2f, attempts=%d",
+                topic, verdict, profile.proficiency, profile.attempts)
+    return profile

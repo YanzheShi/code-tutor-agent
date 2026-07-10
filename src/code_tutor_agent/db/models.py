@@ -1,15 +1,4 @@
-"""Pydantic models mapping 1:1 to SQLite tables (problems, submissions).
-
-These models are the typed interface between DB operations and the rest of
-the codebase — replacing the old `dict[str, Any]` return pattern.
-
-Design decisions:
-- JSON columns (test_cases_json, visible_test_cases_json, etc.) are stored as
-  raw TEXT and exposed as parsed properties for readability.
-- The model does NOT have a .get() method — callers must use attribute access
-  (model.field instead of model["field"]). This is intentional: it prevents
-  the silent-failure pattern of dict.get() masking typos.
-"""
+"""Pydantic models mapping 1:1 to SQLite tables (problems, submissions, profiles)."""
 from __future__ import annotations
 
 import json
@@ -19,15 +8,7 @@ from pydantic import BaseModel, Field
 
 
 class DBProblem(BaseModel):
-    """Maps 1:1 to the ``problems`` table in SQLite.
-
-    Usage:
-        problem = get_problem_by_id(pid)
-        problem.title          # "两数之和"
-        problem.test_cases     # [{"input_args": [...], "expected_output": "..."}]
-        problem.model_dump()   # serialisable dict (for JSON response)
-    """
-
+    """Maps 1:1 to the ``problems`` table in SQLite."""
     id: int = Field(description="Primary key")
     title: str = Field(description="题目标题")
     topic: str = Field(description="知识点标签")
@@ -38,14 +19,11 @@ class DBProblem(BaseModel):
     function_signature: str = Field(default="", description="方法签名")
     time_complexity: str = Field(default="", description="时间复杂度")
     space_complexity: str = Field(default="", description="空间复杂度")
-    novelty_score: float = Field(default=7.0, description="新颖度评分")
+    novelty_score: float = Field(default=7.0, ge=0.0, le=10.0, description="新颖度评分")
     starter_code: str = Field(default="", description="模板代码")
     source: str = Field(default="generated", description="题目来源")
     source_url: str = Field(default="", description="来源 URL")
     created_at: str = Field(default="", description="创建时间")
-
-    # ── JSON columns (TEXT in SQLite, parsed on access) ──
-    # Stored as private-ish fields so the raw JSON round-trips cleanly.
     test_cases_json: str = Field(default="[]", description="全量测试用例 JSON")
     visible_test_cases_json: str = Field(default="[]", description="可见测试用例 JSON")
     adversarial_spec_json: str = Field(default="", description="对抗规格 JSON")
@@ -54,37 +32,28 @@ class DBProblem(BaseModel):
 
     @property
     def test_cases(self) -> list[dict]:
-        """Parsed test cases (both hidden and visible)."""
         return json.loads(self.test_cases_json) if self.test_cases_json else []
 
     @property
     def visible_test_cases(self) -> list[dict]:
-        """Parsed visible-only test cases."""
         return json.loads(self.visible_test_cases_json) if self.visible_test_cases_json else []
 
     @property
     def adversarial_spec(self) -> Optional[dict]:
-        """Parsed adversarial spec, or None."""
         return json.loads(self.adversarial_spec_json) if self.adversarial_spec_json else None
 
     @property
     def alternative_solutions_list(self) -> list[str]:
-        """Parsed alternative solutions list."""
         return json.loads(self.alternative_solutions) if self.alternative_solutions else []
 
     @property
     def constraints(self) -> list[str]:
-        """Parsed constraints list."""
         return json.loads(self.constraints_json) if self.constraints_json else []
 
-    # ── Dict-like access for backward migration (to be removed) ──
-    # Temporarily allows `problem["test_cases"]` to work during migration.
-    # After all callers are updated, remove these two methods.
     def __getitem__(self, key: str) -> Any:
         return getattr(self, key)
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Dict-compatible .get() — returns field value or default if missing."""
         try:
             val = getattr(self, key)
             return val if val is not None else default
@@ -94,7 +63,6 @@ class DBProblem(BaseModel):
 
 class DBSubmission(BaseModel):
     """Maps 1:1 to the ``submissions`` table in SQLite."""
-
     id: int = Field(description="Primary key")
     problem_id: int = Field(description="FK → problems.id")
     student_code: str = Field(description="用户提交的代码")
@@ -106,16 +74,13 @@ class DBSubmission(BaseModel):
 
     @property
     def timestamp(self) -> str:
-        """Alias for created_at, used by frontend."""
         return self.created_at
 
     @property
     def judge_results_list(self) -> list[dict]:
-        """Parsed judge results."""
         return json.loads(self.judge_results) if self.judge_results else []
 
     def to_dict(self) -> dict:
-        """Serialise to dict with parsed judge_results and timestamp alias."""
         return {
             "id": self.id,
             "code": self.student_code,
@@ -133,3 +98,16 @@ class DBSubmission(BaseModel):
             return val if val is not None else default
         except AttributeError:
             return default
+
+
+class DBProfile(BaseModel):
+    """User profile — 5-dimension skill vector.
+
+    Stored as JSON in the profiles table's profile_json column.
+    One row per simulated user (single-user mode).
+    """
+    proficiency: float = Field(default=0.5, ge=0.0, le=1.0, description="熟练度")
+    stability: float = Field(default=0.5, ge=0.0, le=1.0, description="稳定性")
+    forget_days: int = Field(default=0, ge=0, description="距离上次做题天数")
+    common_errors: list[str] = Field(default_factory=list, description="常见错误")
+    attempts: int = Field(default=0, ge=0, description="做过多少题")
