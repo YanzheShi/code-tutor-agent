@@ -140,3 +140,10 @@ async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = Adm
     conn.close()
 
     return {"ok": True, "message": f"Problem {problem_id} deleted"}
+
+
+@router.get("/profile")
+async def admin_get_profile():
+    """Get the current user profile."""
+    from code_tutor_agent.db.database import get_profile
+    return get_profile().model_dump()
