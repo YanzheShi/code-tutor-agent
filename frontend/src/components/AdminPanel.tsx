@@ -54,6 +54,18 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const [editTestCases, setEditTestCases] = useState<string>('');
   const [saveMsg, setSaveMsg] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const fetchProfile = useCallback(async () => {
+    const nextShow = !showProfile;
+    setShowProfile(nextShow);
+    if (nextShow) {
+      try {
+        const r = await fetch(BASE + '/admin/profile');
+        if (r.ok) setProfile(await r.json());
+      } catch { /* ignore */ }
+    }
+  }, [showProfile]);
 
   // ── Auth ──
   const handleLogin = useCallback(async () => {
@@ -461,9 +473,27 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-ct-border px-4 py-3">
-        <h2 className="text-sm font-bold text-ct-text">🛡️ 管理页面 ({problems.length} 题)</h2>
+        <div className="flex items-center gap-4">
+          <h2 className="text-sm font-bold text-ct-text">🛡️ 管理页面 ({problems.length} 题)</h2>
+          <button onClick={fetchProfile} className="text-xs text-ct-muted hover:text-ct-text">📊 画像</button>
+        </div>
         <button onClick={handleLogout} className="text-xs text-ct-muted hover:text-red-400">退出</button>
       </div>
+
+      {/* Profile panel */}
+      {showProfile && profile && (
+        <div className="border-b border-ct-border bg-slate-800/20 px-4 py-3 text-xs">
+          <div className="flex items-center gap-6">
+            <span>熟练度 <b>{(profile.proficiency * 100).toFixed(0)}%</b></span>
+            <span>稳定性 <b>{(profile.stability * 100).toFixed(0)}%</b></span>
+            <span>做题 <b>{profile.attempts}</b></span>
+            <span>距离上次 <b>{profile.forget_days}天</b></span>
+            {(profile.common_errors || []).length > 0 && (
+              <span className="text-red-400">错误 {(profile.common_errors as string[]).slice(0, 3).join(', ')}</span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (
