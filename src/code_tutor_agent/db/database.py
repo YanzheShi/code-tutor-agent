@@ -60,6 +60,7 @@ def _init_db_tables(cursor) -> None:
             test_cases_json TEXT NOT NULL,
             optimal_solution TEXT NOT NULL DEFAULT '',
             brute_solution TEXT DEFAULT '',
+            function_signature TEXT NOT NULL DEFAULT '',
             adversarial_spec_json TEXT DEFAULT '',
             time_complexity TEXT DEFAULT '',
             space_complexity TEXT DEFAULT '',
@@ -79,6 +80,7 @@ def _init_db_tables(cursor) -> None:
         "ALTER TABLE problems ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'",
         "ALTER TABLE problems ADD COLUMN source_url TEXT DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN alternative_solutions TEXT NOT NULL DEFAULT '[]'",
+        "ALTER TABLE problems ADD COLUMN function_signature TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
     ]:
@@ -132,10 +134,10 @@ def _save_problem(cursor, problem_dict: dict) -> int:
     cursor.execute("""
         INSERT INTO problems
             (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
-             optimal_solution, brute_solution, adversarial_spec_json,
+             optimal_solution, brute_solution, function_signature, adversarial_spec_json,
              time_complexity, space_complexity, novelty_score, starter_code,
              source, source_url, alternative_solutions)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         problem_dict["title"],
         problem_dict["topic"],
@@ -145,6 +147,7 @@ def _save_problem(cursor, problem_dict: dict) -> int:
         json.dumps(problem_dict.get("visible_test_cases", problem_dict.get("test_cases", [])), ensure_ascii=False),
         problem_dict.get("optimal_solution", ""),
         problem_dict.get("brute_solution", ""),
+        problem_dict.get("function_signature", ""),
         json.dumps(problem_dict.get("adversarial_spec"), ensure_ascii=False)
         if problem_dict.get("adversarial_spec") else "",
         problem_dict.get("time_complexity", ""),

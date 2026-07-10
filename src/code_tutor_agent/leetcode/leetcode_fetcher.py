@@ -289,6 +289,98 @@ import argparse
 import json
 
 
+def extract_function_signature(starter_code: str) -> str:
+    """Extract a function_signature string from LeetCode-style starter code.
+
+    Parses ``def method(self, nums: List[int], target: int)`` into
+    ``"nums: List[int], target: int -> None"`` (return type inferred from
+    annotation or ``None``).
+
+    Handles nested brackets (e.g. ``List[List[int]]``), default values
+    (e.g. ``x: int = 100``), and methods with only ``self``.
+    """
+    if not starter_code:
+        return ""
+
+    def_match = re.search(r"def\s+(\w+)\s*\(", starter_code)
+    if not def_match:
+        return ""
+
+    paren_start = def_match.end() - 1
+
+    # Find matching closing paren (handles nested brackets like List[int])
+    depth = 0
+    i = paren_start
+    while i < len(starter_code):
+        if starter_code[i] == "(":
+            depth += 1
+        elif starter_code[i] == ")":
+            depth -= 1
+            if depth == 0:
+                break
+        i += 1
+
+    if depth != 0:
+        return ""
+
+    params_str = starter_code[paren_start + 1 : i].strip()
+
+    # Extract return type from after the closing paren, up to the trailing colon
+    rest = starter_code[i + 1 :].strip()
+    return_type = "None"
+    if rest.startswith("->"):
+        ret_part = rest[2:].strip()
+        ret_part = re.split(r"[:\n]", ret_part)[0].strip()
+        if ret_part:
+            return_type = ret_part
+
+    # Skip 'self' parameter
+    if params_str.startswith("self,"):
+        params_str = params_str[5:].strip()
+    elif params_str == "self":
+        params_str = ""
+
+    if not params_str:
+        return f"-> {return_type}"
+
+    # Split params by comma, respecting bracket nesting
+    clean_params = []
+    current = ""
+    bracket_depth = 0
+    for ch in params_str:
+        if ch in "([{":
+            bracket_depth += 1
+            current += ch
+        elif ch in ")]}":
+            bracket_depth -= 1
+            current += ch
+        elif ch == "," and bracket_depth == 0:
+            clean_params.append(current.strip())
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        clean_params.append(current.strip())
+
+    result = []
+    for param in clean_params:
+        param = param.strip()
+        if not param:
+            continue
+        if ":" in param:
+            name, typ = param.split(":", 1)
+            # Remove default value from type (e.g. "List[int] = None")
+            typ = typ.split("=", 1)[0].strip()
+            result.append(f"{name.strip()}:{typ}")
+        else:
+            result.append(param)
+
+    if not result:
+        return f"-> {return_type}"
+
+    return ",".join(result) + f" -> {return_type}"
+
+
 def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
     """Convert to the dict shape expected by the API response."""
     return {

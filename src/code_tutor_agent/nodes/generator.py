@@ -143,11 +143,15 @@ def _generate_from_leetcode(
     tags = lc_data.get("tags", [])
     hints = lc_data.get("hints", [])
 
+    from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases, extract_function_signature
+
     # Derive a topic from the first tag, or fall back to "算法"
     topic = tags[0] if tags else "算法"
 
+    # Extract function_signature from starter_code
+    func_sig = extract_function_signature(starter_code)
+
     # Build visible test cases from examples
-    from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
     visible_tcs = _parse_examples_to_test_cases(examples, "")
     logger.info("Parsed %d visible test cases from LeetCode examples", len(visible_tcs))
 
@@ -160,7 +164,7 @@ def _generate_from_leetcode(
         "test_cases": visible_tcs,
         "novelty_score": 9.0,
         "brute_solution": "",
-        "function_signature": "",
+        "function_signature": func_sig,
     }
 
     # Save to DB (returns problem_id)
@@ -203,7 +207,7 @@ def _generate_from_leetcode(
             "leetcode": None,  # Clear so it's not reprocessed
             # These are needed by the API layer's background test gen
             "_brute_code": "",
-            "_function_signature": "",
+            "_function_signature": func_sig,
             "_problem_id": problem_id,
         },
         goto="wait_for_submit_node",

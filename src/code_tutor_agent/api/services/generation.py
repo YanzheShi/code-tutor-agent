@@ -94,11 +94,11 @@ async def run_generation(sid: str, initial_dict: dict):
             if problem:
                 pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
                 if pid:
-                    brute_code = state.values.get("_brute_code", "") or ""
-                    if brute_code:
-                        await _generate_complex_tests(pid, sid)
-                    else:
-                        _generation_progress.setdefault(sid, []).append("\U0001f4dd LeetCode 题目已导入（跳过后台测试生成）")
+                    # Always trigger background test generation; _generate_complex_tests
+                    # reads optimal_solution / function_signature from the DB directly,
+                    # so it works regardless of whether the problem came from LeetCode
+                    # or from LLM generation.
+                    await _generate_complex_tests(pid, sid)
                 else:
                     _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
             else:
@@ -223,11 +223,15 @@ def run_fast_path(sid: str, body: dict, graph, config):
     """Handle LeetCode fast-path — create session from parsed data, skip graph generation."""
     from code_tutor_agent.db.database import save_problem
     from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg
+    from code_tutor_agent.leetcode.leetcode_fetcher import extract_function_signature
 
     le_data = body.get("leetcode", {})
     parsed_tcs = le_data.get("parsed_test_cases") or []
 
     _generation_progress[sid] = ["📥 正在导入 LeetCode 题目..."]
+
+    starter_code = le_data.get("starter_code", "")
+    func_sig = extract_function_signature(starter_code)
 
     visible_tcs = [
         {"input_args": tc.get("input_args", []), "expected_output": tc.get("expected_output", ""), "explanation": tc.get("explanation", "")}
@@ -242,14 +246,24 @@ def run_fast_path(sid: str, body: dict, graph, config):
         "description_html": le_data.get("description_html", ""),
         "starter_code": le_data.get("starter_code", ""),
         "brute_solution": "",
-        "function_signature": "",
+        "function_signature": func_sig,
         "test_cases": parsed_tcs,
     }
     problem_id = save_problem(problem_dict)
 
     # 启动后台任务：调用 LLM 为该 LeetCode 题目生成最优解代码
+    async def _optimal_then_tests():
+        try:
+            await _generate_optimal_for_leetcode_async(problem_id, sid)
+        except Exception:
+            pass
+        try:
+            await _generate_complex_tests(problem_id, sid)
+        except Exception:
+            logger.warning("Background test generation failed for problem %d", problem_id)
+
     try:
-        asyncio.create_task(_generate_optimal_for_leetcode_async(problem_id, sid))
+        asyncio.create_task(_optimal_then_tests())
     except Exception:
         logger.warning("Failed to schedule optimal solution generation (non-blocking)")
 
