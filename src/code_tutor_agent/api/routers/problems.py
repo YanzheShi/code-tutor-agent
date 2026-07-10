@@ -11,21 +11,20 @@ router = APIRouter()
 
 @router.get("/problems")
 async def list_problems():
-    """List all problems in the database."""
-    from code_tutor_agent.db.database import get_all_problem_ids, get_problem_by_id
+    """List all problems in the database — batch query for performance."""
+    from code_tutor_agent.db.database import get_all_problem_ids, get_problems_by_ids
 
     ids = get_all_problem_ids()
-    result = []
-    for pid in ids[-50:]:
-        p = get_problem_by_id(pid)
-        if p:
-            result.append({
-                "id": p["id"],
-                "title": p.get("title", ""),
-                "topic": p.get("topic", ""),
-                "difficulty": p.get("difficulty", ""),
-            })
-    return {"problems": result}
+    problems = get_problems_by_ids(ids[-50:])
+    return {"problems": [
+        {
+            "id": p["id"],
+            "title": p.get("title", ""),
+            "topic": p.get("topic", ""),
+            "difficulty": p.get("difficulty", ""),
+        }
+        for p in problems
+    ]}
 
 
 @router.get("/problem/{problem_id}/submissions")
