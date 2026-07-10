@@ -205,7 +205,6 @@ def _generate_from_leetcode(
             "adversarial_triggered": False,
             "error_message": "",
             "leetcode": None,  # Clear so it's not reprocessed
-            # These are needed by the API layer's background test gen
             "_brute_code": "",
             "_function_signature": func_sig,
             "_problem_id": problem_id,

@@ -37,7 +37,9 @@ export function useSession() {
   const [chatInput, setChatInput] = useState('');
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const screenRef = useRef(screen);
+  const modeRef = useRef(mode);
   useEffect(() => { screenRef.current = screen; }, [screen]);
+  useEffect(() => { modeRef.current = mode; }, [mode]);
   const dragging = useRef(false);
   const dragTab = useRef<TabId | null>(null);
   const editorInitialized = useRef(false);
@@ -63,17 +65,18 @@ export function useSession() {
   const startPolling = useCallback((sid: string) => {
     pollTimer.current = setInterval(async () => {
       try {
-        if (screenRef.current === 'main') {
+        // For agent mode, keep polling to fetch tutor_messages even when on main screen
+        if (screenRef.current === 'main' && modeRef.current !== 'agent') {
           if (pollTimer.current) clearInterval(pollTimer.current);
           return;
         }
         const st = await getState(sid);
         if (st.progress_messages) setProgressMsgs(st.progress_messages);
         if (st.mode) setMode(st.mode);
-        if (st.mode === 'agent' && st.tutor_messages?.length) {
+        if (st.status === 'dialog' && st.tutor_messages?.length) {
           setTutorMessages(st.tutor_messages as Message[]);
         }
-        if (st.status !== 'generating' && st.problem && screenRef.current === 'loading') {
+        if (st.status !== 'generating' && st.status !== 'dialog' && st.problem && screenRef.current === 'loading') {
           applySessionState(st, true);
           setScreen('main');
         }
