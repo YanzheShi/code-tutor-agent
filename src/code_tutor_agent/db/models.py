@@ -118,7 +118,7 @@ class DBSubmission(BaseModel):
         """Serialise to dict with parsed judge_results and timestamp alias."""
         return {
             "id": self.id,
-            "student_code": self.student_code,
+            "code": self.student_code,
             "status": self.status,
             "verdict": self.verdict,
             "judge_results": self.judge_results_list,
