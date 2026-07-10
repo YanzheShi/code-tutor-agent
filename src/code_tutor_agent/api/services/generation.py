@@ -35,11 +35,11 @@ async def _generate_optimal_for_leetcode_async(problem_id: int, sid: str):
         logger.warning("Problem %d not found for optimal solution generation", problem_id)
         return
 
-    title = full.get("title", "")
-    description = full.get("description", "")
-    difficulty = full.get("difficulty", "")
-    func_sig = full.get("function_signature", "")
-    starter = full.get("starter_code", "")
+    title = full.title
+    description = full.description
+    difficulty = full.difficulty
+    func_sig = full.function_signature
+    starter = full.starter_code
 
     logger.info("Generating optimal_solution for LeetCode problem '%s' (%d)", title, problem_id)
 
@@ -125,8 +125,8 @@ async def _generate_complex_tests(problem_id: int, sid: str):
         return
 
     # 优先尝试 optimal_solution，再降级到 brute_solution（向后兼容）
-    brute_code = full.get("optimal_solution", "") or full.get("brute_solution", "")
-    func_sig = full.get("function_signature", "")
+    brute_code = full.optimal_solution or full.brute_solution
+    func_sig = full.function_signature
     if not brute_code:
         logger.warning("No optimal_solution or brute_solution for %d — skipping bg test gen", problem_id)
         _generation_progress.setdefault(sid, []).append("📝 无参考代码，跳过后台测试生成")
@@ -169,12 +169,12 @@ async def _generate_complex_tests(problem_id: int, sid: str):
             f"  #{i+1}: input_args={tc.get('input_args', [])} \u2192 {tc.get('expected_output', '')}"
             for i, tc in enumerate(all_tcs[:4])
         )
-        constraints_str = "\n".join(f"  - {c}" for c in (full.get("constraints") or []))
+        constraints_str = "\n".join(f"  - {c}" for c in full.constraints) if full.constraints else ""
 
         prompt_user = GENERATE_BOUNDARY_USER.format(
-            title=full.get("title", ""),
-            description=full.get("description", ""),
-            difficulty=full.get("difficulty", ""),
+            title=full.title,
+            description=full.description,
+            difficulty=full.difficulty,
             function_signature=func_sig,
             constraints=constraints_str,
             brute_code=brute_code,
@@ -210,7 +210,7 @@ async def _generate_complex_tests(problem_id: int, sid: str):
     except Exception as exc:
         logger.warning("Prompt B (boundary LLM) failed: %s", exc)
 
-    existing_tcs = full.get("test_cases", [])
+    existing_tcs = full.test_cases
     sample_tcs = [tc for tc in existing_tcs if not tc.get("is_hidden", False)][:2]
     full_suite = sample_tcs + all_tcs
 

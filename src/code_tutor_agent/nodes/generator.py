@@ -338,8 +338,8 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     # If dedup happened (title already existed), reload from DB for correct starter_code
     from code_tutor_agent.db.database import get_problem_by_id
     db_problem = get_problem_by_id(problem_id)
-    db_starter_code = db_problem.get("starter_code", "") if db_problem else ""
-    db_optimal = db_problem.get("optimal_solution", "") if db_problem else ""
+    db_starter_code = db_problem.starter_code if db_problem else "" if db_problem else ""
+    db_optimal = db_problem.optimal_solution if db_problem else "" if db_problem else ""
 
     # Build visible test cases (sample ones)
     visible_tcs = [

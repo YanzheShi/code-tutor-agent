@@ -11,6 +11,7 @@ Coverage:
 from __future__ import annotations
 
 from unittest.mock import patch
+from code_tutor_agent.db.models import DBProblem
 
 from code_tutor_agent.nodes.agent_judge import agent_judge_node
 from code_tutor_agent.sandbox.runner import RunnerResult
@@ -84,16 +85,14 @@ class TestAgentJudgeNode:
             patch("code_tutor_agent.nodes.agent_judge.analyze_judge_results") as mock_analyze,
         ):
             # Mock DB returns
-            mock_db.return_value = {
-                "title": "测试题",
-                "topic": "数组",
-                "difficulty": "easy",
-                "description": "测试描述",
-                "test_cases": [
-                    {"input_args": ["[1,2,3]", "5"], "expected_output": "[0,1]"},
-                    {"input_args": ["[3,2,4]", "6"], "expected_output": "[1,2]"},
-                ],
-            }
+            mock_db.return_value = DBProblem(
+                id=1,
+                title="测试题",
+                topic="数组",
+                difficulty="easy",
+                description="测试描述",
+                test_cases_json='[{"input_args": ["[1,2,3]", "5"], "expected_output": "[0,1]"}, {"input_args": ["[3,2,4]", "6"], "expected_output": "[1,2]"}]',
+            )
             # Mock Judge0 results
             mock_run.return_value = [
                 RunnerResult(0, "Passed", "[0,1]", runtime_ms=5.0),
@@ -124,15 +123,14 @@ class TestAgentJudgeNode:
             patch("code_tutor_agent.nodes.agent_judge.run_solution") as mock_run,
             patch("code_tutor_agent.nodes.agent_judge.analyze_judge_results") as mock_analyze,
         ):
-            mock_db.return_value = {
-                "title": "测试题",
-                "topic": "数组",
-                "difficulty": "easy",
-                "description": "测试描述",
-                "test_cases": [
-                    {"input_args": ["[1,2,3]", "5"], "expected_output": "[0,1]"},
-                ],
-            }
+            mock_db.return_value = DBProblem(
+                id=1,
+                title="测试题",
+                topic="数组",
+                difficulty="easy",
+                description="测试描述",
+                test_cases_json='[{"input_args": ["[1,2,3]", "5"], "expected_output": "[0,1]"}]',
+            )
             mock_run.return_value = [
                 RunnerResult(0, "Wrong Answer", "expected=[0,1] got=[0,0]", runtime_ms=5.0),
             ]
@@ -164,13 +162,14 @@ class TestAgentJudgeNode:
             patch("code_tutor_agent.nodes.agent_judge.run_solution") as mock_run,
             patch("code_tutor_agent.nodes.agent_judge.analyze_judge_results") as mock_analyze,
         ):
-            mock_db.return_value = {
-                "title": "测试题",
-                "topic": "数组",
-                "difficulty": "easy",
-                "description": "测试描述",
-                "test_cases": [{"input_args": ["[1]", "1"], "expected_output": "1"}],
-            }
+            mock_db.return_value = DBProblem(
+                id=1,
+                title="测试题",
+                topic="数组",
+                difficulty="easy",
+                description="测试描述",
+                test_cases_json='[{"input_args": ["[1]", "1"], "expected_output": "1"}]',
+            )
             mock_run.return_value = [
                 RunnerResult(0, "Passed", "1", runtime_ms=1.0),
             ]

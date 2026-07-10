@@ -59,14 +59,14 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
     result = []
     for p in problems:
             result.append(AdminProblemOut(
-                id=p["id"], title=p.get("title", ""), topic=p.get("topic", ""),
-                difficulty=p.get("difficulty", ""), description=p.get("description", ""),
-                visible_test_cases_list=p.get("visible_test_cases", []),
-                test_cases_list=p.get("test_cases", []),
-                brute_solution=p.get("brute_solution", ""),
-                starter_code=p.get("starter_code", ""),
-                novelty_score=p.get("novelty_score", 7.0),
-                created_at=p.get("created_at", ""),
+                id=p.id, title=p.title, topic=p.topic,
+                difficulty=p.difficulty, description=p.description,
+                visible_test_cases_list=p.visible_test_cases,
+                test_cases_list=p.test_cases,
+                brute_solution=p.brute_solution,
+                starter_code=p.starter_code,
+                novelty_score=p.novelty_score,
+                created_at=p.created_at,
             ))
     return {"problems": [p.model_dump(by_alias=True) for p in result]}
 

@@ -24,6 +24,7 @@ node_modules/
 .vscode/
 *.swp
 *.swo
+.claude/
 
 # === 工具缓存 ===
 .ruff_cache/

@@ -137,7 +137,7 @@ async def get_reference_code(sid: str):
     full = get_problem_by_id(pid)
     if not full:
         raise HTTPException(500, "Problem not found in DB")
-    return {"code": full.get("optimal_solution", "") or full.get("brute_solution", ""), "title": full.get("title", "")}
+    return {"code": full.optimal_solution or full.brute_solution, "title": full.title}
 
 
 @router.post("/by-problem/{problem_id}")

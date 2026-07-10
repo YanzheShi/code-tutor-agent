@@ -7,7 +7,7 @@ import ReviewCard from './RightPanel/ReviewCard';
 import SubmissionHistory from './SubmissionHistory';
 import RunResults from './RunResults';
 import { TabButton, VerdictBadge } from './TabButton';
-import type { Message, ProblemMeta, RunResult, Submission } from '../types/session';
+import type { Message, ProblemMeta, RunResult } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 
 type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history';
@@ -29,7 +29,6 @@ export interface MainLayoutProps {
   hintLevel: number;
   latestVerdict: string | null;
   judgeReport: JudgeReport | null;
-  submissions: Submission[];
   referenceCode: string;
   runResults: RunResult[] | null;
   progressMsgs: string[];
@@ -59,7 +58,7 @@ export interface MainLayoutProps {
 export default function MainLayout(props: MainLayoutProps) {
   const {
     problem, mode, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
-    editorCode, hintLevel, latestVerdict, judgeReport, submissions, referenceCode,
+    editorCode, hintLevel, latestVerdict, judgeReport, referenceCode,
     runResults, progressMsgs, running, submittingFlag, isDialogPhase, isDone,
     dragging, dragTab, chatEndRef,
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
@@ -127,7 +126,7 @@ export default function MainLayout(props: MainLayoutProps) {
     case 'desc':
       return <div className="flex-1 overflow-y-auto p-4">{problem && <ProblemDesc problem={problem} />}</div>;
     case 'history':
-      return <SubmissionHistory submissions={submissions} />;
+      return <SubmissionHistory problemId={problem?.problem_id ?? 0} />;
     case 'reference':
       return (
         <div className="flex-1 overflow-y-auto p-4">

@@ -22,7 +22,7 @@ export default function App() {
     tutorMessages: s.tutorMessages, chatInput: s.chatInput,
     editorCode: s.editorCode, hintLevel: s.hintLevel,
     latestVerdict: s.latestVerdict, judgeReport: s.judgeReport,
-    submissions: s.submissions, referenceCode: s.referenceCode,
+    referenceCode: s.referenceCode,
     runResults: s.runResults, progressMsgs: s.progressMsgs,
     running: s.running, submittingFlag: s.submittingFlag,
     isDialogPhase: s.isDialogPhase, isDone: s.isDone,

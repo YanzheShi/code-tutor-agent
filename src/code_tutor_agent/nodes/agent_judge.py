@@ -79,7 +79,7 @@ def agent_judge_node(state: SessionState) -> Command:
             goto="__end__",
         )
 
-    test_cases = problem_dict.get("test_cases", [])
+    test_cases = problem_dict.test_cases
     if not test_cases:
         logger.warning("No test cases for problem %d", problem_id)
         return Command(
@@ -94,12 +94,12 @@ def agent_judge_node(state: SessionState) -> Command:
     logger.info("Judge0 returned %d results", len(raw_results))
 
     # ── LLM analysis of raw results ──
-    description = problem_dict.get("description", "")
+    description = problem_dict.description
     analysis = analyze_judge_results(
         code=code,
-        title=problem_dict.get("title", ""),
-        difficulty=problem_dict.get("difficulty", state.difficulty),
-        topic=problem_dict.get("topic", state.topic),
+        title=problem_dict.title,
+        difficulty=problem_dict.difficulty or state.difficulty,
+        topic=problem_dict.topic or state.topic,
         description=description,
         results=raw_results,
     )
