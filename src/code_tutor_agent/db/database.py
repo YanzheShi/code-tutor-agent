@@ -332,7 +332,7 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
     """
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
-            "SELECT id, student_code, verdict, judge_results, status, created_at "
+            "SELECT id, problem_id, student_code, verdict, judge_results, status, created_at "
             "FROM submissions WHERE problem_id = ? ORDER BY id DESC LIMIT ?",
             (problem_id, limit),
         ).fetchall())
