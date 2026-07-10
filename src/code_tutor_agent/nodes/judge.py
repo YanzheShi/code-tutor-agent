@@ -75,7 +75,7 @@ def judge_node(state: SessionState) -> Command:
             goto="__end__",
         )
 
-    test_cases = problem_dict.get("test_cases", [])
+    test_cases = problem_dict.test_cases
 
     # ════════════════════════════════════════════
     #  Phase 1: 基础判题
@@ -109,7 +109,7 @@ def judge_node(state: SessionState) -> Command:
         for _ in range(20):  # poll up to 20s
             _time.sleep(1)
             problem_dict = get_problem_by_id(problem_id)
-            test_cases = problem_dict.get("test_cases", [])
+            test_cases = problem_dict.test_cases
             if len(test_cases) >= MIN_TC_FOR_FULL:
                 break
 

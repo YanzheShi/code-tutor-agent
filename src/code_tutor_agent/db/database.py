@@ -7,6 +7,8 @@ import os
 import sqlite3
 from typing import Any, Optional
 
+from .models import DBProblem, DBSubmission
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,8 +111,38 @@ def _init_db_tables(cursor) -> None:
     """)
 
 
+# ── helpers ──
+
+
+def _row_to_db_problem(row: sqlite3.Row) -> DBProblem:
+    """Convert a SQLite Row (from SELECT * on problems) to DBProblem."""
+    data = dict(row)
+    return DBProblem(**data)
+
+
+def _row_to_db_submission(row: sqlite3.Row) -> DBSubmission:
+    """Convert a SQLite Row (from SELECT on submissions) to DBSubmission."""
+    data = dict(row)
+    # Alias: frontend expects 'timestamp' but DB stores 'created_at'
+    if "created_at" in data and "timestamp" not in data:
+        data["timestamp"] = data.pop("created_at")
+    return DBSubmission(**data)
+
+
+# ── save ──
+
+
 def save_problem(problem_dict: dict) -> int:
-    """Save a problem to the database. Returns the existing or new problem ID."""
+    """Save a problem to the database. Returns the existing or new problem ID.
+
+    Args:
+        problem_dict: Dict with keys matching the logical problem schema
+            (title, topic, difficulty, description, test_cases, etc.).
+            Accepts both camelCase (test_cases) and snake_case (test_cases_json) keys.
+
+    Returns:
+        The problem ID (existing if dedup'd, new otherwise).
+    """
     logger.info("▶ save_problem()")
     init_db()
     try:
@@ -121,15 +153,31 @@ def save_problem(problem_dict: dict) -> int:
 
 
 def _save_problem(cursor, problem_dict: dict) -> int:
-    cursor.execute("SELECT id FROM problems WHERE title = ?", (problem_dict["title"],))
+    title = problem_dict.get("title", "")
+    if not title:
+        raise ValueError("save_problem() requires a 'title'")
+
+    cursor.execute("SELECT id FROM problems WHERE title = ?", (title,))
     existing = cursor.fetchone()
     if existing:
-        logger.info("Problem '%s' already exists (id=%d), skipping insert", problem_dict["title"], existing["id"])
+        logger.info("Problem '%s' already exists (id=%d), skipping insert", title, existing["id"])
         return existing["id"]
 
     alt = problem_dict.get("alternative_solutions", [])
     if not isinstance(alt, str):
         alt = json.dumps(alt, ensure_ascii=False)
+
+    # Serialise test cases to JSON if they're Python lists
+    test_cases = problem_dict.get("test_cases", [])
+    if not isinstance(test_cases, str):
+        test_cases = json.dumps(test_cases, ensure_ascii=False)
+
+    visible_tcs = problem_dict.get("visible_test_cases", problem_dict.get("test_cases", []))
+    if not isinstance(visible_tcs, str):
+        visible_tcs = json.dumps(visible_tcs, ensure_ascii=False)
+
+    adv_spec = problem_dict.get("adversarial_spec")
+    adv_spec_json = json.dumps(adv_spec, ensure_ascii=False) if adv_spec else ""
 
     cursor.execute("""
         INSERT INTO problems
@@ -139,17 +187,16 @@ def _save_problem(cursor, problem_dict: dict) -> int:
              source, source_url, alternative_solutions)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        problem_dict["title"],
-        problem_dict["topic"],
-        problem_dict["difficulty"],
-        problem_dict["description"],
-        json.dumps(problem_dict.get("test_cases", []), ensure_ascii=False),
-        json.dumps(problem_dict.get("visible_test_cases", problem_dict.get("test_cases", [])), ensure_ascii=False),
+        title,
+        problem_dict.get("topic", ""),
+        problem_dict.get("difficulty", ""),
+        problem_dict.get("description", ""),
+        test_cases,
+        visible_tcs,
         problem_dict.get("optimal_solution", ""),
         problem_dict.get("brute_solution", ""),
         problem_dict.get("function_signature", ""),
-        json.dumps(problem_dict.get("adversarial_spec"), ensure_ascii=False)
-        if problem_dict.get("adversarial_spec") else "",
+        adv_spec_json,
         problem_dict.get("time_complexity", ""),
         problem_dict.get("space_complexity", ""),
         problem_dict.get("novelty_score", 7.0),
@@ -159,12 +206,19 @@ def _save_problem(cursor, problem_dict: dict) -> int:
         alt,
     ))
     problem_id = cursor.lastrowid
-    logger.info("save_problem() — id=%d, title=%s", problem_id, problem_dict["title"])
+    logger.info("save_problem() — id=%d, title=%s", problem_id, title)
     return problem_id
 
 
-def get_problem_by_id(problem_id: int) -> Optional[dict[str, Any]]:
-    """Retrieve a problem by its ID."""
+# ── read ──
+
+
+def get_problem_by_id(problem_id: int) -> Optional[DBProblem]:
+    """Retrieve a problem by its ID.
+
+    Returns:
+        DBProblem if found, None otherwise.
+    """
     logger.info("▶ get_problem_by_id()")
     try:
         row = _with_conn(lambda cursor: cursor.execute(
@@ -173,13 +227,7 @@ def get_problem_by_id(problem_id: int) -> Optional[dict[str, Any]]:
 
         if not row:
             return None
-        result = dict(row)
-        result["test_cases"] = json.loads(result.get("test_cases_json", "[]"))
-        result["visible_test_cases"] = json.loads(result.get("visible_test_cases_json", "[]"))
-        if result.get("adversarial_spec_json"):
-            result["adversarial_spec"] = json.loads(result["adversarial_spec_json"])
-        result["alternative_solutions"] = json.loads(result.get("alternative_solutions", "[]"))
-        return result
+        return _row_to_db_problem(row)
     except Exception as exc:
         logger.error("get_problem_by_id(%d) failed: %s", problem_id, exc)
         raise
@@ -196,12 +244,11 @@ def get_all_problem_ids() -> list[int]:
         raise
 
 
-def get_problems_by_ids(problem_ids: list[int]) -> list[dict[str, Any]]:
+def get_problems_by_ids(problem_ids: list[int]) -> list[DBProblem]:
     """Batch-fetch problems by IDs in a single query.
 
-    Deserialises JSON columns (test_cases, visible_test_cases, adversarial_spec,
-    alternative_solutions) into native Python objects, matching the shape of
-    get_problem_by_id().
+    Returns:
+        List of DBProblem in the same order as input IDs.
     """
     if not problem_ids:
         return []
@@ -213,20 +260,15 @@ def get_problems_by_ids(problem_ids: list[int]) -> list[dict[str, Any]]:
             problem_ids,
         ).fetchall())
 
-        result = []
-        for row in rows:
-            d = dict(row)
-            d["test_cases"] = json.loads(d.get("test_cases_json", "[]"))
-            d["visible_test_cases"] = json.loads(d.get("visible_test_cases_json", "[]"))
-            if d.get("adversarial_spec_json"):
-                d["adversarial_spec"] = json.loads(d["adversarial_spec_json"])
-            d["alternative_solutions"] = json.loads(d.get("alternative_solutions", "[]"))
-            result.append(d)
+        result = [_row_to_db_problem(row) for row in rows]
         logger.info("get_problems_by_ids() — %d problems fetched", len(result))
         return result
     except Exception as exc:
         logger.error("get_problems_by_ids(%s) failed: %s", problem_ids, exc)
         raise
+
+
+# ── update ──
 
 
 def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
@@ -278,7 +320,11 @@ def save_submission(problem_id: int, code: str, verdict: str, judge_results: lis
 
 
 def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
-    """Return recent submissions for a problem."""
+    """Return recent submissions for a problem.
+
+    NOTE: Currently returns list[dict] for backward compatibility with the
+    frontend serialisation format. Callers expect dicts with 'timestamp' key.
+    """
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
             "SELECT id, student_code, verdict, judge_results, status, created_at "
