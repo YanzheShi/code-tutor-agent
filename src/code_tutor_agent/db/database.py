@@ -210,6 +210,19 @@ def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
         raise
 
 
+def update_problem_optimal_solution(problem_id: int, code: str) -> None:
+    """Update optimal_solution for a problem (e.g. after LLM generates it for LeetCode imports)."""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "UPDATE problems SET optimal_solution = ? WHERE id = ?",
+            (code, problem_id),
+        ))
+        logger.info("update_problem_optimal_solution() — id=%d, %d chars", problem_id, len(code))
+    except Exception as exc:
+        logger.error("update_problem_optimal_solution(%d) failed: %s", problem_id, exc)
+        raise
+
+
 def save_submission(problem_id: int, code: str, verdict: str, judge_results: list[dict]) -> int:
     """Save a submission record to the database. Returns the submission ID."""
     try:

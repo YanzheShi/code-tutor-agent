@@ -38,7 +38,7 @@ from typing import Any
 from langgraph.types import Command
 
 from code_tutor_agent.agents.problem_generator import generate_problem
-from code_tutor_agent.db.database import save_problem
+from code_tutor_agent.db.database import save_problem, update_problem_optimal_solution
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.sandbox.runner import run_solution
@@ -67,6 +67,63 @@ def _build_test_case(input_args: list[str], expected_output: str, explanation: s
     }
 
 
+def _generate_optimal_for_leetcode_sync(
+    problem_id: int,
+    title: str,
+    description: str,
+    difficulty: str,
+    starter_code: str,
+    sid: str,
+    progress_cb: Callable[[str], None],
+) -> None:
+    """Synchronous LLM call to generate optimal_solution for a LeetCode problem.
+
+    Called from _generate_from_leetcode() during graph invoke.
+    """
+    from code_tutor_agent.config import get_llm
+
+    logger.info("Generating optimal_solution for LeetCode '%s' (%d)", title, problem_id)
+    progress_cb("🤖 正在生成最优解代码...")
+
+    prompt = (
+        f"你是一个算法专家。给定以下 LeetCode 题目，请写出最优解 Python 代码（class Solution 风格）：\n\n"
+        f"标题: {title}\n"
+        f"描述: {description}\n"
+        f"难度: {difficulty}\n"
+    )
+    if starter_code:
+        prompt += f"模板代码:\n{starter_code}\n"
+    prompt += (
+        "\n要求：\n"
+        "- 使用最优算法（如哈希表、双指针、动态规划等）\n"
+        "- 必须是可运行的合法 Python 代码\n"
+        "- 方法签名必须准确\n"
+        "- 只输出代码，不要任何解释\n"
+    )
+
+    try:
+        llm = get_llm("agnes", temperature=0.3)
+        resp = llm.invoke([("human", prompt)])
+        code = resp.content if hasattr(resp, "content") else str(resp)
+        # Strip markdown fences
+        import re
+        m = re.search(r"```python\n?(.*?)```", code, re.DOTALL)
+        if m:
+            code = m.group(1).strip()
+        else:
+            m = re.search(r"```\n?(.*?)```", code, re.DOTALL)
+            if m:
+                code = m.group(1).strip()
+        code = code.strip()
+
+        update_problem_optimal_solution(problem_id, code)
+        progress_cb(f"🤖 最优解代码已生成（{len(code)} 字符）")
+        logger.info("Generated optimal_solution for LeetCode problem %d (%d chars)", problem_id, len(code))
+    except Exception as exc:
+        logger.warning("Failed to generate optimal_solution for LeetCode problem %d: %s", problem_id, exc)
+        progress_cb("⚠️ 最优解代码生成失败（不影响做题）")
+
+
 def _generate_from_leetcode(
     sid: str,
     lc_data: dict[str, Any],
@@ -74,8 +131,9 @@ def _generate_from_leetcode(
 ) -> Command:
     """Build a problem directly from parsed LeetCode data.
 
-    This path skips the LLM entirely — the problem description,
-    examples, tags, and starter code all come from the LeetCode API.
+    This path skips the LLM problem generation (title, description, tags,
+    starter code all come from the LeetCode API), but still uses the LLM
+    to generate the optimal solution code.
     """
     title = lc_data.get("title", "LeetCode Problem")
     description = lc_data.get("description", "")
@@ -93,10 +151,6 @@ def _generate_from_leetcode(
     visible_tcs = _parse_examples_to_test_cases(examples, "")
     logger.info("Parsed %d visible test cases from LeetCode examples", len(visible_tcs))
 
-    # We don't have optimal_solution from LeetCode, so save a placeholder.
-    # The background test generation will need to derive expected outputs
-    # differently — but for now the problem is still usable (user can run
-    # and submit; the full test suite generation will be skipped if no optimal).
     problem_dict = {
         "title": title,
         "topic": topic,
@@ -104,13 +158,16 @@ def _generate_from_leetcode(
         "description": description,
         "starter_code": starter_code,
         "test_cases": visible_tcs,
-        "novelty_score": 9.0,  # LeetCode problems are inherently novel
-        "brute_solution": "",  # No brute force — skip bg test gen
+        "novelty_score": 9.0,
+        "brute_solution": "",
         "function_signature": "",
     }
 
     # Save to DB (returns problem_id)
     problem_id = save_problem(problem_dict)
+
+    # 调用 LLM 为该 LeetCode 题目生成最优解代码（同步，在当前 graph 线程中）
+    _generate_optimal_for_leetcode_sync(problem_id, title, description, difficulty, starter_code, sid, progress_cb)
 
     meta = ProblemMeta(
         problem_id=problem_id,

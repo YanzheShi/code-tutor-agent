@@ -13,6 +13,69 @@ from code_tutor_agent.schemas.state import SessionState
 logger = logging.getLogger(__name__)
 
 
+def _extract_code_from_llm_response(text: str) -> str:
+    """Extract Python code from LLM response — strip markdown fences if present."""
+    import re
+    m = re.search(r"```python\n?(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"```\n?(.*?)```", text, re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+
+async def _generate_optimal_for_leetcode_async(problem_id: int, sid: str):
+    """Background task: call LLM to generate optimal_solution for a LeetCode-imported problem."""
+    from code_tutor_agent.config import get_llm
+    from code_tutor_agent.db.database import get_problem_by_id, update_problem_optimal_solution
+
+    full = get_problem_by_id(problem_id)
+    if not full:
+        logger.warning("Problem %d not found for optimal solution generation", problem_id)
+        return
+
+    title = full.get("title", "")
+    description = full.get("description", "")
+    difficulty = full.get("difficulty", "")
+    func_sig = full.get("function_signature", "")
+    starter = full.get("starter_code", "")
+
+    logger.info("Generating optimal_solution for LeetCode problem '%s' (%d)", title, problem_id)
+
+    prompt = (
+        f"你是一个算法专家。给定以下 LeetCode 题目，请写出最优解 Python 代码（class Solution 风格）：\n\n"
+        f"标题: {title}\n"
+        f"描述: {description}\n"
+        f"难度: {difficulty}\n"
+    )
+    if func_sig:
+        prompt += f"函数签名: {func_sig}\n"
+    if starter:
+        prompt += f"模板代码:\n{starter}\n"
+    prompt += (
+        "\n要求：\n"
+        "- 使用最优算法（如哈希表、双指针、动态规划等）\n"
+        "- 必须是可运行的合法 Python 代码\n"
+        "- 方法签名必须准确\n"
+        "- 只输出代码，不要任何解释\n"
+    )
+
+    try:
+        llm = get_llm("agnes", temperature=0.3)
+        resp = llm.invoke([("human", prompt)])
+        code = resp.content if hasattr(resp, "content") else str(resp)
+        code = _extract_code_from_llm_response(code)
+
+        update_problem_optimal_solution(problem_id, code)
+        _generation_progress.setdefault(sid, []).append(
+            f"🤖 已生成最优解代码（{len(code)} 字符）"
+        )
+        logger.info("Generated optimal_solution for LeetCode problem %d (%d chars)", problem_id, len(code))
+    except Exception as exc:
+        logger.warning("Failed to generate optimal_solution for LeetCode problem %d: %s", problem_id, exc)
+
+
 async def run_generation(sid: str, initial_dict: dict):
     """Full graph invoke in background, then generate complex tests."""
     graph = get_graph()
@@ -164,7 +227,7 @@ def run_fast_path(sid: str, body: dict, graph, config):
     le_data = body.get("leetcode", {})
     parsed_tcs = le_data.get("parsed_test_cases") or []
 
-    _generation_progress[sid] = ["\U0001f4e5 正在导入 LeetCode 题目..."]
+    _generation_progress[sid] = ["📥 正在导入 LeetCode 题目..."]
 
     visible_tcs = [
         {"input_args": tc.get("input_args", []), "expected_output": tc.get("expected_output", ""), "explanation": tc.get("explanation", "")}
@@ -183,6 +246,12 @@ def run_fast_path(sid: str, body: dict, graph, config):
         "test_cases": parsed_tcs,
     }
     problem_id = save_problem(problem_dict)
+
+    # 启动后台任务：调用 LLM 为该 LeetCode 题目生成最优解代码
+    try:
+        asyncio.create_task(_generate_optimal_for_leetcode_async(problem_id, sid))
+    except Exception:
+        logger.warning("Failed to schedule optimal solution generation (non-blocking)")
 
     meta = ProblemMeta(
         problem_id=problem_id,
