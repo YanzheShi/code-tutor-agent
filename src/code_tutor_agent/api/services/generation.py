@@ -169,7 +169,7 @@ async def _generate_complex_tests(problem_id: int, sid: str):
             f"  #{i+1}: input_args={tc.get('input_args', [])} \u2192 {tc.get('expected_output', '')}"
             for i, tc in enumerate(all_tcs[:4])
         )
-        constraints_str = ""  # constraints not stored in DB — see models.py
+        constraints_str = "\n".join(f"  - {c}" for c in full.constraints) if full.constraints else ""
 
         prompt_user = GENERATE_BOUNDARY_USER.format(
             title=full.title,

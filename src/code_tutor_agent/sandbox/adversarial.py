@@ -219,7 +219,7 @@ def _has_dp_pattern(tree: ast.AST) -> bool:
 # ──────────────────────────────────────────────
 
 
-def generate_boundary_cases(problem_dict: dict) -> list[dict]:
+def generate_boundary_cases(problem_dict) -> list[dict]:
     logger.info("▶ generate_boundary_cases()")
     """根据题目约束，枚举边界测试用例（纯规则）。
 
@@ -235,8 +235,8 @@ def generate_boundary_cases(problem_dict: dict) -> list[dict]:
         — 边界情况是确定性的组合问题。给 LLM 做既贵又容易漏。
         — 规则的确定性保证：你永远不会漏掉「空数组」这个用例。
     """
-    constraints = problem_dict.get("constraints", [])
-    test_cases = problem_dict.get("test_cases", [])
+    constraints = problem_dict.constraints
+    test_cases = problem_dict.test_cases
     base_inputs = _parse_constraints(constraints, test_cases)
 
     cases: list[dict] = []
@@ -408,7 +408,7 @@ _SCALE_ADV_PROMPT = ChatPromptTemplate.from_messages([
 
 
 def generate_scale_adversarial(
-    problem_dict: dict,
+    problem_dict,
     user_code: str,
     weakness: dict[str, Any],
 ) -> dict | None:
@@ -428,19 +428,19 @@ def generate_scale_adversarial(
             — 实际数组生成交给 Python，快且便宜。
     """
     # 检查参数数量：单参数问题跳过规模对抗
-    example_cases = problem_dict.get("test_cases", [])
+    example_cases = problem_dict.test_cases
     if example_cases and len(example_cases[0].get("input_args", [])) <= 1:
         logger.info("Scale adversarial: single-arg problem, skipping")
         return None
 
     llm = get_llm("agnes", temperature=0.3)
 
-    constraints_text = "\n".join(problem_dict.get("constraints", []))
+    constraints_text = "\n".join(problem_dict.constraints)
     response = _SCALE_ADV_PROMPT | llm
     try:
         result = response.invoke({
-            "title": problem_dict.get("title", ""),
-            "description": problem_dict.get("description", "")[:800],
+            "title": problem_dict.title,
+            "description": problem_dict.description[:800],
             "constraints": constraints_text,
             "code": user_code[:2000],
             "weakness_type": weakness.get("weakness_type", "unknown"),
@@ -526,7 +526,7 @@ _REVIEW_PROMPT = ChatPromptTemplate.from_messages([
 ])
 
 
-def generate_review(problem_dict: dict, user_code: str) -> dict | None:
+def generate_review(problem_dict, user_code: str) -> dict | None:
     """对 AC 的代码做多维评审（LLM 调用）。
 
     注意：评审不拦 AC — AC 就是 AC，评审只用于「告知用户」和「更新画像」。
@@ -540,7 +540,7 @@ def generate_review(problem_dict: dict, user_code: str) -> dict | None:
     try:
         result = _REVIEW_PROMPT | llm
         response = result.invoke({
-            "description": problem_dict.get("description", "")[:600],
+            "description": problem_dict.description[:600],
             "code": user_code[:3000],
         })
     except Exception as exc:
@@ -619,7 +619,7 @@ def run_adversarial_suite(
     else:
         # 用题目的 optimal_solution 计算真实 expected_output
         # 避免硬编码的预期值对不同语义的题目出错（Bug: singleNumber）
-        ref_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
+        ref_code = problem_dict.optimal_solution or problem_dict.brute_solution
         if not ref_code:
             logger.warning("No reference solution available — skipping boundary adversarial")
         else:

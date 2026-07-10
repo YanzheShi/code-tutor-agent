@@ -77,12 +77,13 @@ def _init_db_tables(cursor) -> None:
     """)
 
     for col_sql in [
-        "ALTER TABLE problems ADD COLUMN starter_code TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE problems ADD COLUMN starter_code TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN visible_test_cases_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE problems ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'",
         "ALTER TABLE problems ADD COLUMN source_url TEXT DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN alternative_solutions TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE problems ADD COLUMN function_signature TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE problems ADD COLUMN constraints_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
     ]:
@@ -179,13 +180,17 @@ def _save_problem(cursor, problem_dict: dict) -> int:
     adv_spec = problem_dict.get("adversarial_spec")
     adv_spec_json = json.dumps(adv_spec, ensure_ascii=False) if adv_spec else ""
 
+    constraints = problem_dict.get("constraints", [])
+    if not isinstance(constraints, str):
+        constraints = json.dumps(constraints, ensure_ascii=False)
+
     cursor.execute("""
         INSERT INTO problems
             (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
              optimal_solution, brute_solution, function_signature, adversarial_spec_json,
              time_complexity, space_complexity, novelty_score, starter_code,
-             source, source_url, alternative_solutions)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             source, source_url, alternative_solutions, constraints_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         title,
         problem_dict.get("topic", ""),
@@ -204,6 +209,7 @@ def _save_problem(cursor, problem_dict: dict) -> int:
         problem_dict.get("source", "generated"),
         problem_dict.get("source_url", ""),
         alt,
+        constraints,
     ))
     problem_id = cursor.lastrowid
     logger.info("save_problem() — id=%d, title=%s", problem_id, title)
@@ -322,8 +328,7 @@ def save_submission(problem_id: int, code: str, verdict: str, judge_results: lis
 def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
     """Return recent submissions for a problem.
 
-    NOTE: Currently returns list[dict] for backward compatibility with the
-    frontend serialisation format. Callers expect dicts with 'timestamp' key.
+    Returns list of dicts (via DBSubmission.to_dict()) for frontend compatibility.
     """
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
@@ -334,10 +339,8 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
 
         result = []
         for row in rows:
-            d = dict(row)
-            d["judge_results"] = json.loads(d.get("judge_results", "[]"))
-            d["timestamp"] = d.pop("created_at", "")
-            result.append(d)
+            sub = DBSubmission(**dict(row))
+            result.append(sub.to_dict())
         logger.info("get_submissions_by_problem() — problem=%d, %d rows", problem_id, len(result))
         return result
     except Exception as exc:

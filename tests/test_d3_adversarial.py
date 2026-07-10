@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from code_tutor_agent.db.models import DBProblem
 from code_tutor_agent.sandbox.adversarial import (
     AdversarialSuite,
     analyze_code_weakness,
@@ -107,8 +108,22 @@ class TestBoundaryGeneration:
         ],
     }
 
+    @staticmethod
+    def _to_db(d: dict):
+        """Convert SAMPLE_PROBLEM dict to DBProblem for testing."""
+        import json
+        return DBProblem(
+            id=1,
+            title=d["title"],
+            topic="数组",
+            difficulty="easy",
+            description=d["description"],
+            constraints_json=json.dumps(d.get("constraints", [])),
+            test_cases_json=json.dumps(d.get("test_cases", [])),
+        )
+
     def test_generates_boundary_cases(self):
-        cases = generate_boundary_cases(self.SAMPLE_PROBLEM)
+        cases = generate_boundary_cases(self._to_db(self.SAMPLE_PROBLEM))
         assert len(cases) >= 4  # empty, single, extreme, duplicate, negative
         for c in cases:
             assert "input_args" in c
@@ -117,7 +132,7 @@ class TestBoundaryGeneration:
 
     def test_regression_no_empty_when_min_n_gt_0(self):
         """If constraints say min_n >= 2, don't generate empty array case."""
-        problem = {**self.SAMPLE_PROBLEM, "constraints": ["2 <= nums.length <= 10^4"]}
+        problem = self._to_db({**self.SAMPLE_PROBLEM, "constraints": ["2 <= nums.length <= 10^4"]})
         cases = generate_boundary_cases(problem)
         # Should still generate other boundary types
         assert len(cases) >= 3
@@ -128,14 +143,14 @@ class TestBoundaryGeneration:
         之前边界生成器硬写了 max() 作为 expected_output，对 singleNumber 错误。
         修复后 expected_output 为空，由 run_adversarial_suite 用 optimal_solution 计算。
         """
-        problem = {
+        problem = self._to_db({
             "title": "只出现一次的数字",
             "description": "给定非空整数数组，除了某个元素只出现一次外，其余每个元素均出现两次",
             "constraints": ["1 <= nums.length <= 3 * 10^4", "-3 * 10^4 <= nums[i] <= 3 * 10^4"],
             "test_cases": [
                 {"input_args": ["[2,2,1]"], "expected_output": "1"},
             ],
-        }
+        })
         cases = generate_boundary_cases(problem)
         for c in cases:
             # 所有边界用例的 expected_output 现在都为空字符串
@@ -166,14 +181,29 @@ class Solution:
         return []
 """
 
-    PROBLEM = {
-        "title": "两数之和",
-        "description": "给定整数数组 nums 和目标值 target，返回两数下标",
-        "constraints": ["2 <= nums.length <= 10^4", "-10^9 <= nums[i] <= 10^9"],
-        "test_cases": [
-            {"input_args": ["[2,7,11,15]", "9"], "expected_output": "[0,1]"},
-        ],
-    }
+    PROBLEM = None  # will be initialized in setup_method
+
+    def _make_problem(self, d: dict):
+        import json
+        return DBProblem(
+            id=1,
+            title=d["title"],
+            topic="数组",
+            difficulty="easy",
+            description=d["description"],
+            constraints_json=json.dumps(d.get("constraints", [])),
+            test_cases_json=json.dumps(d.get("test_cases", [])),
+        )
+
+    def setup_method(self):
+        self.PROBLEM = self._make_problem({
+            "title": "两数之和",
+            "description": "给定整数数组 nums 和目标值 target，返回两数下标",
+            "constraints": ["2 <= nums.length <= 10^4", "-10^9 <= nums[i] <= 10^9"],
+            "test_cases": [
+                {"input_args": ["[2,7,11,15]", "9"], "expected_output": "[0,1]"},
+            ],
+        })
 
     def test_suite_runs_without_crashing(self):
         """AdversarialSuite should complete without exceptions."""
