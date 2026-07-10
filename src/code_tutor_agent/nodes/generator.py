@@ -105,7 +105,7 @@ def _generate_optimal_for_leetcode_sync(
 
     try:
         llm = get_llm("agnes", temperature=0.3)
-        resp = llm.invoke([("human", prompt)])
+        resp = llm.invoke([("human", prompt)], metadata={"node": "generator", "step": "generate_problem"})
         code = resp.content if hasattr(resp, "content") else str(resp)
         # Strip markdown fences
         import re
