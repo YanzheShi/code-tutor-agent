@@ -160,13 +160,7 @@ class AdminPasswordRequest(BaseModel):
 
 
 class AdminProblemOut(BaseModel):
-    """Full problem representation for admin listing.
-
-    Distinguishes two testcase categories:
-    - visible_test_cases: shown to users in the "Run" tab (前台运行)
-    - test_cases: full suite including hidden cases used by the judge (判题使用)
-    """
-
+    """Full problem representation for admin listing."""
     id: int
     title: str
     topic: str
@@ -175,21 +169,21 @@ class AdminProblemOut(BaseModel):
     visible_test_cases: list[dict] = Field(default_factory=list, alias="visible_test_cases_list")
     test_cases: list[dict] = Field(default_factory=list, alias="test_cases_list")
     brute_solution: str = ""
+    optimal_solution: str = ""
     starter_code: str = ""
+    function_signature: str = ""
+    time_complexity: str = ""
+    space_complexity: str = ""
+    source: str = "generated"
+    source_url: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    alternative_solutions: list[str] = Field(default_factory=list)
     novelty_score: float = 7.0
     created_at: str = ""
 
 
 class AdminUpdateProblemRequest(BaseModel):
-    """Fields that can be updated via admin panel.
-
-    Testcase fields:
-    - test_cases: full judge suite (判题使用，含隐藏用例)
-    - visible_test_cases: frontend run suite (前台运行，仅可见用例)
-    When only test_cases is provided, visible_test_cases defaults
-    to the non-hidden subset.
-    """
-
+    """Fields that can be updated via admin panel."""
     password: Optional[str] = Field(default="", description="Admin password for verification")
     title: Optional[str] = None
     description: Optional[str] = None
@@ -198,5 +192,13 @@ class AdminUpdateProblemRequest(BaseModel):
     test_cases: Optional[list[dict]] = None
     visible_test_cases: Optional[list[dict]] = None
     brute_solution: Optional[str] = None
+    optimal_solution: Optional[str] = None
     starter_code: Optional[str] = None
+    function_signature: Optional[str] = None
+    time_complexity: Optional[str] = None
+    space_complexity: Optional[str] = None
+    source: Optional[str] = None
+    source_url: Optional[str] = None
+    constraints: Optional[list[str]] = None
+    alternative_solutions: Optional[list[str]] = None
     novelty_score: Optional[float] = None

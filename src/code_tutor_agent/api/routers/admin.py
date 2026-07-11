@@ -64,7 +64,15 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
                 visible_test_cases_list=p.visible_test_cases,
                 test_cases_list=p.test_cases,
                 brute_solution=p.brute_solution,
+                optimal_solution=p.optimal_solution,
                 starter_code=p.starter_code,
+                function_signature=p.function_signature,
+                time_complexity=p.time_complexity,
+                space_complexity=p.space_complexity,
+                source=p.source,
+                source_url=p.source_url,
+                constraints=p.constraints,
+                alternative_solutions=p.alternative_solutions_list,
                 novelty_score=p.novelty_score,
                 created_at=p.created_at,
             ))
@@ -104,6 +112,24 @@ async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest)
         updates.append("starter_code = ?"); params.append(body.starter_code)
     if body.novelty_score is not None:
         updates.append("novelty_score = ?"); params.append(body.novelty_score)
+    if body.function_signature is not None:
+        updates.append("function_signature = ?"); params.append(body.function_signature)
+    if body.time_complexity is not None:
+        updates.append("time_complexity = ?"); params.append(body.time_complexity)
+    if body.space_complexity is not None:
+        updates.append("space_complexity = ?"); params.append(body.space_complexity)
+    if body.source is not None:
+        updates.append("source = ?"); params.append(body.source)
+    if body.source_url is not None:
+        updates.append("source_url = ?"); params.append(body.source_url)
+    if body.optimal_solution is not None:
+        updates.append("optimal_solution = ?"); params.append(body.optimal_solution)
+    if body.constraints is not None:
+        import json
+        updates.append("constraints_json = ?"); params.append(json.dumps(body.constraints, ensure_ascii=False))
+    if body.alternative_solutions is not None:
+        import json
+        updates.append("alternative_solutions = ?"); params.append(json.dumps(body.alternative_solutions, ensure_ascii=False))
 
     if body.test_cases is not None and body.visible_test_cases is None:
         derived_visible = [tc for tc in body.test_cases if not tc.get("is_hidden", False)]
@@ -140,3 +166,17 @@ async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = Adm
     conn.close()
 
     return {"ok": True, "message": f"Problem {problem_id} deleted"}
+
+
+@router.get("/profile")
+async def admin_get_profile():
+    """Get the current user profile (old 5-dim)."""
+    from code_tutor_agent.db.database import get_profile
+    return get_profile().model_dump()
+
+
+@router.get("/profile/v2")
+async def admin_get_profile_v2():
+    """Get the per-tag UserProfile from the profile module."""
+    from code_tutor_agent.db.database import get_user_profile_v2
+    return get_user_profile_v2()

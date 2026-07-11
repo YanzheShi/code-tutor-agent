@@ -22,7 +22,15 @@ interface AdminProblem {
   visible_test_cases_list: AdminTestCase[];
   test_cases_list: AdminTestCase[];
   brute_solution: string;
+  optimal_solution: string;
   starter_code: string;
+  function_signature: string;
+  time_complexity: string;
+  space_complexity: string;
+  source: string;
+  source_url: string;
+  constraints: string[];
+  alternative_solutions: string[];
   novelty_score: number;
   created_at: string;
 }
@@ -54,6 +62,23 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const [editTestCases, setEditTestCases] = useState<string>('');
   const [saveMsg, setSaveMsg] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [showProfile, setShowProfile] = useState(false);
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
+  const fetchProfile = useCallback(async () => {
+    const nextShow = !showProfile;
+    setShowProfile(nextShow);
+    if (nextShow) {
+      try {
+        const [p1, p2] = await Promise.all([
+          fetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
+          fetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
+        ]);
+        setProfile(p1);
+        setProfileV2(p2);
+      } catch { /* ignore */ }
+    }
+  }, [showProfile]);
 
   // ── Auth ──
   const handleLogin = useCallback(async () => {
@@ -115,6 +140,11 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       topic: p.topic,
       difficulty: p.difficulty,
       novelty_score: p.novelty_score,
+      function_signature: p.function_signature,
+      time_complexity: p.time_complexity,
+      space_complexity: p.space_complexity,
+      source: p.source,
+      source_url: p.source_url,
     });
     setEditVisibleTestCases(JSON.stringify(p.visible_test_cases_list, null, 2));
     setEditTestCases(JSON.stringify(p.test_cases_list, null, 2));
@@ -307,6 +337,62 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           </section>
         )}
 
+        {/* Optimal Solution */}
+        {p.optimal_solution && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">最优解</h3>
+            <pre className="rounded border border-ct-border bg-slate-900/50 p-3 text-xs font-mono text-ct-text overflow-x-auto">{p.optimal_solution}</pre>
+          </section>
+        )}
+
+        {/* Function Signature & Complexity */}
+        <section className="mb-4 grid grid-cols-3 gap-3">
+          {p.function_signature && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">函数签名</h3>
+              <code className="text-xs text-ct-text">{p.function_signature}</code>
+            </div>
+          )}
+          {p.time_complexity && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">时间复杂度</h3>
+              <code className="text-xs text-ct-text">{p.time_complexity}</code>
+            </div>
+          )}
+          {p.space_complexity && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">空间复杂度</h3>
+              <code className="text-xs text-ct-text">{p.space_complexity}</code>
+            </div>
+          )}
+        </section>
+
+        {/* Source */}
+        <section className="mb-4 flex gap-4 text-xs text-ct-muted">
+          <span>来源: {p.source}</span>
+          {p.source_url && <span>URL: <a href={p.source_url} target="_blank" className="text-ct-accent underline">{p.source_url}</a></span>}
+        </section>
+
+        {/* Constraints */}
+        {p.constraints.length > 0 && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">约束条件 ({p.constraints.length})</h3>
+            <ul className="list-inside list-disc space-y-0.5 text-xs text-ct-muted">
+              {p.constraints.map((c, i) => <li key={i}><code className="text-ct-text">{c}</code></li>)}
+            </ul>
+          </section>
+        )}
+
+        {/* Alternative Solutions */}
+        {p.alternative_solutions.length > 0 && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">备选解法 ({p.alternative_solutions.length})</h3>
+            <ul className="space-y-1 text-xs text-ct-text">
+              {p.alternative_solutions.map((s, i) => <li key={i}>• {s}</li>)}
+            </ul>
+          </section>
+        )}
+
         {/* Actions */}
         <div className="flex gap-3 pt-2">
           <button
@@ -461,9 +547,43 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-ct-border px-4 py-3">
-        <h2 className="text-sm font-bold text-ct-text">🛡️ 管理页面 ({problems.length} 题)</h2>
+        <div className="flex items-center gap-4">
+          <h2 className="text-sm font-bold text-ct-text">🛡️ 管理页面 ({problems.length} 题)</h2>
+          <button onClick={fetchProfile} className="text-xs text-ct-muted hover:text-ct-text">📊 画像</button>
+        </div>
         <button onClick={handleLogout} className="text-xs text-ct-muted hover:text-red-400">退出</button>
       </div>
+
+      {/* Profile panel */}
+      {showProfile && profile && (
+        <div className="border-b border-ct-border bg-slate-800/20 px-4 py-3 text-xs">
+          <div className="flex items-center gap-4 mb-2">
+            <span>熟练度 <b>{(profile.proficiency * 100).toFixed(0)}%</b></span>
+            <span>稳定性 <b>{(profile.stability * 100).toFixed(0)}%</b></span>
+            <span>做题 <b>{profile.attempts}</b></span>
+            <span>距离上次 <b>{profile.forget_days}天</b></span>
+            {(profile.common_errors || []).length > 0 && (
+              <span className="text-red-400">错误 {(profile.common_errors as string[]).slice(0, 3).join(', ')}</span>
+            )}
+          </div>
+          {/* Per-tag profile */}
+          {profileV2 && (() => {
+            const prof = profileV2.prof as Record<string, number> | undefined;
+            if (!prof) return null;
+            const entries = Object.entries(prof).sort((a, b) => b[1] - a[1]).slice(0, 6);
+            if (entries.length === 0) return null;
+            return (
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {entries.map(([tag, val]) => (
+                  <span key={tag} className="text-ct-muted">
+                    {tag}: <b className="text-ct-text">{(val * 100).toFixed(0)}%</b>
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       {/* Loading */}
       {loading && (

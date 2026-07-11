@@ -24,15 +24,16 @@ export default function AgentChat({
   inputPlaceholder?: string;
 }) {
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // 自动滚动到最新消息
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !disabled && inputRef.current?.value.trim()) {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !disabled && inputRef.current?.value.trim()) {
+      e.preventDefault();
       onSend(inputRef.current.value.trim());
       inputRef.current.value = '';
     }
@@ -66,13 +67,13 @@ export default function AgentChat({
 
       {/* 输入框 */}
       <div className="border-t border-ct-border p-3">
-        <input
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={2}
           placeholder={disabled ? '对话已完成...' : inputPlaceholder}
           disabled={disabled}
           onKeyDown={handleKeyDown}
-          className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40"
+          className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40 resize-none"
         />
       </div>
     </div>

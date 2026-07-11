@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
+const BASE = 'http://localhost:8765';
+
 const TOPICS = [
   { id: '数组', label: '数组', desc: '遍历、查找、排序基础' },
   { id: '数组+哈希表', label: '数组+哈希表', desc: '空间换时间，O(n) 查找' },
@@ -16,9 +18,111 @@ const DIFFICULTIES = [
   { id: 'hard', label: 'Hard', color: 'bg-red-900/50 text-red-400 border-red-700' },
 ];
 
-type Tab = 'ai' | 'existing' | 'leetcode' | 'agent';
-
+type Tab = 'ai' | 'existing' | 'leetcode' | 'agent' | 'profile';
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string };
+
+/* ── ProfileView 子组件 ── */
+
+function ProfileView() {
+  const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      fetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
+      fetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
+    ]).then(([p1, p2]) => {
+      setProfile(p1);
+      setProfileV2(p2);
+      setLoading(false);
+    }).catch(() => {
+      setProfile(null);
+      setProfileV2(null);
+      setLoading(false);
+    });
+  }, []);
+
+  if (loading) return <p className="text-sm text-ct-muted text-center py-8">加载画像中...</p>;
+  if (!profile) return <p className="text-sm text-ct-muted text-center py-8">暂无画像数据，做几道题后再来看看</p>;
+
+  const bar = (val: number, color: string) => (
+    <div className="h-2 w-full rounded-full bg-slate-700">
+      <div className={'h-2 rounded-full ' + color} style={{ width: Math.round(val * 100) + '%' }} />
+    </div>
+  );
+
+  // 解析 per-tag 数据
+  const v2Prof = profileV2?.prof as Record<string, number> | undefined;
+  const v2Stab = profileV2?.stab as Record<string, { variance: number }> | undefined;
+  const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
+
+  return (
+    <section className="space-y-4">
+      <h2 className="text-sm font-semibold text-ct-text">📊 我的画像</h2>
+
+      {/* 总体指标 */}
+      <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-3 text-sm">
+        <div className="flex justify-between mb-1">
+          <span className="text-ct-muted">综合熟练度</span>
+          <span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span>
+        </div>
+        {bar(profile.proficiency as number, 'bg-ct-accent')}
+        <div className="flex justify-between mb-1">
+          <span className="text-ct-muted">稳定性</span>
+          <span className="text-ct-text font-mono">{((profile.stability as number) * 100).toFixed(0)}%</span>
+        </div>
+        {bar(profile.stability as number, 'bg-ct-success')}
+        <div className="grid grid-cols-2 gap-4 pt-1">
+          <div>
+            <span className="text-ct-muted text-xs">做题数</span>
+            <p className="text-ct-text font-mono text-lg">{profile.attempts as number}</p>
+          </div>
+          <div>
+            <span className="text-ct-muted text-xs">距离上次</span>
+            <p className="text-ct-text font-mono text-lg">{profile.forget_days as number} 天</p>
+          </div>
+        </div>
+        {(profile.common_errors as string[]).length > 0 && (
+          <div>
+            <span className="text-ct-muted text-xs block mb-1">常见错误</span>
+            <div className="flex flex-wrap gap-1">
+              {(profile.common_errors as string[]).map((e, i) => (
+                <span key={i} className="rounded bg-red-900/30 px-2 py-0.5 text-xs text-red-400">{e}</span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Per-tag 画像 */}
+      {tagEntries.length > 0 && (
+        <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-2 text-sm">
+          <h3 className="text-xs font-semibold text-ct-muted mb-2">各知识点熟练度</h3>
+          {tagEntries.slice(0, 8).map(([tag, prof]) => (
+            <div key={tag}>
+              <div className="flex justify-between text-xs mb-0.5">
+                <span className="text-ct-muted">{tag}</span>
+                <span className="text-ct-text font-mono">{(prof * 100).toFixed(0)}%</span>
+              </div>
+              {bar(prof, 'bg-ct-accent')}
+            </div>
+          ))}
+          {tagEntries.length > 8 && (
+            <p className="text-xs text-ct-muted text-center pt-1">还有 {tagEntries.length - 8} 个知识点...</p>
+          )}
+        </div>
+      )}
+
+      <p className="text-xs text-ct-muted text-center">
+        画像在每次判题后自动更新，根据熟练度规划下一题难度
+      </p>
+    </section>
+  );
+}
+
+/* ── 主组件 ── */
 
 export default function WelcomeScreen({
   onStart,
@@ -39,11 +143,10 @@ export default function WelcomeScreen({
   const [leetcodeUrl, setLeetcodeUrl] = useState('');
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
 
-  // Fetch existing problems
   useEffect(() => {
     if (tab === 'existing') {
       setProblemsLoading(true);
-      fetch('http://localhost:8765/problems')
+      fetch(BASE + '/problems')
         .then(r => r.json())
         .then(data => setProblems(data.problems ?? []))
         .catch(() => setProblems([]))
@@ -54,12 +157,9 @@ export default function WelcomeScreen({
   return (
     <div className="flex h-screen items-center justify-center bg-ct-bg">
       <div className="w-full max-w-2xl space-y-6 px-6">
-        {/* 标题 */}
         <div className="text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
-          <p className="mt-2 text-ct-muted">
-            AI 编程私教 · 自主出题 · 对抗判题 · 渐进辅导
-          </p>
+          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 对抗判题 · 渐进辅导</p>
         </div>
 
         {/* 标签切换 */}
@@ -68,27 +168,18 @@ export default function WelcomeScreen({
             { id: 'ai' as Tab, label: 'AI 出题' },
             { id: 'agent' as Tab, label: '🤖 Agent 导师' },
             { id: 'existing' as Tab, label: '从题库选' },
+            { id: 'profile' as Tab, label: '📊 我的画像' },
             { id: 'leetcode' as Tab, label: 'LeetCode 链接' },
             ...(onOpenAdmin ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
           ].map(t => (
             t.id === 'admin' ? (
-              <button
-                key="admin"
-                onClick={() => onOpenAdmin?.()}
-                className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
-                  tab === 'admin' ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'
-                }`}
-              >
+              <button key="admin" onClick={() => onOpenAdmin?.()}
+                className={`flex-1 rounded-md py-2 text-sm font-medium transition ${tab === 'admin' ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'}`}>
                 {t.label}
               </button>
             ) : (
-              <button
-                key={t.id}
-                onClick={() => setTab(t.id)}
-                className={`flex-1 rounded-md py-2 text-sm font-medium transition ${
-                  tab === t.id ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'
-                }`}
-              >
+              <button key={t.id} onClick={() => setTab(t.id)}
+                className={`flex-1 rounded-md py-2 text-sm font-medium transition ${tab === t.id ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'}`}>
                 {t.label}
               </button>
             )
@@ -102,45 +193,27 @@ export default function WelcomeScreen({
               <h2 className="mb-3 text-sm font-semibold text-ct-text">选择知识点</h2>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {TOPICS.map(t => (
-                  <button
-                    key={t.id}
-                    onClick={() => setTopic(t.id)}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
-                      topic === t.id
-                        ? 'border-ct-accent bg-ct-accent/10 text-ct-accent'
-                        : 'border-ct-border text-ct-muted hover:border-ct-accent/50'
-                    }`}
-                  >
+                  <button key={t.id} onClick={() => setTopic(t.id)}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm transition ${topic === t.id ? 'border-ct-accent bg-ct-accent/10 text-ct-accent' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
                     <div className="font-medium">{t.label}</div>
                     <div className="mt-0.5 text-xs opacity-70">{t.desc}</div>
                   </button>
                 ))}
               </div>
             </section>
-
             <section>
               <h2 className="mb-3 text-sm font-semibold text-ct-text">选择难度</h2>
               <div className="flex gap-3">
                 {DIFFICULTIES.map(d => (
-                  <button
-                    key={d.id}
-                    onClick={() => setDifficulty(d.id)}
-                    className={`flex-1 rounded-lg border px-4 py-2 text-center text-sm font-medium transition ${
-                      difficulty === d.id
-                        ? d.color + ' border-2'
-                        : 'border-ct-border text-ct-muted hover:border-ct-accent/50'
-                    }`}
-                  >
+                  <button key={d.id} onClick={() => setDifficulty(d.id)}
+                    className={`flex-1 rounded-lg border px-4 py-2 text-center text-sm font-medium transition ${difficulty === d.id ? d.color + ' border-2' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
                     {d.label}
                   </button>
                 ))}
               </div>
             </section>
-
-            <button
-              onClick={() => onStart(topic, difficulty, 'practice')}
-              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90"
-            >
+            <button onClick={() => onStart(topic, difficulty, 'practice')}
+              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90">
               开始练习
             </button>
           </>
@@ -157,31 +230,17 @@ export default function WelcomeScreen({
             ) : (
               <div className="max-h-96 space-y-1 overflow-y-auto">
                 {problems.map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => setSelectedPid(p.id)}
-                    className={`w-full rounded-lg border px-4 py-2 text-left text-sm transition ${
-                      selectedPid === p.id
-                        ? 'border-ct-accent bg-ct-accent/10 text-ct-accent'
-                        : 'border-ct-border text-ct-muted hover:border-ct-accent/50'
-                    }`}
-                  >
+                  <button key={p.id} onClick={() => setSelectedPid(p.id)}
+                    className={`w-full rounded-lg border px-4 py-2 text-left text-sm transition ${selectedPid === p.id ? 'border-ct-accent bg-ct-accent/10 text-ct-accent' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
                     <span className="font-medium text-ct-text">{p.id}. {p.title}</span>
                     <span className="ml-2 text-xs">{p.topic}</span>
-                    <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${
-                      p.difficulty === 'easy' ? 'bg-green-900/50 text-green-400'
-                      : p.difficulty === 'medium' ? 'bg-amber-900/50 text-amber-400'
-                      : 'bg-red-900/50 text-red-400'
-                    }`}>{p.difficulty}</span>
+                    <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${p.difficulty === 'easy' ? 'bg-green-900/50 text-green-400' : p.difficulty === 'medium' ? 'bg-amber-900/50 text-amber-400' : 'bg-red-900/50 text-red-400'}`}>{p.difficulty}</span>
                   </button>
                 ))}
               </div>
             )}
-            <button
-              onClick={() => selectedPid && onStartExisting?.(selectedPid)}
-              disabled={!selectedPid}
-              className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
-            >
+            <button onClick={() => selectedPid && onStartExisting?.(selectedPid)} disabled={!selectedPid}
+              className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
               开始练习
             </button>
           </section>
@@ -191,19 +250,12 @@ export default function WelcomeScreen({
         {tab === 'leetcode' && (
           <section>
             <h2 className="mb-3 text-sm font-semibold text-ct-text">粘贴 LeetCode 题目链接</h2>
-            <input
-              type="text"
-              value={leetcodeUrl}
-              onChange={e => setLeetcodeUrl(e.target.value)}
+            <input type="text" value={leetcodeUrl} onChange={e => setLeetcodeUrl(e.target.value)}
               placeholder="https://leetcode.com/problems/two-sum/"
-              className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-4 py-3 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent"
-            />
+              className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-4 py-3 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent" />
             <p className="mt-2 text-xs text-ct-muted">支持 leetcode.com 和 leetcode.cn 的题目链接</p>
-            <button
-              onClick={() => leetcodeUrl.trim() && onStartLeetcode?.(leetcodeUrl.trim())}
-              disabled={!leetcodeUrl.trim()}
-              className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40"
-            >
+            <button onClick={() => leetcodeUrl.trim() && onStartLeetcode?.(leetcodeUrl.trim())} disabled={!leetcodeUrl.trim()}
+              className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
               解析并开始
             </button>
           </section>
@@ -214,10 +266,7 @@ export default function WelcomeScreen({
           <section className="text-center">
             <div className="mb-4 rounded-lg border border-ct-border bg-slate-800/30 p-6">
               <p className="text-lg font-medium text-ct-text">🧑‍🏫 Agent 导师模式</p>
-              <p className="mt-2 text-sm text-ct-muted">
-                与 AI 导师直接对话，告诉 TA 你想练什么类型、难度、具体方向的题目。
-                AI 会通过多轮对话了解你的需求，然后为你量身生成一道题。
-              </p>
+              <p className="mt-2 text-sm text-ct-muted">与 AI 导师直接对话，告诉 TA 你想练什么类型、难度、具体方向的题目。</p>
               <ul className="mt-3 space-y-1 text-left text-xs text-ct-muted">
                 <li>💬 自然对话，告诉 AI 你想练什么</li>
                 <li>🎯 AI 会追问细节，确保题目贴合你的需求</li>
@@ -225,14 +274,15 @@ export default function WelcomeScreen({
                 <li>🔄 未通过可以多次修改，AI 持续辅导直到 AC</li>
               </ul>
             </div>
-            <button
-              onClick={() => onStart('', '', 'agent')}
-              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90"
-            >
+            <button onClick={() => onStart('', '', 'agent')}
+              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90">
               开始对话
             </button>
           </section>
         )}
+
+        {/* ── 我的画像 ── */}
+        {tab === 'profile' && <ProfileView />}
       </div>
     </div>
   );

@@ -105,7 +105,7 @@ def _generate_optimal_for_leetcode_sync(
 
     try:
         llm = get_llm("agnes", temperature=0.3)
-        resp = llm.invoke([("human", prompt)])
+        resp = llm.invoke([("human", prompt)], metadata={"node": "generator", "step": "generate_problem"})
         code = resp.content if hasattr(resp, "content") else str(resp)
         # Strip markdown fences
         import re
@@ -184,6 +184,8 @@ def _generate_from_leetcode(
         starter_code=starter_code,
         visible_test_cases=visible_tcs,
         novelty_score=9.0,
+        tag_primary=tag_for(topic),
+        prob_elo=elo_for(difficulty),
     )
 
     welcome_msg = TutorMsg(
@@ -361,6 +363,8 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         starter_code=db_starter_code or (problem_dict.get("starter_code", "") if problem_dict else ""),
         visible_test_cases=visible_tcs,
         novelty_score=problem_dict.get("novelty_score", 7.0) if problem_dict else 7.0,
+        tag_primary=tag_for(topic),
+        prob_elo=elo_for(difficulty),
     )
 
     # Store brute_code + function_signature in state for background test generation

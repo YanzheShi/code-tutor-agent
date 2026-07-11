@@ -276,6 +276,8 @@ def run_fast_path(sid: str, body: dict, graph, config):
         starter_code=problem_dict.get("starter_code", ""),
         visible_test_cases=visible_tcs,
         description_html=le_data.get("description_html", ""),
+        tag_primary="array_basics",
+        prob_elo=1200,
     )
 
     initial = SessionState(

@@ -170,6 +170,8 @@ async def create_session_with_existing(problem_id: int):
         starter_code=full.get("starter_code", ""),
         visible_test_cases=visible_tcs,
         novelty_score=full.get("novelty_score", 7.0),
+        tag_primary="array_basics",
+        prob_elo=1200 if full.get("difficulty", "easy") == "easy" else 1500 if full.get("difficulty") == "medium" else 1800,
     )
 
     initial_dict = {

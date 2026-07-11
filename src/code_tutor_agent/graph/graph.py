@@ -8,11 +8,14 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
+from langgraph.store.memory import InMemoryStore
 
 from code_tutor_agent.nodes.generator import generator_node
 from code_tutor_agent.nodes.judge import judge_node
 from code_tutor_agent.nodes.planner import planner_node
 from code_tutor_agent.nodes.tutor import tutor_node
+from code_tutor_agent.nodes.critic import critic_node
+from code_tutor_agent.profile import update_profile_node
 from code_tutor_agent.nodes.wait_for_submit import wait_for_submit_node
 
 from code_tutor_agent.nodes.agent_dialog import agent_dialog_node
@@ -35,6 +38,8 @@ def _build_graph() -> StateGraph:
     builder.add_node("wait_for_submit_node", wait_for_submit_node)
     builder.add_node("judge_node", judge_node)
     builder.add_node("tutor_node", tutor_node)
+    builder.add_node("critic_node", critic_node)
+    builder.add_node("update_profile_node", update_profile_node)
     builder.add_node("agent_dialog_node", agent_dialog_node)
     builder.add_node("agent_judge_node", agent_judge_node)
     builder.add_node("agent_tutor_node", agent_tutor_node)
@@ -74,6 +79,8 @@ def _build_graph() -> StateGraph:
     builder.add_edge("generator_node", "wait_for_submit_node")
     builder.add_conditional_edges("wait_for_submit_node", wait_for_submit_router)
     builder.add_edge("judge_node", "tutor_node")
+    builder.add_edge("tutor_node", "update_profile_node")
+    builder.add_edge("update_profile_node", "critic_node")
     builder.add_edge("agent_judge_node", "agent_tutor_node")
     # chat_node 回到 END（checkpointer 自动保存状态）
     builder.add_edge("chat_node", END)
@@ -84,9 +91,10 @@ def _build_graph() -> StateGraph:
 def compile_graph(
     conn_string: str | None = None,
 ) -> CompiledStateGraph:
-    logger.info("▶ compile_graph() — using InMemorySaver")
+    logger.info("▶ compile_graph() — using InMemorySaver + InMemoryStore")
     builder = _build_graph()
     checkpointer = InMemorySaver()
-    graph = builder.compile(checkpointer=checkpointer)
-    logger.info("Graph compiled — InMemorySaver checkpointer")
+    store = InMemoryStore()
+    graph = builder.compile(checkpointer=checkpointer, store=store)
+    logger.info("Graph compiled — InMemorySaver checkpointer + InMemoryStore")
     return graph
