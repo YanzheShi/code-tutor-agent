@@ -64,13 +64,18 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
   const [showProfile, setShowProfile] = useState(false);
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
   const fetchProfile = useCallback(async () => {
     const nextShow = !showProfile;
     setShowProfile(nextShow);
     if (nextShow) {
       try {
-        const r = await fetch(BASE + '/admin/profile');
-        if (r.ok) setProfile(await r.json());
+        const [p1, p2] = await Promise.all([
+          fetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
+          fetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
+        ]);
+        setProfile(p1);
+        setProfileV2(p2);
       } catch { /* ignore */ }
     }
   }, [showProfile]);
@@ -552,7 +557,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       {/* Profile panel */}
       {showProfile && profile && (
         <div className="border-b border-ct-border bg-slate-800/20 px-4 py-3 text-xs">
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-4 mb-2">
             <span>熟练度 <b>{(profile.proficiency * 100).toFixed(0)}%</b></span>
             <span>稳定性 <b>{(profile.stability * 100).toFixed(0)}%</b></span>
             <span>做题 <b>{profile.attempts}</b></span>
@@ -561,6 +566,22 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
               <span className="text-red-400">错误 {(profile.common_errors as string[]).slice(0, 3).join(', ')}</span>
             )}
           </div>
+          {/* Per-tag profile */}
+          {profileV2 && (() => {
+            const prof = profileV2.prof as Record<string, number> | undefined;
+            if (!prof) return null;
+            const entries = Object.entries(prof).sort((a, b) => b[1] - a[1]).slice(0, 6);
+            if (entries.length === 0) return null;
+            return (
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {entries.map(([tag, val]) => (
+                  <span key={tag} className="text-ct-muted">
+                    {tag}: <b className="text-ct-text">{(val * 100).toFixed(0)}%</b>
+                  </span>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
 
