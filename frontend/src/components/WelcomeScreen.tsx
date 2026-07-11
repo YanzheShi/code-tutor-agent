@@ -25,14 +25,23 @@ type ProblemBrief = { id: number; title: string; topic: string; difficulty: stri
 
 function ProfileView() {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    fetch(BASE + '/admin/profile')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { setProfile(d); setLoading(false); })
-      .catch(() => { setProfile(null); setLoading(false); });
+    Promise.all([
+      fetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
+      fetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
+    ]).then(([p1, p2]) => {
+      setProfile(p1);
+      setProfileV2(p2);
+      setLoading(false);
+    }).catch(() => {
+      setProfile(null);
+      setProfileV2(null);
+      setLoading(false);
+    });
   }, []);
 
   if (loading) return <p className="text-sm text-ct-muted text-center py-8">加载画像中...</p>;
@@ -44,24 +53,27 @@ function ProfileView() {
     </div>
   );
 
+  // 解析 per-tag 数据
+  const v2Prof = profileV2?.prof as Record<string, number> | undefined;
+  const v2Stab = profileV2?.stab as Record<string, { variance: number }> | undefined;
+  const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
+
   return (
     <section className="space-y-4">
       <h2 className="text-sm font-semibold text-ct-text">📊 我的画像</h2>
+
+      {/* 总体指标 */}
       <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-3 text-sm">
-        <div>
-          <div className="flex justify-between mb-1">
-            <span className="text-ct-muted">熟练度</span>
-            <span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span>
-          </div>
-          {bar(profile.proficiency as number, 'bg-ct-accent')}
+        <div className="flex justify-between mb-1">
+          <span className="text-ct-muted">综合熟练度</span>
+          <span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span>
         </div>
-        <div>
-          <div className="flex justify-between mb-1">
-            <span className="text-ct-muted">稳定性</span>
-            <span className="text-ct-text font-mono">{((profile.stability as number) * 100).toFixed(0)}%</span>
-          </div>
-          {bar(profile.stability as number, 'bg-ct-success')}
+        {bar(profile.proficiency as number, 'bg-ct-accent')}
+        <div className="flex justify-between mb-1">
+          <span className="text-ct-muted">稳定性</span>
+          <span className="text-ct-text font-mono">{((profile.stability as number) * 100).toFixed(0)}%</span>
         </div>
+        {bar(profile.stability as number, 'bg-ct-success')}
         <div className="grid grid-cols-2 gap-4 pt-1">
           <div>
             <span className="text-ct-muted text-xs">做题数</span>
@@ -83,6 +95,26 @@ function ProfileView() {
           </div>
         )}
       </div>
+
+      {/* Per-tag 画像 */}
+      {tagEntries.length > 0 && (
+        <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-2 text-sm">
+          <h3 className="text-xs font-semibold text-ct-muted mb-2">各知识点熟练度</h3>
+          {tagEntries.slice(0, 8).map(([tag, prof]) => (
+            <div key={tag}>
+              <div className="flex justify-between text-xs mb-0.5">
+                <span className="text-ct-muted">{tag}</span>
+                <span className="text-ct-text font-mono">{(prof * 100).toFixed(0)}%</span>
+              </div>
+              {bar(prof, 'bg-ct-accent')}
+            </div>
+          ))}
+          {tagEntries.length > 8 && (
+            <p className="text-xs text-ct-muted text-center pt-1">还有 {tagEntries.length - 8} 个知识点...</p>
+          )}
+        </div>
+      )}
+
       <p className="text-xs text-ct-muted text-center">
         画像在每次判题后自动更新，根据熟练度规划下一题难度
       </p>

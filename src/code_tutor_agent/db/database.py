@@ -428,3 +428,36 @@ def update_profile_on_result(
     logger.info("update_profile(%s) → verdict=%s, proficiency=%.2f, attempts=%d",
                 topic, verdict, profile.proficiency, profile.attempts)
     return profile
+
+
+# ── User profile v2 (per-tag, from profile module) ──
+
+
+def save_user_profile_v2(profile: dict, user_id: str = "default_v2") -> None:
+    """Save the new per-tag UserProfile to the profiles table."""
+    import json as _json
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            (user_id, _json.dumps(profile, ensure_ascii=False)),
+        ))
+        logger.info("save_user_profile_v2() — user=%s, tags=%d", user_id, len(profile.get("prof", {})))
+    except Exception as exc:
+        logger.error("save_user_profile_v2(%s) failed: %s", user_id, exc)
+        raise
+
+
+def get_user_profile_v2(user_id: str = "default_v2") -> dict:
+    """Read the new per-tag UserProfile from the profiles table."""
+    import json as _json
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
+        ).fetchone())
+        if not row:
+            return {"prof": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {}}
+        return _json.loads(row["profile_json"])
+    except Exception as exc:
+        logger.error("get_user_profile_v2(%s) failed: %s", user_id, exc)
+        return {"prof": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {}}

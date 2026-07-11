@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import logging
 import time
 
 from langchain_core.runnables import RunnableConfig
@@ -57,4 +58,11 @@ def update_profile_node(
     )
 
     store.put(STORE_NS, user_id, updated)
+    # 也写一份到 SQLite 供前端展示
+    try:
+        from code_tutor_agent.db.database import save_user_profile_v2
+        import json as _json
+        save_user_profile_v2(updated)
+    except Exception:
+        logger.warning("Failed to persist profile to SQLite (non-fatal)", exc_info=True)
     return {}
