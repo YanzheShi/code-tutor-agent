@@ -22,7 +22,15 @@ interface AdminProblem {
   visible_test_cases_list: AdminTestCase[];
   test_cases_list: AdminTestCase[];
   brute_solution: string;
+  optimal_solution: string;
   starter_code: string;
+  function_signature: string;
+  time_complexity: string;
+  space_complexity: string;
+  source: string;
+  source_url: string;
+  constraints: string[];
+  alternative_solutions: string[];
   novelty_score: number;
   created_at: string;
 }
@@ -127,6 +135,11 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       topic: p.topic,
       difficulty: p.difficulty,
       novelty_score: p.novelty_score,
+      function_signature: p.function_signature,
+      time_complexity: p.time_complexity,
+      space_complexity: p.space_complexity,
+      source: p.source,
+      source_url: p.source_url,
     });
     setEditVisibleTestCases(JSON.stringify(p.visible_test_cases_list, null, 2));
     setEditTestCases(JSON.stringify(p.test_cases_list, null, 2));
@@ -316,6 +329,62 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
           <section className="mb-4">
             <h3 className="mb-1 text-sm font-semibold text-ct-accent">暴力解</h3>
             <pre className="rounded border border-ct-border bg-slate-900/50 p-3 text-xs font-mono text-ct-text overflow-x-auto">{p.brute_solution}</pre>
+          </section>
+        )}
+
+        {/* Optimal Solution */}
+        {p.optimal_solution && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">最优解</h3>
+            <pre className="rounded border border-ct-border bg-slate-900/50 p-3 text-xs font-mono text-ct-text overflow-x-auto">{p.optimal_solution}</pre>
+          </section>
+        )}
+
+        {/* Function Signature & Complexity */}
+        <section className="mb-4 grid grid-cols-3 gap-3">
+          {p.function_signature && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">函数签名</h3>
+              <code className="text-xs text-ct-text">{p.function_signature}</code>
+            </div>
+          )}
+          {p.time_complexity && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">时间复杂度</h3>
+              <code className="text-xs text-ct-text">{p.time_complexity}</code>
+            </div>
+          )}
+          {p.space_complexity && (
+            <div>
+              <h3 className="mb-1 text-xs font-semibold text-ct-muted">空间复杂度</h3>
+              <code className="text-xs text-ct-text">{p.space_complexity}</code>
+            </div>
+          )}
+        </section>
+
+        {/* Source */}
+        <section className="mb-4 flex gap-4 text-xs text-ct-muted">
+          <span>来源: {p.source}</span>
+          {p.source_url && <span>URL: <a href={p.source_url} target="_blank" className="text-ct-accent underline">{p.source_url}</a></span>}
+        </section>
+
+        {/* Constraints */}
+        {p.constraints.length > 0 && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">约束条件 ({p.constraints.length})</h3>
+            <ul className="list-inside list-disc space-y-0.5 text-xs text-ct-muted">
+              {p.constraints.map((c, i) => <li key={i}><code className="text-ct-text">{c}</code></li>)}
+            </ul>
+          </section>
+        )}
+
+        {/* Alternative Solutions */}
+        {p.alternative_solutions.length > 0 && (
+          <section className="mb-4">
+            <h3 className="mb-1 text-sm font-semibold text-ct-accent">备选解法 ({p.alternative_solutions.length})</h3>
+            <ul className="space-y-1 text-xs text-ct-text">
+              {p.alternative_solutions.map((s, i) => <li key={i}>• {s}</li>)}
+            </ul>
           </section>
         )}
 
