@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
+from langgraph.store.memory import InMemoryStore
 
 from code_tutor_agent.nodes.generator import generator_node
 from code_tutor_agent.nodes.judge import judge_node
@@ -90,9 +91,10 @@ def _build_graph() -> StateGraph:
 def compile_graph(
     conn_string: str | None = None,
 ) -> CompiledStateGraph:
-    logger.info("▶ compile_graph() — using InMemorySaver")
+    logger.info("▶ compile_graph() — using InMemorySaver + InMemoryStore")
     builder = _build_graph()
     checkpointer = InMemorySaver()
-    graph = builder.compile(checkpointer=checkpointer)
-    logger.info("Graph compiled — InMemorySaver checkpointer")
+    store = InMemoryStore()
+    graph = builder.compile(checkpointer=checkpointer, store=store)
+    logger.info("Graph compiled — InMemorySaver checkpointer + InMemoryStore")
     return graph
