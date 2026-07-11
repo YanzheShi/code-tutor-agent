@@ -227,7 +227,13 @@ class SessionState(BaseModel):
         description="Most recent run-code results (survives page reload); set by run endpoint",
     )
 
-    # ── LangChain message history (managed by checkpointer) ──
+    # ── Profile module delta ──
+    profile_delta: Optional[dict] = Field(
+        default=None,
+        description="Profile delta produced by judge_node, consumed by update_profile_node",
+    )
+
+    # ── LangChain message history ──
     messages: list = Field(
         default_factory=list,
         description="LangChain-style message list (HumanMessage, AIMessage). "

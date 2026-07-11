@@ -12,6 +12,7 @@ from langgraph.store.base import BaseStore
 
 from .schema import ProfileDelta, UserProfile
 from .scoring import apply_delta
+from code_tutor_agent.schemas.state import SessionState
 
 STORE_NS = ("user_profiles",)
 DEFAULT_USER_ID = "default"
@@ -30,27 +31,18 @@ def _empty_profile() -> UserProfile:
 
 
 def update_profile_node(
-    state: dict,
+    state: SessionState,
     *,
     store: BaseStore,
     config: RunnableConfig,
 ) -> dict:
-    """消费 session_state['profile_delta']，写 store。
-
-    Args:
-        state: 当前 session state（含 profile_delta）
-        store: LangGraph BaseStore（由 StateGraph 自动注入）
-        config: RunnableConfig（含 configurable.user_id）
-
-    Returns:
-        空 dict —— delta 消费完不往 state 回写东西。
-    """
-    delta: ProfileDelta | None = state.get("profile_delta")
+    """消费 session_state.profile_delta，写 store。"""
+    delta: dict | None = state.profile_delta
     if not delta:
         return {}
 
-    problem_id = state.get("problem_id", 0)
-    code_hash = state.get("last_code_hash", None)
+    problem_id = state.problem.problem_id if state.problem else 0
+    code_hash = None
     user_id = config.get("configurable", {}).get("user_id", DEFAULT_USER_ID)
 
     item = store.get(STORE_NS, user_id)
