@@ -456,8 +456,8 @@ def get_user_profile_v2(user_id: str = "default_v2") -> dict:
             "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
         ).fetchone())
         if not row:
-            return {"prof": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {}}
+            return {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
         return _json.loads(row["profile_json"])
     except Exception as exc:
         logger.error("get_user_profile_v2(%s) failed: %s", user_id, exc)
-        return {"prof": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {}}
+        return {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
