@@ -151,10 +151,11 @@ export default function MainLayout(props: MainLayoutProps) {
             <div ref={chatEndRef} />
           </div>
           <div className="border-t border-ct-border p-3 flex gap-2">
-            <input type="text" value={chatInput} onChange={e => onSetChatInput(e.target.value)}
+            <textarea value={chatInput} onChange={e => onSetChatInput(e.target.value)}
               placeholder="向导师提问..."
-              className="flex-1 rounded border border-ct-border bg-slate-800/50 px-3 py-2 text-xs text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent"
-              onKeyDown={e => { if (e.key === 'Enter') onChat(); }} />
+              rows={2}
+              className="flex-1 rounded border border-ct-border bg-slate-800/50 px-3 py-2 text-xs text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent resize-none"
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onChat(); } }} />
             <button onClick={onChat} disabled={!chatInput.trim()}
               className="rounded bg-ct-accent px-3 py-2 text-xs text-white disabled:opacity-40">发送</button>
           </div>
