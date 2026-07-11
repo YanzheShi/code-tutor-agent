@@ -31,36 +31,23 @@ from pydantic import BaseModel, Field
 
 
 class ProblemMeta(BaseModel):
-    """Lightweight problem descriptor carried in session state.
-
-    The full problem (description, test cases, reference solutions) is
-    stored in the problem DB; this is the cross-reference plus metadata
-    the graph needs for routing decisions.
-    """
+    """Lightweight problem descriptor carried in session state."""
 
     problem_id: int = Field(description="Primary key in the problems table")
     title: str = Field(description="Problem title")
     topic: str = Field(description="Knowledge-point tag, e.g. '双指针'")
     difficulty: str = Field(description="easy / medium / hard")
     description: str = Field(description="Full problem statement text")
-    starter_code: str = Field(
-        default="",
-        description="LeetCode-style template stub for the editor",
-    )
-    visible_test_cases: list[dict] = Field(
-        default_factory=list,
-        description="Non-hidden test cases shown to the user",
-    )
-    description_html: str = Field(
-        default="",
-        description="Original HTML version of description (rich-text rendering)",
-    )
+    starter_code: str = Field(default="", description="LeetCode-style template stub for the editor")
+    visible_test_cases: list[dict] = Field(default_factory=list, description="Non-hidden test cases")
+    description_html: str = Field(default="", description="Original HTML version of description")
 
-    # --- 暗数据 (PRD §六) ---
-    novelty_score: float = Field(
-        default=7.0, ge=0.0, le=10.0,
-        description="Novelty rating assigned by Critic (0-10, ≥7 passes R03)",
-    )
+    # ── Profile module fields ──
+    tag_primary: str = Field(default="array_basics", description="Profile Tag enum value")
+    prob_elo: int = Field(default=1200, description="Problem ELO difficulty for profile scoring")
+
+    # ── 暗数据 ──
+    novelty_score: float = Field(default=7.0, ge=0.0, le=10.0, description="Novelty rating")
 
 
 class JudgeResult(BaseModel):

@@ -233,14 +233,25 @@ def _route_to_tutor(
     设置 ``last_verdict`` 和 ``adversarial_triggered`` 供
     tutor_node 决策 hint_level 使用。
     """
-    # Record verdict on the submission itself (for submission history display)
-    submission.verdict = verdict
+    if verdict == "AC" and trigger != "base_fail":
+        adversarial_run = True
+    else:
+        adversarial_run = False
 
-    # 记录 hint_level_given（会在 tutor 中更新）
+    # ── 构建 profile_delta ──
+    profile_delta = {
+        "tag_primary": state.problem.tag_primary if state.problem else "array_basics",
+        "prob_elo": state.problem.prob_elo if state.problem else 1200,
+        "outcome": verdict,
+        "fingerprints": [],
+        "misunderstanding_level": None,
+    }
+
     update = {
         "submissions": state.submissions,
         "last_verdict": verdict,
-        "adversarial_triggered": verdict == "AC" and trigger != "base_fail",
+        "adversarial_triggered": adversarial_run,
+        "profile_delta": profile_delta,
         "status": "tutoring",
     }
 

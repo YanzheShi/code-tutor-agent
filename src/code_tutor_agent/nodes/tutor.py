@@ -136,8 +136,8 @@ def _handle_adversarial_fail(state: SessionState) -> Command:
         "status": "awaiting_submit",
     }
     logger.info("Tutor → adversarial_fail")
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="critic_node")')
-    return Command(update=update, goto="critic_node")
+    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="update_profile_node")')
+    return Command(update=update, goto="update_profile_node")
 
 
 def _handle_ac(state: SessionState) -> Command:
@@ -157,8 +157,8 @@ def _handle_ac(state: SessionState) -> Command:
         "status": "done",
     }
     logger.info("Tutor → AC (review=%s)", bool(review))
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="critic_node")')
-    return Command(update=update, goto="critic_node")
+    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="update_profile_node")')
+    return Command(update=update, goto="update_profile_node")
 
 
 def _handle_base_fail(
@@ -213,8 +213,8 @@ def _handle_base_fail(
         "Tutor → base_fail verdict=%s hint=%d→%d emotion=%s repeat=%d",
         verdict, hint_level, target_level, emotion_detected, same_error_count,
     )
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="critic_node")')
-    return Command(update=update, goto="critic_node")
+    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="update_profile_node")')
+    return Command(update=update, goto="update_profile_node")
 
 
 # ═══════════════════════════════════════════════

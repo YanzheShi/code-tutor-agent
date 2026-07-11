@@ -184,7 +184,7 @@ class TestTutorRouting:
             status="tutoring",
         )
         cmd = tutor_node(state)
-        assert cmd.goto == "critic_node"
+        assert cmd.goto == "update_profile_node"
         assert cmd.update["status"] == "done"
 
     def test_adversarial_fail_routes_to_wait(self):
@@ -201,7 +201,7 @@ class TestTutorRouting:
             submissions=[sub],
         )
         cmd = tutor_node(state)
-        assert cmd.goto == "critic_node"
+        assert cmd.goto == "update_profile_node"
         assert cmd.update["status"] == "awaiting_submit"
 
     def test_base_fail_routes_to_wait(self):
@@ -213,4 +213,4 @@ class TestTutorRouting:
             status="tutoring",
         )
         cmd = tutor_node(state)
-        assert cmd.goto == "critic_node"
+        assert cmd.goto == "update_profile_node"
