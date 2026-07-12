@@ -121,6 +121,14 @@ def agent_judge_node(state: SessionState) -> Command:
         + [{"role": "tutor", "content": feedback_msg}],
     }
 
+    # ── 更新用户画像（与普通 judge 一致） ──
+    try:
+        from code_tutor_agent.db.database import update_profile_on_result
+        topic = state.problem.topic if state.problem else "未知"
+        update_profile_on_result(topic=topic, verdict=analysis.verdict)
+    except Exception:
+        logger.warning("Agent profile update failed (non-fatal)", exc_info=True)
+
     # ── Route based on verdict ──
     if analysis.verdict == "AC":
         logger.info("AC — routing to agent_tutor_node (done)")

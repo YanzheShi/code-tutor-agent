@@ -8,12 +8,12 @@ export default function App() {
   const s = useSession();
   const { screen, errorMsg, progressMsgs } = s;
 
-  if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onNext} />;
+  if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'welcome') return (
     <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
       onStartLeetcode={s.onStartLeetcode} onOpenAdmin={s.onOpenAdmin} />
   );
-  if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onNext} />;
+  if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') return <AdminPanel onClose={() => s.setScreen('welcome')} />;
 
   const mainProps: MainLayoutProps = {
@@ -38,7 +38,7 @@ export default function App() {
     onSetRunResults: s.setRunResults,
     onSetProgressMsgs: s.setProgressMsgs,
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
-    onNext: s.onNext, onAgentSend: s.onAgentSend,
+        onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
   };
   return <MainLayout {...mainProps} />;
 }

@@ -54,6 +54,7 @@ export type MainLayoutProps = {
   onSubmit: () => void;
   onChat: () => void;
   onNext: () => void;
+  onBackToWelcome: () => void;
   onAgentSend: (text: string) => void;
 }
 
@@ -65,7 +66,7 @@ export default function MainLayout(props: MainLayoutProps) {
     dragging, dragTab, chatEndRef,
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
     onSetTutorMessages, onSetRunResults, onSetProgressMsgs,
-    onRun, onSubmit, onChat, onNext, onAgentSend,
+    onRun, onSubmit, onChat, onNext, onBackToWelcome, onAgentSend,
   } = props;
 
   const isLoading = running || submittingFlag;
@@ -146,7 +147,7 @@ export default function MainLayout(props: MainLayoutProps) {
       return <RunResults results={runResults} running={running} />;
     case 'tutor':
       return (
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-h-0">
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             <MessageList messages={tutorMessages} verdict={latestVerdict} hintLevel={hintLevel} />
             {latestVerdict === 'AC' && judgeReport && <div className="mt-3"><ReviewCard report={judgeReport} /></div>}
@@ -223,7 +224,7 @@ export default function MainLayout(props: MainLayoutProps) {
             <>
               <div className="flex border-b border-ct-border bg-slate-900/50 text-xs min-h-[34px]"
                 onDragOver={handleTabDragOver} onDrop={handleTabDrop('left')}>
-                <button onClick={onNext} className="mr-1 rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text shrink-0" title="返回出题页">← 返回</button>
+                <button onClick={onBackToWelcome} className="mr-1 rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text shrink-0" title="返回出题页">← 返回</button>
                 {panelTabs.left.map(tid => (
                   <TabButton key={tid} label={TAB_LABELS[tid]} tabId={tid}
                     active={activeTabs.left === tid}

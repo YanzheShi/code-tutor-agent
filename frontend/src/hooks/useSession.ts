@@ -312,6 +312,16 @@ export function useSession() {
 
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
 
+  // ── 始终回到欢迎页（不受 phase 影响） ──
+  const handleBackToWelcome = useCallback(() => {
+    setScreen('welcome'); setSessionId(null); setProblem(null); setEditorCode('');
+    setTutorMessages([]); setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
+    setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');
+    setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
+    editorInitialized.current = false;
+    setPhase('solving'); setNextProblemLoading(false);
+  }, []);
+
   return {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
@@ -324,6 +334,7 @@ export function useSession() {
     onStart: handleStart, onStartExisting: handleStartExisting,
     onStartLeetcode: handleStartLeetcode, onSubmit: handleSubmit,
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
+    onBackToWelcome: handleBackToWelcome,
     onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,
     setScreen,
   };
