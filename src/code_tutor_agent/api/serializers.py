@@ -31,6 +31,8 @@ def serialize_state(state: Any) -> dict:
         "mode": d.get("mode", ""),
         "status": d.get("status", "generating"),
         "phase": d.get("phase", "solving"),
+        "total_problems": d.get("total_problems", 0),
+        "problem_history": d.get("problem_history", []),
         "problem": problem,
         "submissions": [
             {

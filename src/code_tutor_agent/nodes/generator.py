@@ -43,13 +43,42 @@ from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.schemas.state import Message as TutorMsg
-from code_tutor_agent.schemas.state import ProblemMeta, SessionState
+from code_tutor_agent.schemas.state import ProblemMeta, SessionPhase, SessionState
 from code_tutor_agent.store.static_pool import get_static_problem
 
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 2
 MODEL_ALIAS = "agnes"
+
+# ── Topic → Tag enum 映射 ──
+_TOPIC_TAG_MAP: dict[str, str] = {
+    "数组": "array_basics",
+    "数组+哈希表": "array_basics",
+    "双指针": "array_two_pointers",
+    "滑动窗口": "array_sliding_window",
+    "二分查找": "array_binary_search",
+    "链表": "linkedlist_basics",
+    "栈": "stack_basics",
+    "队列": "queue_deque",
+    "动态规划": "dp_1d",
+    "字符串": "string_basics",
+    "递归": "backtrack",
+    "贪心": "greedy",
+    "位运算": "bit_manip",
+    "排序": "array_sorting",
+    "前缀和": "array_prefix_sum",
+}
+
+
+def tag_for(topic: str) -> str:
+    """Map a Chinese topic name to a Tag enum value."""
+    return _TOPIC_TAG_MAP.get(topic, "array_basics")
+
+
+def elo_for(difficulty: str) -> int:
+    """Map difficulty string to ELO rating."""
+    return {"easy": 1200, "medium": 1500, "hard": 1800}.get(difficulty, 1200)
 
 
 def _progress(sid: str, msg: str):
