@@ -449,15 +449,87 @@ def save_user_profile_v2(profile: dict, user_id: str = "default_v2") -> None:
 
 
 def get_user_profile_v2(user_id: str = "default_v2") -> dict:
-    """Read the new per-tag UserProfile from the profiles table."""
+    """Read the new per-tag UserProfile from the profiles table.
+
+    Returns ALL known tags (35 from Tag enum), filling zero scores for
+    tags the user hasn't practiced yet. Also attaches ``tag_names`` for
+    frontend display.
+    """
     import json as _json
+    from code_tutor_agent.profile.tags import Tag
+
+    # ── 中文显示名 ──
+    TAG_DISPLAY: dict[str, str] = {
+        "array_basics": "数组基础",
+        "array_two_pointers": "双指针",
+        "array_sliding_window": "滑动窗口",
+        "array_binary_search": "二分查找",
+        "array_prefix_sum": "前缀和",
+        "array_sorting": "排序",
+        "linkedlist_basics": "链表基础",
+        "linkedlist_two_pointers": "链表双指针",
+        "linkedlist_cycle": "环检测",
+        "stack_basics": "栈基础",
+        "queue_deque": "队列/双端队列",
+        "monotonic_stack": "单调栈",
+        "heap_priority_queue": "堆/优先队列",
+        "tree_dfs": "树 DFS",
+        "tree_bfs": "树 BFS",
+        "tree_bst": "二叉搜索树",
+        "graph_dfs": "图 DFS",
+        "graph_bfs": "图 BFS",
+        "graph_topo": "拓扑排序",
+        "union_find": "并查集",
+        "dp_1d": "一维 DP",
+        "dp_multidim": "多维 DP",
+        "dp_interval": "区间 DP",
+        "dp_tree": "树形 DP",
+        "string_basics": "字符串基础",
+        "string_pattern": "字符串匹配",
+        "string_dp": "字符串 DP",
+        "backtrack": "回溯",
+        "greedy": "贪心",
+        "bit_manip": "位运算",
+        "math_number_theory": "数论",
+        "design": "设计",
+    }
+
+    all_tags = Tag.all_values()
+
     try:
         row = _with_conn(lambda cursor: cursor.execute(
             "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
         ).fetchone())
+
         if not row:
-            return {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
-        return _json.loads(row["profile_json"])
+            profile = {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
+        else:
+            profile = _json.loads(row["profile_json"])
+
+        # 补全零分 tag
+        for field in ("prof", "prof_elo_raw"):
+            if field not in profile:
+                profile[field] = {}
+            for tag in all_tags:
+                profile[field].setdefault(tag, 0.0)
+
+        for tag in all_tags:
+            if "stab" not in profile:
+                profile["stab"] = {}
+            profile["stab"].setdefault(tag, {"window": [], "variance": 0.0})
+            if "forget" not in profile:
+                profile["forget"] = {}
+            profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 0.0})
+
+        profile["tag_names"] = TAG_DISPLAY
+        return profile
     except Exception as exc:
         logger.error("get_user_profile_v2(%s) failed: %s", user_id, exc)
-        return {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
+        profile = {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
+        for tag in all_tags:
+            profile["prof"].setdefault(tag, 0.0)
+            profile["prof_elo_raw"].setdefault(tag, 0.0)
+            profile["stab"].setdefault(tag, {"window": [], "variance": 0.0})
+            profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 0.0})
+        profile["tag_names"] = TAG_DISPLAY
+        return profile
