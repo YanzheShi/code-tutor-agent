@@ -96,8 +96,66 @@ def _rule_router(inp: TutorRouterInput) -> TutorRouterDecision:
     )
 
 
+# ── LLM router prompt ──
+_ROUTER_LLM_PROMPT = """你是一个编程辅导的路由决策专家。根据用户当前的情况，决定下一步的辅导策略。
+
+用户当前状态：
+- hint_level（提示等级）: {hint_level}（0=模糊→4=近答案）
+- 同 level 已辅导轮数: {turns_in_level}
+- 用户情绪: {emotion}
+
+用户最近的消息：{user_message}
+
+可选策略：
+1. **continue** — 同 level 再给一轮辅导，用户还没完全理解
+2. **escalate** — 升级 hint_level +1，因为用户在同 level 已经卡了很久
+3. **resolved** — 用户表示懂了/想提交了，回到写代码模式
+4. **clarify_req** — 用户对题意有疑问，需要澄清
+
+输出 JSON 格式：
+{{
+    "action": "continue|escalate|resolved|clarify_req",
+    "reason": "一句话解释为什么",
+    "next_hint_level": <int, escalate 时 = old+1，否则 = old>,
+    "emotion": "confused|frustrated|okay|confident"
+}}
+"""
+
+
+def _llm_router(inp: TutorRouterInput) -> TutorRouterDecision | None:
+    """LLM-based router decision. Returns None on failure (fallback to rule)."""
+    from code_tutor_agent.config import get_llm
+    from langchain_core.prompts import ChatPromptTemplate
+
+    try:
+        llm = get_llm("agnes", temperature=0.2)
+        prompt = ChatPromptTemplate.from_messages([("human", _ROUTER_LLM_PROMPT)])
+        result = (prompt | llm).invoke({
+            "hint_level": inp.hint_level,
+            "turns_in_level": inp.turns_in_level,
+            "emotion": inp.emotion.value,
+            "user_message": inp.user_message[:500],
+        })
+        text = result.content if hasattr(result, "content") else str(result)
+        import json
+        # 提取 JSON 块
+        if m := __import__('re').search(r'\{[^}]+\}', text, __import__('re').DOTALL):
+            data = json.loads(m.group(0))
+            action = TutorAction(data.get("action", "continue"))
+            return TutorRouterDecision(
+                action=action,
+                reason=data.get("reason", "")[:100],
+                next_hint_level=data.get("next_hint_level", inp.hint_level),
+                emotion=EmotionTag(data.get("emotion", "okay")),
+                router_model="llm",
+            )
+    except Exception as exc:
+        logger.warning("LLM router failed: %s — falling back to rule", exc)
+    return None
+
+
 def tutor_router_node(state: SessionState) -> Command[Literal["tutor_node", "wait_for_submit_node"]]:
-    """Run the rule-based router, then route to tutor_reply or back to wait_for_submit.
+    """Run the LLM router (fallback to rule), then route.
 
     Reads:
         - state.tutor_messages[-1] (last user message)
@@ -121,7 +179,14 @@ def tutor_router_node(state: SessionState) -> Command[Literal["tutor_node", "wai
         turns_in_level=state.turns_in_level,
         emotion=emotion,
     )
-    decision = _rule_router(inp)
+
+    # 先试 LLM，失败则回退规则
+    decision = _llm_router(inp)
+    if decision is None:
+        decision = _rule_router(inp)
+        logger.info("tutor_router → using RULE (LLM failed)")
+    else:
+        logger.info("tutor_router → using LLM")
 
     logger.info("tutor_router → action=%s reason=%s emotion=%s", decision.action, decision.reason, decision.emotion)
 

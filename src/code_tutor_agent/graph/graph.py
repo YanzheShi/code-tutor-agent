@@ -23,6 +23,7 @@ from code_tutor_agent.nodes.agent_dialog import agent_dialog_node
 from code_tutor_agent.nodes.agent_judge import agent_judge_node
 from code_tutor_agent.nodes.agent_tutor import agent_tutor_node
 from code_tutor_agent.nodes.chat import chat_node
+from code_tutor_agent.nodes.constitutional_guard import constitutional_guard_node
 
 from code_tutor_agent.schemas.state import SessionState
 
@@ -46,6 +47,7 @@ def _build_graph() -> StateGraph:
     builder.add_node("agent_judge_node", agent_judge_node)
     builder.add_node("agent_tutor_node", agent_tutor_node)
     builder.add_node("chat_node", chat_node)
+    builder.add_node("constitutional_guard_node", constitutional_guard_node)
 
     # ── Start router: chat, agent mode, or normal ──
     def start_router(state: SessionState) -> str:
@@ -87,8 +89,9 @@ def _build_graph() -> StateGraph:
     # tutor_router → tutor_node (CONTINUE/ESCALATE) 或 wait_for_submit (RESOLVED)
     # 由 tutor_router_node 的 Command(goto=...) 动态路由
 
-    # tutor_node (WA 路径) → END（checkpoint，等 /chat 或 /submit）
+    # tutor_node (WA 路径) → constitutional_guard_node → END（checkpoint，等 /chat 或 /submit）
     # tutor_node (AC 路径) → update_profile_node（由 tutor_node 的 Command 动态路由）
+    builder.add_edge("constitutional_guard_node", END)
     builder.add_edge("update_profile_node", "critic_node")
     # critic_node 动态路由：AC/ABANDON → planner, WA → wait_for_submit
 

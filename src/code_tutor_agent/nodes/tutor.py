@@ -136,7 +136,6 @@ def _handle_adversarial_fail(state: SessionState) -> Command:
         "status": "awaiting_submit",
     }
     logger.info("Tutor → adversarial_fail")
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="update_profile_node")')
     return Command(update=update, goto="update_profile_node")
 
 
@@ -157,7 +156,6 @@ def _handle_ac(state: SessionState) -> Command:
         "status": "done",
     }
     logger.info("Tutor → AC (review=%s)", bool(review))
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="update_profile_node")')
     return Command(update=update, goto="update_profile_node")
 
 
@@ -213,8 +211,7 @@ def _handle_base_fail(
         "Tutor → base_fail verdict=%s hint=%d→%d emotion=%s repeat=%d",
         verdict, hint_level, target_level, emotion_detected, same_error_count,
     )
-    logger.debug("Returning Command with goto=%s", 'return Command(update=update, goto="__end__")')
-    return Command(update=update, goto="__end__")
+    return Command(update=update, goto="constitutional_guard_node")
 
 
 # ═══════════════════════════════════════════════
@@ -250,7 +247,7 @@ def _decide_hint_level(
     # 规则 1: 同类错误多次 → 插讲解（标记为 -1，外部处理）
     if same_error_count >= _REPEAT_THRESHOLD:
         logger.info("Decision: same error x%d → concept explanation", same_error_count)
-        return max(hint_level, 0)  # keep current level, trigger explanation flag
+        return max(hint_level, 0)
 
     # 规则 2: 多次提交 + 情绪 → L4
     if submission_count >= _EMOTION_SUBMIT_THRESHOLD and emotion_detected:
@@ -265,7 +262,6 @@ def _decide_hint_level(
             logger.info("Decision: direction correct → jump to L%d", target)
             return target
         elif direction == "wrong":
-            # 方向错 → 根据次数定
             if submission_count <= 2:
                 return 1
             else:
@@ -347,6 +343,22 @@ def _generate_hint(
                 judge_detail = r.detail
                 break
 
+    # 跨题 context：上一题的 diagnosis_summary
+    prev_summary = ""
+    if state.problem_history:
+        last = state.problem_history[-1]
+        diag = last.diagnosis
+        if diag:
+            prev_summary = (
+                f"上一题「{last.title}」({last.verdict})：\n"
+                f"  误解: {diag.primary_error or 'N/A'}\n"
+                f"  hint 到 L{diag.hint_level_reached}，辅导 {diag.rounds_in_tutor} 轮"
+            )
+        else:
+            prev_summary = (
+                f"上一题「{last.title}」({last.verdict})，hint 到 L{last.hint_level_reached}"
+            )
+
     try:
         result = (prompt | llm).invoke({
             "hint_level_cap": hint_level,
@@ -354,6 +366,7 @@ def _generate_hint(
             "user_code": last_sub.code[:2000] if last_sub else "",
             "verdict": verdict,
             "judge_detail": judge_detail[:200],
+            "previous_problem_summary": prev_summary,
         })
         hint = result.content if hasattr(result, "content") else str(result)
         if hint.strip():

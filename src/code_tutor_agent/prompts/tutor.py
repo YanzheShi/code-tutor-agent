@@ -84,6 +84,8 @@ TUTOR_SYSTEM_PROMPT = """你是一个算法编程私教，采用渐进式辅导�
 判题结果：{verdict} — {judge_detail}
 当前提示等级上限：{hint_level_cap}
 
+{previous_problem_summary}
+
 请根据以上信息，给出符合提示等级限制的辅导回复。"""
 
 
