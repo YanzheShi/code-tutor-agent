@@ -566,17 +566,18 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
               <span className="text-red-400">错误 {(profile.common_errors as string[]).slice(0, 3).join(', ')}</span>
             )}
           </div>
-          {/* Per-tag profile */}
+          {/* Per-tag profile — 全部显示 */}
           {profileV2 && (() => {
             const prof = profileV2.prof as Record<string, number> | undefined;
             if (!prof) return null;
-            const entries = Object.entries(prof).sort((a, b) => b[1] - a[1]).slice(0, 6);
+            const tagNames = (profileV2.tag_names ?? {}) as Record<string, string>;
+            const entries = Object.entries(prof).sort((a, b) => b[1] - a[1]);
             if (entries.length === 0) return null;
             return (
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
+              <div className="max-h-40 overflow-y-auto flex flex-wrap gap-x-4 gap-y-1">
                 {entries.map(([tag, val]) => (
                   <span key={tag} className="text-ct-muted">
-                    {tag}: <b className="text-ct-text">{(val * 100).toFixed(0)}%</b>
+                    {tagNames[tag] ?? tag}: <b className="text-ct-text">{(val * 100).toFixed(0)}%</b>
                   </span>
                 ))}
               </div>

@@ -27,6 +27,7 @@ function ProfileView() {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
   const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showAllTags, setShowAllTags] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -56,7 +57,12 @@ function ProfileView() {
   // 解析 per-tag 数据
   const v2Prof = profileV2?.prof as Record<string, number> | undefined;
   const v2Stab = profileV2?.stab as Record<string, { variance: number }> | undefined;
+  const tagNames = (profileV2?.tag_names ?? {}) as Record<string, string>;
   const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
+
+  const MAX_VISIBLE = 5;
+  const displayedTags = showAllTags ? tagEntries : tagEntries.slice(0, MAX_VISIBLE);
+  const hiddenCount = tagEntries.length - MAX_VISIBLE;
 
   return (
     <section className="space-y-4">
@@ -99,18 +105,33 @@ function ProfileView() {
       {/* Per-tag 画像 */}
       {tagEntries.length > 0 && (
         <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-2 text-sm">
-          <h3 className="text-xs font-semibold text-ct-muted mb-2">各知识点熟练度</h3>
-          {tagEntries.slice(0, 8).map(([tag, prof]) => (
+          <h3 className="text-xs font-semibold text-ct-muted mb-2">
+            各知识点熟练度（{tagEntries.length} 个）
+          </h3>
+          {displayedTags.map(([tag, prof]) => (
             <div key={tag}>
               <div className="flex justify-between text-xs mb-0.5">
-                <span className="text-ct-muted">{tag}</span>
+                <span className="text-ct-muted">{tagNames[tag] ?? tag}</span>
                 <span className="text-ct-text font-mono">{(prof * 100).toFixed(0)}%</span>
               </div>
               {bar(prof, 'bg-ct-accent')}
             </div>
           ))}
-          {tagEntries.length > 8 && (
-            <p className="text-xs text-ct-muted text-center pt-1">还有 {tagEntries.length - 8} 个知识点...</p>
+          {!showAllTags && hiddenCount > 0 && (
+            <button
+              onClick={() => setShowAllTags(true)}
+              className="w-full text-xs text-ct-accent hover:text-ct-accent/80 pt-1 transition"
+            >
+              展开全部（共 {tagEntries.length} 个知识点）
+            </button>
+          )}
+          {showAllTags && (
+            <button
+              onClick={() => setShowAllTags(false)}
+              className="w-full text-xs text-ct-muted hover:text-ct-text pt-1 transition"
+            >
+              收起
+            </button>
           )}
         </div>
       )}
