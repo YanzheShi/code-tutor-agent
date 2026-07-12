@@ -12,7 +12,7 @@ from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.api.serializers import serialize_state, empty_state
 from code_tutor_agent.api.services.generation import run_generation, run_fast_path
 from code_tutor_agent.progress import _generation_progress
-from code_tutor_agent.schemas.api import CreateSessionRequest, SubmitRequest, SubmitResponse, SessionStateResponse
+from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
 from code_tutor_agent.schemas.state import SessionState, ProblemMeta
 
 logger = logging.getLogger(__name__)
@@ -184,3 +184,53 @@ async def create_session_with_existing(problem_id: int):
     graph.invoke(initial.model_dump(), config)
     state = graph.get_state(config)
     return serialize_state(state.values)
+
+
+@router.post("/{sid}/next-problem", response_model=NextProblemResp)
+async def next_problem(sid: str, body: NextProblemReq):
+    """Continue to the next problem within the same session.
+
+    Uses update_state(as_node="critic_node") to route the graph through
+    critic flush → planner → generator, preserving the generation
+    self-verification chain.
+    """
+    graph = get_graph()
+    config = {"configurable": {"thread_id": sid}}
+
+    try:
+        state = graph.get_state(config)
+    except Exception:
+        raise HTTPException(404, f"Session {sid} not found")
+
+    vals = state.values
+
+    # 1. Check if current problem has a terminal verdict
+    has_terminal = (
+        vals.get("last_verdict") in ("AC", "WA")
+        and vals.get("judge_report") is not None
+    )
+    need_abandon = not has_terminal and vals.get("phase") in ("solving", "reviewing")
+
+    # 2. Patch trigger flags (as_node routes next invoke into critic_node)
+    graph.update_state(config, {
+        "pending_abandon": need_abandon,
+        "next_preference": body.preference,
+    }, as_node="critic_node")
+
+    # 3. Invoke — generator self-verify is sync, run in threadpool
+    await asyncio.to_thread(graph.invoke, None, config)
+
+    # 4. Read new state
+    new_state = graph.get_state(config)
+    new_vals = new_state.values
+
+    problem = new_vals.get("problem")
+    if not problem:
+        raise HTTPException(500, "Next problem generation failed")
+
+    return NextProblemResp(
+        session_id=sid,
+        problem=problem.model_dump() if hasattr(problem, "model_dump") else problem,
+        phase=new_vals.get("phase", "solving"),
+        hint_level=0,
+    )

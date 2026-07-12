@@ -20,6 +20,7 @@ Agent 模式：
 from __future__ import annotations
 
 import operator
+from enum import Enum
 from typing import Annotated, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -106,6 +107,47 @@ class Message(BaseModel):
 
 
 # ──────────────────────────────────────────────
+#  Multi-turn (连续做题) sub-types
+# ──────────────────────────────────────────────
+
+
+class SessionPhase(str, Enum):
+    """前端消费态，node 出口写，checkpointer 托管。"""
+    clarifying = "clarifying"   # V0.1 不写，V0.2 才用
+    solving = "solving"         # 用户正在写代码
+    reviewing = "reviewing"     # 辅导态（WA 线 tutor / AC 线 agent_tutor）
+    done = "done"               # 换题前短暂过渡
+
+
+class DiagnosisSummary(BaseModel):
+    """判题→辅导链给的误解标签聚合（单题纬度）。"""
+    primary_error: str = Field(default="", description="主要误解类型")
+    tags: list[str] = Field(default_factory=list, description="误解标签列表")
+    hint_level_reached: int = Field(default=0, ge=0, le=4)
+    rounds_in_tutor: int = Field(default=0, description="本题辅导轮数")
+    resolved: bool = Field(default=False, description="用户是否表示懂了")
+
+
+class ProblemAttemptRecord(BaseModel):
+    """单题生命周期快照。
+    不存 tutor_messages 全文，回放走 checkpointer。
+    """
+    problem_id: int = 0
+    title: str = ""
+    tags: list[str] = Field(default_factory=list)       # tag_primary 值（Tag enum）
+    difficulty: str = ""
+    verdict: str = ""                                     # AC / WA / ABANDON
+    user_code_final: str = Field(default="", description="最后一版提交代码")
+    hint_level_reached: int = 0
+    tutor_messages_count: int = 0
+    diagnosis: Optional[DiagnosisSummary] = None
+    judge_report: Optional[dict] = None
+    started_at: str = ""
+    ended_at: str = ""
+    abandoned: bool = False
+
+
+# ──────────────────────────────────────────────
 #  Main session state
 # ──────────────────────────────────────────────
 
@@ -161,9 +203,9 @@ class SessionState(BaseModel):
         default=0, ge=0, le=4,
         description="Current hint level (0=no hint yet, 4=almost answer)",
     )
-    tutor_messages: Annotated[list[Message], operator.add] = Field(
+    tutor_messages: list[Message] = Field(
         default_factory=list,
-        description="Conversation visible in the tutor panel",
+        description="Conversation visible in the tutor panel (单题维度，换题时清)",
     )
 
     # ── Routing hints (internal, set by Judge → consumed by Tutor) ──
@@ -238,4 +280,50 @@ class SessionState(BaseModel):
         default_factory=list,
         description="LangChain-style message list (HumanMessage, AIMessage). "
                     "Managed by InMemorySaver checkpointer, not manually.",
+    )
+
+    # ── Phase（前端消费态，node 出口写）──
+    phase: SessionPhase = Field(
+        default=SessionPhase.solving,
+        description="Frontend-facing phase: solving / reviewing / done",
+    )
+
+    # ── 跨题历史（每 flush 一题 +1）──
+    problem_history: list[ProblemAttemptRecord] = Field(
+        default_factory=list,
+        description="All completed problem records, in order",
+    )
+    total_problems: int = Field(
+        default=0, ge=0,
+        description="Total problems completed in this session",
+    )
+
+    # ── Tutor micro-loop（D4 才用，先加字段）──
+    turns_in_level: int = Field(
+        default=0, ge=0,
+        description="How many tutor turns at current hint_level",
+    )
+    last_router_decision: Optional[dict] = Field(
+        default=None,
+        description="Last TutorRouterDecision from tutor_router node",
+    )
+    tutor_mode: Literal["normal", "agent"] = Field(
+        default="normal",
+        description="normal = L0-L4 micro-loop; agent = AC复盘单发",
+    )
+
+    # ── /next-problem 临时信号（消费即清）──
+    pending_abandon: bool = Field(
+        default=False,
+        description="True when /next-problem needs to flush ABANDON",
+    )
+    next_preference: Optional[Literal["same_topic", "next_in_plan", "random"]] = Field(
+        default=None,
+        description="Planner topic selection preference",
+    )
+
+    # ── 上一题 diagnosis（critic flush 后清，供下一题 tutor 承接）──
+    last_diagnosis: Optional[DiagnosisSummary] = Field(
+        default=None,
+        description="Most recent problem diagnosis summary",
     )

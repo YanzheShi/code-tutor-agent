@@ -14,6 +14,7 @@ from code_tutor_agent.nodes.generator import generator_node
 from code_tutor_agent.nodes.judge import judge_node
 from code_tutor_agent.nodes.planner import planner_node
 from code_tutor_agent.nodes.tutor import tutor_node
+from code_tutor_agent.nodes.tutor_router import tutor_router_node
 from code_tutor_agent.nodes.critic import critic_node
 from code_tutor_agent.profile import update_profile_node
 from code_tutor_agent.nodes.wait_for_submit import wait_for_submit_node
@@ -37,6 +38,7 @@ def _build_graph() -> StateGraph:
     builder.add_node("generator_node", generator_node)
     builder.add_node("wait_for_submit_node", wait_for_submit_node)
     builder.add_node("judge_node", judge_node)
+    builder.add_node("tutor_router_node", tutor_router_node)
     builder.add_node("tutor_node", tutor_node)
     builder.add_node("critic_node", critic_node)
     builder.add_node("update_profile_node", update_profile_node)
@@ -78,10 +80,20 @@ def _build_graph() -> StateGraph:
     builder.add_conditional_edges("planner_node", planner_router)
     builder.add_edge("generator_node", "wait_for_submit_node")
     builder.add_conditional_edges("wait_for_submit_node", wait_for_submit_router)
-    builder.add_edge("judge_node", "tutor_node")
-    builder.add_edge("tutor_node", "update_profile_node")
+
+    # Judge → tutor_router (WA 路径经过 L0-L4 决策)
+    builder.add_edge("judge_node", "tutor_router_node")
+
+    # tutor_router → tutor_node (CONTINUE/ESCALATE) 或 wait_for_submit (RESOLVED)
+    # 由 tutor_router_node 的 Command(goto=...) 动态路由
+
+    # tutor_node (WA 路径) → END（checkpoint，等 /chat 或 /submit）
+    # tutor_node (AC 路径) → update_profile_node（由 tutor_node 的 Command 动态路由）
     builder.add_edge("update_profile_node", "critic_node")
+    # critic_node 动态路由：AC/ABANDON → planner, WA → wait_for_submit
+
     builder.add_edge("agent_judge_node", "agent_tutor_node")
+    # agent_tutor_node 动态路由：AC → planner, WA → wait_for_submit
     # chat_node 回到 END（checkpointer 自动保存状态）
     builder.add_edge("chat_node", END)
 

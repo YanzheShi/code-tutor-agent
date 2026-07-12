@@ -35,6 +35,7 @@ export function useSession() {
   const [tabPanel, setTabPanel] = useState<Record<TabId, 'left' | 'right'>>({ ...DEFAULT_TAB_PANEL });
   const [splitRatio, setSplitRatio] = useState(50);
   const [chatInput, setChatInput] = useState('');
+  const [phase, setPhase] = useState<string>('solving');
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const screenRef = useRef(screen);
   const modeRef = useRef(mode);
@@ -52,6 +53,7 @@ export function useSession() {
     if (resp.mode) setMode(resp.mode);
     setTutorMessages(resp.tutor_messages); setHintLevel(resp.hint_level);
     setLatestVerdict(resp.last_verdict);
+    if ((resp as any).phase) setPhase((resp as any).phase);
     setJudgeReport(resp.last_review_payload as JudgeReport | null);
     setSubmissions((resp.submissions || []) as Submission[]);
     if ((resp as any).last_run_results) setRunResults((resp as any).last_run_results);
@@ -221,23 +223,83 @@ export function useSession() {
     }
   }, [chatInput, sessionId, readStream]);
 
-  // ── 重置 ──
-  const handleNext = useCallback(() => {
+  // ── 下一题 / 新会话 ──
+  const handleNext = useCallback(async () => {
+    // 如果当前在 reviewing 态且 AC → 同 session 续题
+    if (phase === 'reviewing' && latestVerdict === 'AC' && sessionId) {
+      try {
+        const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preference: 'next_in_plan' }),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (data.problem) {
+          setProblem(data.problem as ProblemMeta);
+          setPhase(data.phase || 'solving');
+          setEditorCode((data.problem as any).starter_code || '');
+          setTutorMessages([]);
+          setHintLevel(0);
+          setLatestVerdict(null);
+          setJudgeReport(null);
+          setRunResults(null);
+          setSubmissions([]);
+          editorInitialized.current = false;
+          return;
+        }
+      } catch { /* fall through to welcome */ }
+    }
+
+    // solving 态 → 放弃确认
+    if (phase === 'solving' && sessionId) {
+      const ok = window.confirm('当前代码还没提交，确定放弃这题去下一题？');
+      if (ok) {
+        try {
+          const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ preference: 'next_in_plan' }),
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (data.problem) {
+              setProblem(data.problem as ProblemMeta);
+              setPhase(data.phase || 'solving');
+              setEditorCode((data.problem as any).starter_code || '');
+              setTutorMessages([]);
+              setHintLevel(0);
+              setLatestVerdict(null);
+              setJudgeReport(null);
+              setRunResults(null);
+              setSubmissions([]);
+              editorInitialized.current = false;
+              return;
+            }
+          }
+        } catch { /* fall through to welcome */ }
+      } else {
+        return;  // 用户取消放弃
+      }
+    }
+
+    // 默认：新会话（回 welcome）
     setScreen('welcome'); setSessionId(null); setProblem(null); setEditorCode('');
     setTutorMessages([]); setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
     setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');
     setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
-  }, []);
+    setPhase('solving');
+  }, [phase, latestVerdict, sessionId]);
 
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
 
   return {
-    screen, mode, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
+    screen, mode, phase, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
     running, submittingFlag, activeTabs, tabPanel, splitRatio, chatInput,
     sessionId, isDialogPhase: mode === 'agent' && !problem,
-    isAC: latestVerdict === 'AC', isDone: latestVerdict === 'AC' && judgeReport !== null,
+    isAC: latestVerdict === 'AC', isDone: phase === 'reviewing' && latestVerdict === 'AC',
     dragging, dragTab, chatEndRef, editorInitialized,
     setEditorCode, setActiveTabs, setTabPanel, setSplitRatio, setChatInput,
     setTutorMessages, setRunResults, setProgressMsgs,

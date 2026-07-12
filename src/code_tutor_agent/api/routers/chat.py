@@ -1,6 +1,7 @@
 """Chat router — streaming + non-streaming chat endpoints."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -241,6 +242,17 @@ async def chat_with_tutor(sid: str, body: dict):
     # ── Normal tutoring chat (non-streaming) ──
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+
+    # ── Reviewing phase: resume graph via tutor_router ──
+    if values.get("phase") == "reviewing":
+        current_msgs = list(values.get("tutor_messages", []))
+        current_msgs.append({"role": "user", "content": message})
+        graph.update_state(config, {"tutor_messages": current_msgs})
+        await asyncio.to_thread(graph.invoke, None, config)
+        final_state = graph.get_state(config)
+        final_msgs = final_state.values.get("tutor_messages", [])
+        reply = final_msgs[-1]["content"] if final_msgs and isinstance(final_msgs[-1], dict) else (final_msgs[-1].content if final_msgs else "")
+        return {"response": reply}
 
     llm = get_llm("agnes", temperature=0.7)
     prompt = (

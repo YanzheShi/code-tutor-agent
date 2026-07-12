@@ -30,6 +30,7 @@ def serialize_state(state: Any) -> dict:
         "difficulty": d.get("difficulty", ""),
         "mode": d.get("mode", ""),
         "status": d.get("status", "generating"),
+        "phase": d.get("phase", "solving"),
         "problem": problem,
         "submissions": [
             {

@@ -17,9 +17,10 @@ const TAB_LABELS: Record<TabId, string> = {
   code: '代码', run: '运行', tutor: '导师', 'agent-history': '导师对话',
 };
 
-export interface MainLayoutProps {
+export type MainLayoutProps = {
   problem: ProblemMeta | null;
   mode: string;
+  phase: string;
   activeTabs: { left: TabId; right: TabId };
   tabPanel: Record<TabId, 'left' | 'right'>;
   splitRatio: number;
@@ -57,7 +58,7 @@ export interface MainLayoutProps {
 
 export default function MainLayout(props: MainLayoutProps) {
   const {
-    problem, mode, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
+    problem, mode, phase, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
     editorCode, hintLevel, latestVerdict, judgeReport, referenceCode,
     runResults, progressMsgs, running, submittingFlag, isDialogPhase, isDone,
     dragging, dragTab, chatEndRef,
@@ -251,7 +252,7 @@ export default function MainLayout(props: MainLayoutProps) {
                 <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
                   className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
                 {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
-                <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">换一题</button>
+                <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">{phase === 'solving' ? '放弃这题' : '换一题'}</button>
               </div>
             </>
           ) : (
@@ -279,7 +280,7 @@ export default function MainLayout(props: MainLayoutProps) {
                   <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
                     className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
                   {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
-                  <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">换一题</button>
+                  <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">{phase === 'solving' ? '放弃这题' : '换一题'}</button>
                   </>)}
               </div>
             </>

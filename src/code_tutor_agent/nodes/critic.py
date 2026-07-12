@@ -1,7 +1,10 @@
-"""critic_node — 宪法约束独立评审节点（D6）。
+"""critic_node — 宪法约束独立评审 + flush 当前题 → problem_history。
 
 流程：
-    tutor_node 产出提示草稿 → critic_node 评审 → 通过后路由到 wait/submit 或 planner
+    tutor_node 产出提示草稿 → critic_node
+      1. flush 当前题 → ProblemAttemptRecord → push problem_history
+      2. 宪法评审（R01 / R04）
+      3. 路由：AC / ABANDON → planner_node（下一题），WA → wait_for_submit_node（继续改）
 
 评审规则：
     - R01: 低等级（<4）下不能泄露完整代码
@@ -15,7 +18,11 @@ from typing import Literal
 
 from langgraph.types import Command
 
-from code_tutor_agent.schemas.state import SessionState
+from code_tutor_agent.schemas.state import (
+    ProblemAttemptRecord,
+    SessionPhase,
+    SessionState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +43,45 @@ R04_FRUSTRATION_KEYWORDS = [
 ]
 
 
-def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", "planner_node", "__end__"]]:
-    """Review the latest tutor message, then route to the original destination.
+def _resolve_verdict(state: SessionState) -> str:
+    """Determine the terminal verdict for the current problem."""
+    if state.pending_abandon:
+        return "ABANDON"
+    return state.last_verdict or "WA"
 
-    The tutor_node was modified to route to critic_node first.
-    Critic reviews the message, applies R01 sanitization if needed,
-    then forwards to the appropriate destination.
+
+def _build_record(state: SessionState, verdict: str) -> ProblemAttemptRecord:
+    """Build a ProblemAttemptRecord from current session state."""
+    last_code = state.submissions[-1].code if state.submissions else ""
+    tags = [state.problem.tag_primary] if state.problem else []
+    return ProblemAttemptRecord(
+        problem_id=state.problem.problem_id if state.problem else 0,
+        title=state.problem.title if state.problem else "",
+        tags=tags,
+        difficulty=state.problem.difficulty if state.problem else "",
+        verdict=verdict,
+        user_code_final=last_code,
+        hint_level_reached=state.hint_level,
+        tutor_messages_count=len(state.tutor_messages),
+        diagnosis=state.last_diagnosis,
+        abandoned=(verdict == "ABANDON"),
+    )
+
+
+def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", "planner_node"]]:
+    """Flush current problem → history, constitutional review, then route.
+
+    - AC / ABANDON → planner_node（下一题）
+    - WA           → wait_for_submit_node（继续改）
     """
-    logger.info("▶ critic_node()")
+    logger.info("▶ critic_node() — last_verdict=%s pending_abandon=%s", state.last_verdict, state.pending_abandon)
 
-    # ── R01 检查 ──
+    # ── 1. resolve verdict & flush ──
+    verdict = _resolve_verdict(state)
+    record = _build_record(state, verdict)
+    new_history = list(state.problem_history) + [record]
+
+    # ── 2. R01 检查 ──
     if state.tutor_messages:
         last_msg = state.tutor_messages[-1]
         hint_level = state.hint_level
@@ -64,17 +100,32 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
                     logger.warning("R01: sanitized tutor message (pattern=%s, level=%d)", pattern, hint_level)
                     break
 
-    # ── R04 情绪检测 ──
+    # ── 3. R04 情绪检测 ──
     user_msgs = [m for m in state.tutor_messages if m.role == "user"]
     if user_msgs:
         last_user = user_msgs[-1].content
         if any(kw in last_user for kw in R04_FRUSTRATION_KEYWORDS):
             logger.info("R04: user frustration detected")
 
-    # ── 路由：AC+对抗通过 → planner（下一题），否则 → wait_for_submit（等再提交） ──
-    if state.last_verdict == "AC" and state.adversarial_triggered:
-        logger.info("critic_node → AC + adversarial passed, goto=planner_node")
-        return Command(goto="planner_node")
+    # ── 4. 通用 update（换题清理） ──
+    updates = {
+        "problem_history": new_history,
+        "total_problems": state.total_problems + 1,
+        "problem": None,
+        "tutor_messages": [],
+        "hint_level": 0,
+        "last_diagnosis": None,
+        "turns_in_level": 0,
+        "last_router_decision": None,
+        "pending_abandon": False,
+        "next_preference": None,
+        "phase": SessionPhase.done,
+    }
+
+    # ── 5. 路由 ──
+    if verdict in ("AC", "ABANDON"):
+        logger.info("critic_node → goto=planner_node (verdict=%s)", verdict)
+        return Command(goto="planner_node", update=updates)
     else:
-        logger.info("critic_node → continue waiting, goto=wait_for_submit_node")
-        return Command(goto="wait_for_submit_node")
+        logger.info("critic_node → goto=wait_for_submit_node (verdict=%s)", verdict)
+        return Command(goto="wait_for_submit_node", update=updates)

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -60,6 +60,7 @@ class SessionStateResponse(BaseModel):
     difficulty: str = ""
     mode: str = "practice"
     status: str
+    phase: str = "solving"
     problem: Optional[dict] = None
     submissions: list[dict] = Field(default_factory=list)
     tutor_messages: list[dict] = Field(default_factory=list)
@@ -202,3 +203,21 @@ class AdminUpdateProblemRequest(BaseModel):
     constraints: Optional[list[str]] = None
     alternative_solutions: Optional[list[str]] = None
     novelty_score: Optional[float] = None
+
+
+# ──────────────────────────────────────────────
+#  Multi-turn (continuous problem solving)
+# ──────────────────────────────────────────────
+
+
+class NextProblemReq(BaseModel):
+    """Request body for POST /session/{sid}/next-problem."""
+    preference: Optional[Literal["same_topic", "next_in_plan", "random"]] = "next_in_plan"
+
+
+class NextProblemResp(BaseModel):
+    """Response after a successful next-problem generation."""
+    session_id: str
+    problem: dict
+    phase: str = "solving"
+    hint_level: int = 0

@@ -201,6 +201,7 @@ def _generate_from_leetcode(
         update={
             "problem": meta,
             "status": "awaiting_submit",
+        "phase": SessionPhase.solving,
             "submissions": [],
             "hint_level": 0,
             "tutor_messages": [welcome_msg],
@@ -385,6 +386,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     update: dict[str, Any] = {
         "problem": meta,
         "status": "awaiting_submit",
+        "phase": SessionPhase.solving,
         "submissions": [],
         "hint_level": 0,
         "tutor_messages": [welcome_msg],

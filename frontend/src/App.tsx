@@ -17,7 +17,7 @@ export default function App() {
   if (screen === 'admin') return <AdminPanel onClose={() => s.setScreen('welcome')} />;
 
   const mainProps: MainLayoutProps = {
-    problem: s.problem, mode: s.mode,
+    problem: s.problem, mode: s.mode, phase: (s as any).phase || 'solving',
     activeTabs: s.activeTabs, tabPanel: s.tabPanel, splitRatio: s.splitRatio,
     tutorMessages: s.tutorMessages, chatInput: s.chatInput,
     editorCode: s.editorCode, hintLevel: s.hintLevel,
