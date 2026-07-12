@@ -36,6 +36,7 @@ export function useSession() {
   const [splitRatio, setSplitRatio] = useState(50);
   const [chatInput, setChatInput] = useState('');
   const [phase, setPhase] = useState<string>('solving');
+  const [nextProblemLoading, setNextProblemLoading] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const screenRef = useRef(screen);
   const modeRef = useRef(mode);
@@ -225,15 +226,29 @@ export function useSession() {
 
   // ── 下一题 / 新会话 ──
   const handleNext = useCallback(async () => {
+    // 如果已经在加载中，忽略重复点击
+    if (nextProblemLoading) return;
+
     // 如果当前在 reviewing 态且 AC → 同 session 续题
     if (phase === 'reviewing' && latestVerdict === 'AC' && sessionId) {
+      setNextProblemLoading(true);
+      setProgressMsgs(['正在准备下一题…']);
       try {
+        // 开始轮询进度
+        const pollInterval = setInterval(async () => {
+          try {
+            const st = await getState(sessionId);
+            if (st.progress_messages?.length) setProgressMsgs(st.progress_messages);
+          } catch {}
+        }, 1000);
+
         const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ preference: 'next_in_plan' }),
         });
-        if (!resp.ok) return;
+        clearInterval(pollInterval);
+        if (!resp.ok) { setNextProblemLoading(false); return; }
         const data = await resp.json();
         if (data.problem) {
           setProblem(data.problem as ProblemMeta);
@@ -245,10 +260,13 @@ export function useSession() {
           setJudgeReport(null);
           setRunResults(null);
           setSubmissions([]);
+          setProgressMsgs([]);
           editorInitialized.current = false;
+          setNextProblemLoading(false);
           return;
         }
       } catch { /* fall through to welcome */ }
+      setNextProblemLoading(false);
     }
 
     // solving 态 → 放弃确认
@@ -295,7 +313,7 @@ export function useSession() {
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
 
   return {
-    screen, mode, phase, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
+    screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
     running, submittingFlag, activeTabs, tabPanel, splitRatio, chatInput,
     sessionId, isDialogPhase: mode === 'agent' && !problem,

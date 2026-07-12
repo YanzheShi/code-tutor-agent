@@ -123,9 +123,22 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
     }
 
     # ── 5. 路由 ──
-    if verdict in ("AC", "ABANDON"):
+    # AC → phase=reviewing, 不清 problem/tutor_messages, 去 END（前端显示「下一题」按钮）
+    # ABANDON (/next-problem) → 清所有, 去 planner_node 生成新题
+    # WA → 清所有, 去 wait_for_submit_node 等重提交
+    if verdict == "ABANDON":
         logger.info("critic_node → goto=planner_node (verdict=%s)", verdict)
         return Command(goto="planner_node", update=updates)
+    elif verdict == "AC":
+        logger.info("critic_node → goto=END (verdict=AC, phase=reviewing)")
+        # AC 不清 problem/tutor_messages，让前端展示 AC 消息
+        return Command(goto="__end__", update={
+            "problem_history": new_history,
+            "total_problems": state.total_problems + 1,
+            "phase": "reviewing",
+            "pending_abandon": False,
+            "next_preference": None,
+        })
     else:
         logger.info("critic_node → goto=wait_for_submit_node (verdict=%s)", verdict)
         return Command(goto="wait_for_submit_node", update=updates)

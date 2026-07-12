@@ -18,6 +18,7 @@ export default function App() {
 
   const mainProps: MainLayoutProps = {
     problem: s.problem, mode: s.mode, phase: (s as any).phase || 'solving',
+    nextProblemLoading: (s as any).nextProblemLoading || false,
     activeTabs: s.activeTabs, tabPanel: s.tabPanel, splitRatio: s.splitRatio,
     tutorMessages: s.tutorMessages, chatInput: s.chatInput,
     editorCode: s.editorCode, hintLevel: s.hintLevel,

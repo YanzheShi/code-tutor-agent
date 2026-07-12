@@ -21,6 +21,7 @@ export type MainLayoutProps = {
   problem: ProblemMeta | null;
   mode: string;
   phase: string;
+  nextProblemLoading: boolean;
   activeTabs: { left: TabId; right: TabId };
   tabPanel: Record<TabId, 'left' | 'right'>;
   splitRatio: number;
@@ -58,7 +59,7 @@ export type MainLayoutProps = {
 
 export default function MainLayout(props: MainLayoutProps) {
   const {
-    problem, mode, phase, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
+    problem, mode, phase, nextProblemLoading, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
     editorCode, hintLevel, latestVerdict, judgeReport, referenceCode,
     runResults, progressMsgs, running, submittingFlag, isDialogPhase, isDone,
     dragging, dragTab, chatEndRef,
@@ -184,12 +185,24 @@ export default function MainLayout(props: MainLayoutProps) {
       )}
 
       {/* 全屏 loading 遮罩 */}
-      {isLoading && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-        <div className="flex items-center gap-3 rounded-lg bg-slate-800 px-6 py-4 shadow-lg">
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
-          <span className="text-sm text-ct-text">{running ? '运行中...' : '判题中...'}</span>
-        </div>
-      </div>}
+      {/* 全屏 loading 遮罩 */}{isLoading && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+              <div className="flex items-center gap-3 rounded-lg bg-slate-800 px-6 py-4 shadow-lg">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
+                <span className="text-sm text-ct-text">{running ? '运行中...' : '判题中...'}</span>
+              </div>
+            </div>}
+
+            {/* 下一题生成中遮罩 */}
+            {nextProblemLoading && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+              <div className="flex flex-col items-center gap-3 rounded-lg bg-slate-800 px-8 py-6 shadow-lg">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
+                <div className="max-w-md space-y-1 text-center">
+                  {(progressMsgs.length > 0 ? progressMsgs : ['正在准备下一题…']).map((msg, i) => (
+                    <p key={i} className={'text-sm ' + (i === (progressMsgs.length > 0 ? progressMsgs.length - 1 : 0) ? 'text-ct-accent' : 'text-ct-muted/60')}>{msg}</p>
+                  ))}
+                </div>
+              </div>
+            </div>}
 
       {/* 分割面板 */}
       <div id="split-container" className="flex flex-1 overflow-hidden" style={{ cursor: dragging.current ? 'col-resize' : undefined }}

@@ -211,7 +211,11 @@ async def next_problem(sid: str, body: NextProblemReq):
     )
     need_abandon = not has_terminal and vals.get("phase") in ("solving", "reviewing")
 
-    # 2. Patch trigger flags (as_node routes next invoke into critic_node)
+    # 2. Set up progress messages (frontend polls /state during generation)
+    from code_tutor_agent.progress import _generation_progress
+    _generation_progress[sid] = ["正在准备下一题…"]
+
+    # 3. Patch trigger flags (as_node routes next invoke into critic_node)
     graph.update_state(config, {
         "pending_abandon": need_abandon,
         "next_preference": body.preference,
