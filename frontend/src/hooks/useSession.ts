@@ -36,6 +36,7 @@ export function useSession() {
   const [splitRatio, setSplitRatio] = useState(50);
   const [chatInput, setChatInput] = useState('');
   const [phase, setPhase] = useState<string>('solving');
+  const [status, setStatus] = useState('');
   const [nextProblemLoading, setNextProblemLoading] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const screenRef = useRef(screen);
@@ -76,6 +77,7 @@ export function useSession() {
         const st = await getState(sid);
         if (st.progress_messages) setProgressMsgs(st.progress_messages);
         if (st.mode) setMode(st.mode);
+        if (st.status) setStatus(st.status);
         if (st.status === 'dialog' && st.tutor_messages?.length) {
           setTutorMessages(st.tutor_messages as Message[]);
         }
@@ -90,7 +92,7 @@ export function useSession() {
             editorInitialized.current = true;
           }
           setActiveTabs(prev => ({ ...prev, left: 'desc' }));
-          setActiveTabs(prev => ({ ...prev, right: 'code' }));
+          setActiveTabs(prev => ({ ...prev, right: st.mode === 'agent' ? 'tutor' : 'code' }));
         }
         const msgs = st.progress_messages || [];
         const bgDone = msgs.some(m => m.includes('✅') || m.includes('已就绪') || m.includes('已导入'));
@@ -115,6 +117,7 @@ export function useSession() {
     setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
     if (m === 'agent') { setScreen('main'); setMode('agent'); }
+    setStatus('');
     try {
       const resp = await createSession({ topic, difficulty, mode: m });
       setSessionId(resp.session_id); startPolling(resp.session_id);
@@ -157,6 +160,9 @@ export function useSession() {
       setHintLevel(resp.hint_level); setLatestVerdict(resp.verdict);
       const full = await getState(sid);
       setSubmissions((full.submissions || []) as Submission[]);
+      // 同步后端 phase：AC 后后端 critic 会置 phase=reviewing，
+      // 让 isDone (= phase==='reviewing' && verdict==='AC') 成立，从而显示「下一题」按钮
+      if ((full as any).phase) setPhase((full as any).phase);
       if (full.problem) {
         try { const pr = await fetch(BASE + '/problem/' + full.problem.problem_id + '/submissions'); if (pr.ok) setSubmissions((await pr.json()).submissions || []); } catch {}
       }
@@ -196,12 +202,12 @@ export function useSession() {
       await readStream(sessionId, text, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
       });
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 60; i++) {
         const s = await getState(sessionId);
         if (s.problem) {
           applySessionState(s, true);
           if (!s.problem?.starter_code && !editorInitialized.current) { setEditorCode('class Solution:\n    def solution(self):\n        pass\n'); editorInitialized.current = true; }
-          setActiveTabs(prev => ({ ...prev, left: 'desc' })); setActiveTabs(prev => ({ ...prev, right: 'code' }));
+          setActiveTabs(prev => ({ ...prev, left: 'desc' })); setActiveTabs(prev => ({ ...prev, right: s.mode === 'agent' ? 'tutor' : 'code' }));
           return;
         }
         await new Promise(r => setTimeout(r, 1500));
@@ -226,22 +232,32 @@ export function useSession() {
 
   // ── 下一题 / 新会话 ──
   const handleNext = useCallback(async () => {
-    // 如果已经在加载中，忽略重复点击
     if (nextProblemLoading) return;
 
-    // 如果当前在 reviewing 态且 AC → 同 session 续题
-    if (phase === 'reviewing' && latestVerdict === 'AC' && sessionId) {
+    // Agent 模式「放弃 / 下一题」：重入导师对话（保留历史、隐藏题目/代码栏，不出新题）
+    const applyAgentReenter = (data: any) => {
+      setProblem(null);
+      setPhase('dialog');
+      setEditorCode('');
+      editorInitialized.current = false;
+      if (data?.tutor_messages?.length) setTutorMessages(data.tutor_messages as Message[]);
+      setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
+      setRunResults(null); setSubmissions([]);
+      setProgressMsgs([]);
+      // 左栏对话、右栏也显示对话历史，从而隐藏题目与代码栏
+      setActiveTabs({ left: 'agent-history', right: 'agent-history' });
+    };
+
+    const callNextProblem = async () => {
       setNextProblemLoading(true);
       setProgressMsgs(['正在准备下一题…']);
+      const pollInterval = setInterval(async () => {
+        try {
+          const st = await getState(sessionId!);
+          if (st.progress_messages?.length) setProgressMsgs(st.progress_messages);
+        } catch {}
+      }, 1000);
       try {
-        // 开始轮询进度
-        const pollInterval = setInterval(async () => {
-          try {
-            const st = await getState(sessionId);
-            if (st.progress_messages?.length) setProgressMsgs(st.progress_messages);
-          } catch {}
-        }, 1000);
-
         const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -250,55 +266,47 @@ export function useSession() {
         clearInterval(pollInterval);
         if (!resp.ok) { setNextProblemLoading(false); return; }
         const data = await resp.json();
+
         if (data.problem) {
           setProblem(data.problem as ProblemMeta);
           setPhase(data.phase || 'solving');
           setEditorCode((data.problem as any).starter_code || '');
-          setTutorMessages([]);
-          setHintLevel(0);
-          setLatestVerdict(null);
-          setJudgeReport(null);
-          setRunResults(null);
-          setSubmissions([]);
+          // Agent 模式保留后端返回的 tutor_messages，不清空
+          if (mode === 'agent' && data.tutor_messages?.length) {
+            setTutorMessages(data.tutor_messages as Message[]);
+          } else {
+            setTutorMessages([]);
+          }
+          setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
+          setRunResults(null); setSubmissions([]);
           setProgressMsgs([]);
           editorInitialized.current = false;
           setNextProblemLoading(false);
           return;
         }
+
+        // Agent 模式重入对话：后端返回 problem=null + 历史（Bug 5/8/9）
+        if (mode === 'agent') {
+          applyAgentReenter(data);
+          setNextProblemLoading(false);
+          return;
+        }
       } catch { /* fall through to welcome */ }
+      clearInterval(pollInterval);
       setNextProblemLoading(false);
+    };
+
+    // reviewing + AC → 同 session 续题
+    if (phase === 'reviewing' && latestVerdict === 'AC' && sessionId) {
+      await callNextProblem();
+      return;
     }
 
-    // solving 态 → 放弃确认
+    // solving → 放弃确认
     if (phase === 'solving' && sessionId) {
       const ok = window.confirm('当前代码还没提交，确定放弃这题去下一题？');
-      if (ok) {
-        try {
-          const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ preference: 'next_in_plan' }),
-          });
-          if (resp.ok) {
-            const data = await resp.json();
-            if (data.problem) {
-              setProblem(data.problem as ProblemMeta);
-              setPhase(data.phase || 'solving');
-              setEditorCode((data.problem as any).starter_code || '');
-              setTutorMessages([]);
-              setHintLevel(0);
-              setLatestVerdict(null);
-              setJudgeReport(null);
-              setRunResults(null);
-              setSubmissions([]);
-              editorInitialized.current = false;
-              return;
-            }
-          }
-        } catch { /* fall through to welcome */ }
-      } else {
-        return;  // 用户取消放弃
-      }
+      if (ok) { await callNextProblem(); }
+      return;
     }
 
     // 默认：新会话（回 welcome）
@@ -308,7 +316,7 @@ export function useSession() {
     setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
     setPhase('solving');
-  }, [phase, latestVerdict, sessionId]);
+  }, [phase, latestVerdict, sessionId, mode]);
 
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
 
@@ -319,14 +327,15 @@ export function useSession() {
     setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');
     setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
-    setPhase('solving'); setNextProblemLoading(false);
+    setPhase('solving'); setStatus(''); setNextProblemLoading(false);
   }, []);
 
   return {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
     running, submittingFlag, activeTabs, tabPanel, splitRatio, chatInput,
-    sessionId, isDialogPhase: mode === 'agent' && !problem,
+    sessionId, status, isDialogPhase: mode === 'agent' && !problem && !nextProblemLoading,
+    isGenerating: mode === 'agent' && status === 'awaiting_problem',
     isAC: latestVerdict === 'AC', isDone: phase === 'reviewing' && latestVerdict === 'AC',
     dragging, dragTab, chatEndRef, editorInitialized,
     setEditorCode, setActiveTabs, setTabPanel, setSplitRatio, setChatInput,

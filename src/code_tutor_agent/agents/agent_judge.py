@@ -187,8 +187,8 @@ def analyze_judge_results(
         title=title,
         difficulty=difficulty,
         topic=topic,
-        description=description[:500] if description else "",
-        code=code[:2000] if code else "",
+        description=description[:3000] if description else "",
+        code=code[:12000] if code else "",
         total=total,
         results_text=results_text,
     )

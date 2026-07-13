@@ -7,7 +7,8 @@ import ReviewCard from './RightPanel/ReviewCard';
 import SubmissionHistory from './SubmissionHistory';
 import RunResults from './RunResults';
 import { TabButton, VerdictBadge } from './TabButton';
-import type { Message, ProblemMeta, RunResult } from '../types/session';
+import { useMemo } from 'react';
+import type { Message, ProblemMeta, RunResult, Submission, FailedCase } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 
 type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history';
@@ -32,11 +33,13 @@ export type MainLayoutProps = {
   latestVerdict: string | null;
   judgeReport: JudgeReport | null;
   referenceCode: string;
+  submissions: Submission[];
   runResults: RunResult[] | null;
   progressMsgs: string[];
   running: boolean;
   submittingFlag: boolean;
   isDialogPhase: boolean;
+  isGenerating: boolean;
   isDone: boolean;
   dragging: React.MutableRefObject<boolean>;
   dragTab: React.MutableRefObject<TabId | null>;
@@ -62,7 +65,7 @@ export default function MainLayout(props: MainLayoutProps) {
   const {
     problem, mode, phase, nextProblemLoading, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
     editorCode, hintLevel, latestVerdict, judgeReport, referenceCode,
-    runResults, progressMsgs, running, submittingFlag, isDialogPhase, isDone,
+    submissions, runResults, progressMsgs, running, submittingFlag, isDialogPhase, isGenerating, isDone,
     dragging, dragTab, chatEndRef,
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
     onSetTutorMessages, onSetRunResults, onSetProgressMsgs,
@@ -70,6 +73,20 @@ export default function MainLayout(props: MainLayoutProps) {
   } = props;
 
   const isLoading = running || submittingFlag;
+
+  // Bug 2: 从最后一条 submission 的 base 阶段提取首个失败用例，用于「期望 vs 实际」对比
+  const failedCase: FailedCase | null = useMemo(() => {
+    if (latestVerdict === 'AC') return null;
+    if (!submissions || submissions.length === 0) return null;
+    const last = submissions[submissions.length - 1];
+    const base = (last.judge_results || []).find(j => j.phase === 'base');
+    if (!base) return null;
+    const inputArgs = base.input_args || [];
+    const expected = base.expected_output || '';
+    const actual = base.actual_output || '';
+    if (!inputArgs.length && !expected && !actual) return null;
+    return { input_args: inputArgs, expected_output: expected, actual_output: actual };
+  }, [submissions, latestVerdict]);
 
   const panelTabs = {
     left: (Object.entries(tabPanel) as [TabId, 'left' | 'right'][])
@@ -149,7 +166,7 @@ export default function MainLayout(props: MainLayoutProps) {
       return (
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            <MessageList messages={tutorMessages} verdict={latestVerdict} hintLevel={hintLevel} />
+            <MessageList messages={tutorMessages} verdict={latestVerdict} hintLevel={hintLevel} failedCase={failedCase} />
             {latestVerdict === 'AC' && judgeReport && <div className="mt-3"><ReviewCard report={judgeReport} /></div>}
             <div ref={chatEndRef} />
           </div>
@@ -216,8 +233,14 @@ export default function MainLayout(props: MainLayoutProps) {
               <div className="flex border-b border-ct-border bg-slate-900/50 text-xs">
                 <TabButton label="Agent 对话" active={true} onClick={() => {}} />
               </div>
-              <div className="flex-1 overflow-hidden">
-                <AgentChat messages={tutorMessages} onSend={onAgentSend} disabled={!!problem} />
+              <div className="flex-1 overflow-hidden relative">
+                <AgentChat messages={tutorMessages} onSend={onAgentSend} disabled={!!problem || isGenerating} />
+                {isGenerating && (
+                  <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-ct-border bg-slate-800/85 px-4 py-2 text-xs text-ct-muted">
+                    <div className="h-3 w-3 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
+                    <span>正在为你生成题目 🚀</span>
+                  </div>
+                )}
               </div>
             </>
           ) : (

@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from langchain_core.messages import HumanMessage
 from starlette.responses import StreamingResponse
 
@@ -15,14 +15,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _chunk_text(text: str, size: int = 6):
+    """把文本切成小段，用于伪流式输出，保持打字效果。"""
+    for i in range(0, len(text), size):
+        yield text[i : i + size]
+
+
 @router.post("/{sid}/chat/stream")
-async def chat_with_tutor_stream(sid: str, body: dict):
+async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: BackgroundTasks):
     """Streaming chat with the AI tutor via SSE."""
     from code_tutor_agent.config import get_llm
     from code_tutor_agent.agents.agent_dialog import (
         analyze_user_intent,
-        stream_dialog_response,
         build_ready_message,
+        DialogIntent,
     )
 
     graph = get_graph()
@@ -41,56 +47,79 @@ async def chat_with_tutor_stream(sid: str, body: dict):
     mode = values.get("mode", "")
     agent_done = values.get("agent_dialog_complete", False)
 
+    # 题目生成后台任务：用 BackgroundTasks 触发，保证 SSE 响应发送后
+    # 一定跑完（不受连接关闭影响），写入 problem 后前端轮询自动跳转
+    async def _safe_invoke():
+        try:
+            cur = graph.get_state(config)
+            await asyncio.to_thread(graph.invoke, dict(cur.values), config)
+        except Exception as e:
+            logger.error("Background graph.invoke failed: %s", e, exc_info=True)
+
     # Agent 对话模式：仅当对话未完成时
     if status == "dialog" and mode == "agent" and not agent_done:
-        history = list(values.get("agent_dialog_history", []))
+        raw_history = values.get("agent_dialog_history", [])
+        # 统一转为 Message 对象（防御性：checkpointer 中可能混入 dict）
+        history: list[Message] = []
+        for m in raw_history:
+            if isinstance(m, Message):
+                history.append(m)
+            elif isinstance(m, dict):
+                history.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
+            else:
+                history.append(Message(role="tutor", content=str(m)))
         history.append(Message(role="user", content=message))
         graph.update_state(config, {"agent_dialog_history": history, "tutor_messages": history})
-
-        intent = analyze_user_intent(history)
 
         async def dialog_event_stream():
             nonlocal history
 
+            # ── 先判定意图（单次结构化调用），再决定回复内容与路由 ──
+            # 把「自然回复」与「is_ready 路由判定」合并为同一次 LLM 判定，
+            # 避免两个模型各说各话、互相矛盾（对话衔接修复-2）
+            try:
+                intent = analyze_user_intent(history)
+            except Exception as exc:
+                logger.warning("analyze_user_intent failed: %s", exc)
+                intent = DialogIntent(
+                    next_message="我没理解清楚，能再详细说说你想练什么类型的题吗？"
+                )
+
             if intent.is_ready:
                 topic = intent.topic or values.get("topic", "数组")
                 difficulty = intent.difficulty or values.get("difficulty", "easy")
+                # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
+                # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
                 ready_msg = build_ready_message(topic, difficulty)
                 history.append(ready_msg)
-
+                # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）
                 graph.update_state(config, {
                     "agent_dialog_history": history,
                     "agent_dialog_complete": True,
+                    "status": "awaiting_problem",
                     "topic": topic,
                     "difficulty": difficulty,
                     "tutor_messages": history,
                 })
 
-                for char in intent.next_message or ready_msg.content:
-                    yield f"data: {char}\n\n"
+                # 伪流式输出固定收尾文案，保持打字效果
+                for chunk in _chunk_text(ready_msg.content):
+                    yield f"data: {chunk}\n\n"
 
-                import asyncio as _asyncio
-                async def _safe_invoke():
-                    try:
-                        # invoke(None, config) doesn't pick up update_state changes
-                        # 显式传入当前 checkpoint 状态
-                        cur = graph.get_state(config)
-                        await _asyncio.to_thread(graph.invoke, dict(cur.values), config)
-                    except Exception as e:
-                        logger.error("Background graph.invoke failed: %s", e, exc_info=True)
-                _asyncio.create_task(_safe_invoke())
+                # 用 BackgroundTasks 可靠触发题目生成（planner→generator），
+                # 避免 SSE 连接关闭后 asyncio.create_task 子任务被取消、
+                # 导致 problem 永不写入、前端无法自动跳转（自动跳转修复）
+                background_tasks.add_task(_safe_invoke)
             else:
-                collected = []
-                async for token in stream_dialog_response(history):
-                    collected.append(token)
-                    yield f"data: {token}\n\n"
-
-                streamed_text = "".join(collected)
-                history.append(Message(role="tutor", content=streamed_text))
+                # 非 ready：回复来自同一次判定的 next_message（已合并，无需再调自由模型）
+                reply = intent.next_message or "好的，我明白了，能再具体说说吗？"
+                history.append(Message(role="tutor", content=reply))
                 graph.update_state(config, {
                     "agent_dialog_history": history,
                     "tutor_messages": history,
                 })
+                for chunk in _chunk_text(reply):
+                    yield f"data: {chunk}\n\n"
 
             yield "data: __DONE__\n\n"
 
@@ -184,7 +213,7 @@ async def chat_with_tutor_stream(sid: str, body: dict):
 
 
 @router.post("/{sid}/chat")
-async def chat_with_tutor(sid: str, body: dict):
+async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTasks):
     """Non-streaming chat with the AI tutor."""
     from code_tutor_agent.config import get_llm
 
@@ -207,7 +236,16 @@ async def chat_with_tutor(sid: str, body: dict):
     if status == "dialog" and mode == "agent" and not values.get("agent_dialog_complete", False):
         from code_tutor_agent.agents.agent_dialog import analyze_user_intent, build_ready_message
 
-        history = list(values.get("agent_dialog_history", []))
+        raw_history = values.get("agent_dialog_history", [])
+        # 统一转为 Message 对象（防御性：checkpointer 中可能混入 dict）
+        history: list[Message] = []
+        for m in raw_history:
+            if isinstance(m, Message):
+                history.append(m)
+            elif isinstance(m, dict):
+                history.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
+            else:
+                history.append(Message(role="tutor", content=str(m)))
         history.append(Message(role="user", content=message))
         graph.update_state(config, {"agent_dialog_history": history, "tutor_messages": history})
 
@@ -225,14 +263,13 @@ async def chat_with_tutor(sid: str, body: dict):
                 "difficulty": difficulty,
                 "tutor_messages": history,
             })
-            import asyncio as _asyncio
             async def _safe_invoke():
                 try:
                     cur = graph.get_state(config)
-                    await _asyncio.to_thread(graph.invoke, dict(cur.values), config)
+                    await asyncio.to_thread(graph.invoke, dict(cur.values), config)
                 except Exception as e:
                     logger.error("Background graph.invoke failed: %s", e, exc_info=True)
-            _asyncio.create_task(_safe_invoke())
+            background_tasks.add_task(_safe_invoke)
             return {"response": intent.next_message or ready_msg.content}
         else:
             history.append(Message(role="tutor", content=intent.next_message))

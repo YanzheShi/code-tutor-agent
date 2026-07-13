@@ -51,12 +51,18 @@ class RunnerResult:
         detail: str = "",
         runtime_ms: float = 0.0,
         memory_kb: float = 0.0,
+        input_args: list[str] | None = None,
+        expected_output: str = "",
+        actual_output: str = "",
     ):
         self.test_case_id = test_case_id
         self.status = status       # Passed / Wrong Answer / Runtime Error / TLE
         self.detail = detail
         self.runtime_ms = runtime_ms
         self.memory_kb = memory_kb
+        self.input_args = input_args or []
+        self.expected_output = expected_output
+        self.actual_output = actual_output
 
     def to_dict(self) -> dict:
         return {
@@ -65,6 +71,9 @@ class RunnerResult:
             "detail": self.detail,
             "runtime_ms": self.runtime_ms,
             "memory_kb": self.memory_kb,
+            "input_args": self.input_args,
+            "expected_output": self.expected_output,
+            "actual_output": self.actual_output,
         }
 
 
@@ -116,6 +125,9 @@ def run_solution(
                     detail=r.get("detail", ""),
                     runtime_ms=r.get("runtime_ms", 0.0),
                     memory_kb=r.get("memory_kb", 0.0),
+                    input_args=r.get("input_args"),
+                    expected_output=r.get("expected_output", ""),
+                    actual_output=r.get("actual_output", ""),
                 ) for r in dict_results]
             else:
                 logger.warning("Judge0 returned errors, falling back to local subprocess")
@@ -226,13 +238,13 @@ for idx, tc in enumerate(test_cases):
         except (json.JSONDecodeError, TypeError, ValueError):
             exp_fmt = _fmt(expected)
         if actual == exp_fmt:
-            print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Passed", "detail": actual, "runtime_ms": round(elapsed, 2)}}))
+            print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Passed", "detail": actual, "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": exp_fmt, "actual_output": actual}}))
         else:
-            print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Wrong Answer", "detail": f"expected={{exp_fmt}} got={{actual}}", "runtime_ms": round(elapsed, 2)}}))
+            print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Wrong Answer", "detail": f"expected={{exp_fmt}} got={{actual}}", "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": exp_fmt, "actual_output": actual}}))
     except Exception as exc:
         logger.error("Exception: %s", exc)
         elapsed = (time.perf_counter() - start) * 1000
-        print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Runtime Error", "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2)}}))
+        print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Runtime Error", "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": "", "actual_output": ""}}))
 """
 
 

@@ -216,8 +216,14 @@ class NextProblemReq(BaseModel):
 
 
 class NextProblemResp(BaseModel):
-    """Response after a successful next-problem generation."""
+    """Response after a successful next-problem generation.
+
+    For agent-mode re-entry, ``problem`` is None and ``tutor_messages``
+    carries the preserved dialog history so the frontend can re-show the
+    tutor conversation without a new problem (Bug 5/8/9).
+    """
     session_id: str
-    problem: dict
+    problem: Optional[dict] = None
     phase: str = "solving"
     hint_level: int = 0
+    tutor_messages: list[dict] = Field(default_factory=list)

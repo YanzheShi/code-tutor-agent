@@ -72,6 +72,10 @@ class JudgeResult(BaseModel):
     detail: str = Field(default="", description="Human-readable reason / diff info")
     runtime_ms: float = Field(default=0.0, description="Execution time in milliseconds")
     memory_kb: float = Field(default=0.0, description="Peak memory in kilobytes")
+    # ── Bug 2: 结构化失败用例（首个失败 test case），供前端「期望 vs 实际」对比面板 ──
+    input_args: list[str] = Field(default_factory=list, description="Input args of the first failing test case")
+    expected_output: str = Field(default="", description="Expected output of the first failing test case")
+    actual_output: str = Field(default="", description="Actual output of the first failing test case")
 
 
 class Submission(BaseModel):
@@ -114,6 +118,7 @@ class Message(BaseModel):
 class SessionPhase(str, Enum):
     """前端消费态，node 出口写，checkpointer 托管。"""
     clarifying = "clarifying"   # V0.1 不写，V0.2 才用
+    dialog = "dialog"           # Agent 模式：导师对话确定需求（出题前）
     solving = "solving"         # 用户正在写代码
     reviewing = "reviewing"     # 辅导态（WA 线 tutor / AC 线 agent_tutor）
     done = "done"               # 换题前短暂过渡
@@ -205,7 +210,12 @@ class SessionState(BaseModel):
     )
     tutor_messages: list[Message] = Field(
         default_factory=list,
-        description="Conversation visible in the tutor panel (单题维度，换题时清)",
+        description=(
+            "Conversation visible in the tutor panel. "
+            "普通模式：单题维度，换题时由 critic_node 清空。 "
+            "Agent 模式：整段使用周期的连续对话（出题前→做题中→反馈→下一题/放弃），"
+            "全程不清空，generator_node 仅在其后追加 welcome 消息。"
+        ),
     )
 
     # ── Routing hints (internal, set by Judge → consumed by Tutor) ──
@@ -221,7 +231,7 @@ class SessionState(BaseModel):
     # ── Agent mode fields ──
     # These are only used when mode == "agent"
 
-    agent_dialog_history: Annotated[list[Message], operator.add] = Field(
+    agent_dialog_history: list[Message] = Field(
         default_factory=list,
         description="Agent mode: dialog transcript before problem generation (出题前对话)",
     )

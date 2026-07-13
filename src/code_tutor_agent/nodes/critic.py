@@ -128,6 +128,24 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
     # WA → 清所有, 去 wait_for_submit_node 等重提交
     if verdict == "ABANDON":
         logger.info("critic_node → goto=planner_node (verdict=%s)", verdict)
+        # 若该题目此前已 flush 过（典型场景：已 AC 后点「下一题」，
+        # 会经 /next-problem 以 pending_abandon 重入本节点），
+        # 则不再重复追加一条 ABANDON 记录，仅清题进入下一题，
+        # 避免同一题在 problem_history 出现两条记录。
+        last_rec = state.problem_history[-1] if state.problem_history else None
+        cur_pid = state.problem.problem_id if state.problem else 0
+        if last_rec is not None and last_rec.problem_id == cur_pid and last_rec.verdict in ("AC", "WA"):
+            return Command(goto="planner_node", update={
+                "problem": None,
+                "tutor_messages": [],
+                "hint_level": 0,
+                "last_diagnosis": None,
+                "turns_in_level": 0,
+                "last_router_decision": None,
+                "pending_abandon": False,
+                "next_preference": None,
+                "phase": SessionPhase.done,
+            })
         return Command(goto="planner_node", update=updates)
     elif verdict == "AC":
         logger.info("critic_node → goto=END (verdict=AC, phase=reviewing)")

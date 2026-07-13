@@ -19,7 +19,7 @@ from langgraph.types import Command
 from code_tutor_agent.agents.agent_judge import analyze_judge_results
 from code_tutor_agent.db.database import get_problem_by_id
 from code_tutor_agent.sandbox.runner import run_solution
-from code_tutor_agent.schemas.state import SessionState
+from code_tutor_agent.schemas.state import JudgeResult, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,33 @@ def agent_judge_node(state: SessionState) -> Command:
     raw_results = run_solution(code, test_cases, timeout=AGENT_JUDGE_TIMEOUT)
     logger.info("Judge0 returned %d results", len(raw_results))
 
+    # ── 提取首个失败用例的结构化数据，写入 judge_results ──
+    first_fail = next((r for r in raw_results if r.status != "Passed"), None)
+    _status_map = {"Passed": "AC", "Wrong Answer": "WA", "Runtime Error": "RE", "TLE": "TLE", "Time Limit Exceeded": "TLE"}
+    if first_fail is not None:
+        base_result = JudgeResult(
+            status=_status_map.get(first_fail.status, "WA"),
+            phase="base",
+            detail=first_fail.detail or "",
+            runtime_ms=first_fail.runtime_ms,
+            memory_kb=first_fail.memory_kb,
+            input_args=list(first_fail.input_args or []),
+            expected_output=first_fail.expected_output or "",
+            actual_output=first_fail.actual_output or "",
+        )
+    else:
+        base_result = JudgeResult(
+            status="AC",
+            phase="base",
+            detail=f"{sum(1 for r in raw_results if r.status == 'Passed')}/{len(raw_results)} passed",
+            runtime_ms=sum(r.runtime_ms for r in raw_results),
+        )
+    # Append to last submission's judge_results
+    updated_submissions = list(state.submissions)
+    if updated_submissions:
+        updated_submissions[-1] = updated_submissions[-1].model_copy(deep=True)
+        updated_submissions[-1].judge_results.append(base_result)
+
     # ── LLM analysis of raw results ──
     description = problem_dict.description
     analysis = analyze_judge_results(
@@ -119,6 +146,7 @@ def agent_judge_node(state: SessionState) -> Command:
         "judge_cycle": state.judge_cycle + 1,
         "tutor_messages": state.tutor_messages
         + [{"role": "tutor", "content": feedback_msg}],
+        "submissions": updated_submissions,
     }
 
     # ── 更新用户画像（与普通 judge 一致） ──

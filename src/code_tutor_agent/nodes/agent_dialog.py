@@ -47,16 +47,29 @@ def agent_dialog_node(state: SessionState) -> Command:
             goto="planner_node",
         )
 
-    # ── First visit: send initial message and pause ──
+    # ── Dialog not yet complete: pause, preserving any existing history ──
     if not state.agent_dialog_history:
         msg = build_initial_message()
         logger.info("First visit — sent initial message: %s", msg.content[:60])
+        hist = [msg]
+        tut = [msg]
+    else:
+        # 重入对话（如 agent 模式「下一题 / 放弃」）：保留已有历史，
+        # 追加引导语提示用户选择下一题方向，避免对话静默无引导
+        from code_tutor_agent.schemas.state import Message as StateMessage
+        prompt_msg = StateMessage(
+            role="tutor",
+            content="上一题已完成！接下来想练习什么类型的算法题？比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？",
+        )
+        hist = list(state.agent_dialog_history) + [prompt_msg]
+        tut = list(state.tutor_messages) + [prompt_msg]
+        logger.info("Re-enter dialog — appended next-problem prompt")
 
     return Command(
         update={
             "status": "dialog",
-            "agent_dialog_history": [msg] if not state.agent_dialog_history else [],
-            "tutor_messages": [msg] if not state.tutor_messages else [],
+            "agent_dialog_history": hist,
+            "tutor_messages": tut,
         },
         goto="__end__",
     )

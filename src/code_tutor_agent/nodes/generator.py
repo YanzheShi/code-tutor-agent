@@ -48,7 +48,7 @@ from code_tutor_agent.store.static_pool import get_static_problem
 
 logger = logging.getLogger(__name__)
 
-MAX_ATTEMPTS = 2
+MAX_ATTEMPTS = 1
 MODEL_ALIAS = "agnes"
 
 # ── Topic → Tag enum 映射 ──
@@ -158,6 +158,7 @@ def _generate_optimal_for_leetcode_sync(
 def _generate_from_leetcode(
     sid: str,
     lc_data: dict[str, Any],
+    existing_tutor_messages: list | None = None,
 ) -> Command[Literal["wait_for_submit_node"]]:
     """Build a problem directly from parsed LeetCode data.
 
@@ -233,7 +234,7 @@ def _generate_from_leetcode(
         "phase": SessionPhase.solving,
             "submissions": [],
             "hint_level": 0,
-            "tutor_messages": [welcome_msg],
+            "tutor_messages": (existing_tutor_messages or []) + [welcome_msg],
             "last_verdict": None,
             "adversarial_triggered": False,
             "error_message": "",
@@ -271,7 +272,10 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         logger.info("LeetCode data detected — skipping LLM generation")
         _progress(sid, "📥 使用 LeetCode 题目…")
         writer("📥 使用 LeetCode 题目…")
-        return _generate_from_leetcode(sid, lc_data, progress_cb)
+        return _generate_from_leetcode(
+            sid, lc_data,
+            existing_tutor_messages=state.tutor_messages if state.mode == "agent" else None,
+        )
 
     # ── 路径 B：正常 LLM 生成（现有流程）──
     problem_dict: dict[str, Any] | None = None
@@ -412,13 +416,15 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     # ── 返回 state — graph 路由到 wait_for_submit_node ──
     # The background test generation is triggered by the API layer
     # after _graph.invoke() returns (see _run_generation in api/main.py)
+    # Agent 模式：保留出题前对话（连续对话），普通模式仅 welcome
+    _tutor_msgs = (list(state.tutor_messages) if state.mode == "agent" else []) + [welcome_msg]
     update: dict[str, Any] = {
         "problem": meta,
         "status": "awaiting_submit",
         "phase": SessionPhase.solving,
         "submissions": [],
         "hint_level": 0,
-        "tutor_messages": [welcome_msg],
+        "tutor_messages": _tutor_msgs,
         "last_verdict": None,
         "adversarial_triggered": False,
         "error_message": "",

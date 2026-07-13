@@ -93,7 +93,7 @@ def generate_problem(
     topic: str,
     difficulty: str,
     model_alias: str = "agnes",
-    max_retries: int = 2,
+    max_retries: int = 1,
 ) -> Problem:
     """Generate a coding problem with structured output.
 
@@ -109,7 +109,9 @@ def generate_problem(
         A fully populated Problem instance.
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
-    llm = get_llm(model_alias, temperature=0.2)
+    # 限制输出长度，避免模型膨胀触 16384 token 硬上限被截断（修复 Bug7）
+    # temperature 调至 0.7 增加多样性，减少 AC 题目重复出题
+    llm = get_llm(model_alias, temperature=0.7, max_tokens=4096)
     structured_llm = llm.with_structured_output(Problem)
 
     prompt = ChatPromptTemplate.from_messages([
@@ -119,6 +121,7 @@ def generate_problem(
 
     chain = prompt | structured_llm
 
+    problem: Problem | None = None
     for attempt in range(max_retries + 1):
         logger.info("LLM call attempt %d/%d …", attempt + 1, max_retries + 1)
 
@@ -135,6 +138,8 @@ def generate_problem(
 
         logger.warning("Self-verification failed on attempt %d — retrying", attempt + 1)
 
+    if problem is None:
+        raise RuntimeError("all generation attempts failed (LLM output unusable)")
     # 即使验证失败也返回最后一次尝试的结果
     logger.warning("Max retries reached — returning last generated problem")
     return problem

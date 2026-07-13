@@ -15,7 +15,9 @@ async def list_problems():
     from code_tutor_agent.db.database import get_all_problem_ids, get_problems_by_ids
 
     ids = get_all_problem_ids()
-    problems = get_problems_by_ids(ids[-50:])
+    # Bug 6: 返回全量题目（按 id 升序），不要用 ids[-50:] 截断，
+    # 否则 id 较小的题目（如 1~22）在「从题库选」tab 里看不到。
+    problems = get_problems_by_ids(ids)
     return {"problems": [
         {
             "id": p["id"],

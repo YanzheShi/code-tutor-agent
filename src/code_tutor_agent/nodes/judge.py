@@ -84,15 +84,7 @@ def judge_node(state: SessionState) -> Command:
     base_results = run_solution(last_sub.code, test_cases, timeout=BASE_TIMEOUT)
 
     base_verdict = _collapse_verdict(base_results)
-    base_result = JudgeResult(
-        status=base_verdict,
-        phase="base",
-        detail=next(
-            (r.detail for r in base_results if r.status != "Passed"),
-            f"{sum(1 for r in base_results if r.status == 'Passed')}/{len(base_results)} passed",
-        ),
-        runtime_ms=sum(r.runtime_ms for r in base_results),
-    )
+    base_result = _build_base_result(base_results)
     last_sub.judge_results.append(base_result)
     logger.info("Phase 1 → %s (%d/%d)", base_verdict,
                 sum(1 for r in base_results if r.status == "Passed"), len(base_results))
@@ -118,15 +110,7 @@ def judge_node(state: SessionState) -> Command:
             base_results = run_solution(last_sub.code, test_cases, timeout=BASE_TIMEOUT)
             base_verdict = _collapse_verdict(base_results)
             # Replace the judge result with new results from full suite
-            last_sub.judge_results[-1] = JudgeResult(
-                status=base_verdict,
-                phase="base",
-                detail=next(
-                    (r.detail for r in base_results if r.status != "Passed"),
-                    f"{sum(1 for r in base_results if r.status == 'Passed')}/{len(base_results)} passed",
-                ),
-                runtime_ms=sum(r.runtime_ms for r in base_results),
-            )
+            last_sub.judge_results[-1] = _build_base_result(base_results)
             if base_verdict != "AC":
                 logger.info("Full-suite Phase 1 → %s — routing to tutor", base_verdict)
                 return _route_to_tutor(state, last_sub, base_verdict, "base_fail")
@@ -180,6 +164,36 @@ def judge_node(state: SessionState) -> Command:
 # ──────────────────────────────────────────────
 #  Helpers
 # ──────────────────────────────────────────────
+
+
+def _build_base_result(base_results: list) -> JudgeResult:
+    """Build the base-phase JudgeResult, attaching the first failing test case.
+
+    For a failing submission, the structured ``input_args`` / ``expected_output``
+    / ``actual_output`` of the first non-passed case are carried so the
+    frontend can render an "expected vs actual" diff panel (Bug 2).
+    """
+    first_fail = next((r for r in base_results if r.status != "Passed"), None)
+    if first_fail is not None:
+        input_args = list(getattr(first_fail, "input_args", []) or [])
+        expected_output = getattr(first_fail, "expected_output", "") or ""
+        actual_output = getattr(first_fail, "actual_output", "") or ""
+        detail = first_fail.detail
+    else:
+        input_args = []
+        expected_output = ""
+        actual_output = ""
+        detail = f"{sum(1 for r in base_results if r.status == 'Passed')}/{len(base_results)} passed"
+
+    return JudgeResult(
+        status=_collapse_verdict(base_results),
+        phase="base",
+        detail=detail,
+        runtime_ms=sum(r.runtime_ms for r in base_results),
+        input_args=input_args,
+        expected_output=expected_output,
+        actual_output=actual_output,
+    )
 
 
 def _normalise_verdict(status: str) -> str:

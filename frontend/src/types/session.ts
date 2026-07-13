@@ -92,4 +92,15 @@ export type JudgeResult = {
   status: string;
   detail: string;
   runtime_ms: number;
+  /** Bug 2: 首个失败用例的结构化字段，供「期望 vs 实际」对比面板 */
+  input_args?: string[];
+  expected_output?: string;
+  actual_output?: string;
+};
+
+/** 失败用例对比数据（从最后一条 submission 的 base 阶段取） */
+export type FailedCase = {
+  input_args: string[];
+  expected_output: string;
+  actual_output: string;
 };

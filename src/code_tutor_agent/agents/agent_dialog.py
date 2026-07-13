@@ -22,6 +22,26 @@ from code_tutor_agent.schemas.state import Message
 
 logger = logging.getLogger(__name__)
 
+# ── Tag enum → 中文名称映射（与 planner.py 的 _TAG_TO_TOPIC 一致）──
+_TAG_CN: dict[str, str] = {
+    "array_basics": "数组基础",
+    "array_two_pointers": "双指针",
+    "array_sliding_window": "滑动窗口",
+    "array_binary_search": "二分查找",
+    "array_prefix_sum": "前缀和",
+    "array_sorting": "排序",
+    "linkedlist_basics": "链表基础",
+    "linkedlist_cycle": "环形链表",
+    "stack_basics": "栈",
+    "queue_deque": "队列",
+    "dp_1d": "一维动态规划",
+    "dp_multidim": "多维动态规划",
+    "string_basics": "字符串",
+    "backtrack": "回溯",
+    "greedy": "贪心",
+    "bit_manip": "位运算",
+}
+
 # ──────────────────────────────────────────────
 #  结构化输出模型
 # ──────────────────────────────────────────────
@@ -46,14 +66,18 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 1. **知识点（topic）**：如 "数组"、"双指针"、"动态规划" 等
 2. **难度（difficulty）**：easy / medium / hard
 
+{profile_section}
+
 ## 对话策略
 - 第一轮：友好地询问用户想练什么类型，给一些选项引导
 - 后续轮次：根据回答深入追问，逐步缩小范围
   - 用户说 "数组" → "数组的哪方面？遍历、排序、双指针、还是滑动窗口？"
+  - 用户说 "动态规划" 或 "DP" → topic 直接设为 "动态规划"，追问难度
   - 用户说 "随便" → 推荐几个方向让用户选
+  - 用户说 "给我出题" 或 "出题吧" → 若 topic 已明确则追问难度，若 topic+难度都明确则 is_ready=true
   - 用户 topic 明确后 → 追问难度："你想从 Easy 开始热身，还是直接挑战 Medium？"
   - 用户说 "难度无所谓" → "那我建议从 Medium 开始，既有挑战又不会太难"
-  - 用户主动说 "给我出题" 且 topic+难度都明确 → 直接出题
+  - 用户主动指定 topic 和 difficulty（如 "简单动态规划"、"中等难度的数组题"）→ 直接设置 is_ready=true
 - 用中文交流，语气友好、鼓励
 - 不要急于一次确定所有信息，享受对话过程
 
@@ -68,15 +92,17 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 
 ## 输出 JSON
 ```json
-{
+{{
   "topic": "确定的知识点或空字符串",
   "difficulty": "easy/medium/hard 或空字符串",
   "is_ready": true/false,
   "next_message": "给用户的下一轮对话消息（仅文本，不含JSON）"
-}
+}}
 ```"""
 
 CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了解用户想练习什么类型的算法题。
+
+{profile_section}
 
 ## 对话策略
 - 第一轮：友好地询问用户想练什么类型
@@ -104,12 +130,186 @@ CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了�
 # ──────────────────────────────────────────────
 
 
+def _build_profile_summary() -> str:
+    """Build a Chinese text summary of the user's profile weaknesses.
+
+    Reads the v2 per-tag profile and formats weak/forgotten/unstable tags
+    for injection into dialog prompts. Returns empty string if no profile.
+    """
+    try:
+        from code_tutor_agent.db.database import get_user_profile_v2, get_profile
+    except Exception:
+        logger.debug("Cannot import profile functions")
+        return ""
+
+    # Try v2 per-tag profile first
+    try:
+        profile = get_user_profile_v2()
+    except Exception:
+        profile = None
+
+    if not isinstance(profile, dict):
+        return ""
+
+    prof: dict = profile.get("prof") or {}
+    forget: dict = profile.get("forget") or {}
+    stab: dict = profile.get("stab") or {}
+
+    # Build scored weaknesses
+    weak_tags: list[tuple[str, str, str]] = []  # (tag, cn_name, reason)
+    for tag, p in prof.items():
+        try:
+            p = float(p)
+        except (TypeError, ValueError):
+            continue
+        cn = _TAG_CN.get(tag, tag)
+        if p < 0.3:
+            weak_tags.append((tag, cn, f"熟练度很低(prof={p:.2f})"))
+        elif p < 0.5:
+            weak_tags.append((tag, cn, f"不够熟练(prof={p:.2f})"))
+        f = forget.get(tag) or {}
+        decay = float(f.get("decay", 1.0))
+        if decay < 0.5:
+            weak_tags.append((tag, cn, f"遗忘严重(decay={decay:.2f})"))
+        s = stab.get(tag) or {}
+        variance = float(s.get("variance", 0.0))
+        if variance > 0.5:
+            weak_tags.append((tag, cn, f"稳定性差(variance={variance:.2f})"))
+
+    if not weak_tags:
+        # Try legacy profile
+        try:
+            legacy = get_profile()
+            if legacy and legacy.attempts > 0:
+                return (
+                    "## 用户画像\n"
+                    f"总练习次数: {legacy.attempts} 次\n"
+                    f"综合熟练度: {legacy.proficiency:.0%}\n"
+                    "用户有一定练习经验，可引导其选择感兴趣的 topic。\n"
+                )
+        except Exception:
+            pass
+        return ""
+
+    # Deduplicate and pick top 5
+    seen: set[str] = set()
+    unique: list[str] = []
+    for _, cn, reason in weak_tags:
+        if cn not in seen:
+            seen.add(cn)
+            unique.append(f"- **{cn}**：{reason}")
+            if len(unique) >= 5:
+                break
+
+    if not unique:
+        return ""
+
+    parts: list[str] = [
+        "## 用户画像（弱项分析）",
+        "以下是根据历史练习数据识别出的用户薄弱知识点，在导引话题时可优先推荐这些方向：",
+        *unique,
+        "在对话中，如果用户说\"随便\"或不确定，应优先推荐上述弱项中最相关的方向。",
+    ]
+    return "\n".join(parts)
+
+
+def _to_msg_dict(msg) -> dict:
+    """Normalize a Message object or plain dict into a consistent dict with 'role' and 'content'."""
+    if isinstance(msg, dict):
+        return {"role": msg.get("role", "tutor"), "content": msg.get("content", "")}
+    if hasattr(msg, "role") and hasattr(msg, "content"):
+        return {"role": msg.role, "content": msg.content}
+    # Last resort: treat as string
+    return {"role": "tutor", "content": str(msg)}
+
+
 def _build_transcript(history: list[Message]) -> str:
     lines = []
     for msg in history:
-        prefix = "用户" if msg.role == "user" else "AI导师"
-        lines.append(f"{prefix}: {msg.content}")
+        d = _to_msg_dict(msg)
+        prefix = "用户" if d["role"] == "user" else "AI导师"
+        lines.append(f"{prefix}: {d['content']}")
     return "\n".join(lines)
+
+
+def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogIntent:
+    """Fallback when structured output fails: raw LLM call with manual JSON parse.
+
+    Tries:
+        1. Raw LLM + JSON.parse
+        2. Regex extraction from transcript if LLM also fails
+    """
+    last_user_msg = ""
+    for line in reversed(transcript.split("\n")):
+        if line.startswith("用户:"):
+            last_user_msg = line[3:].strip()
+            break
+
+    # 先用 LLM 非结构化请求提取意图
+    try:
+        llm = get_llm("agnes", temperature=0.3, max_tokens=512)
+        prompt = (
+            "你是 AI 编程导师。根据以下对话，提取用户的选题意图。\n\n"
+            f"## 对话历史\n{transcript}\n\n"
+            "请严格输出如下 JSON（不要输出其他内容）：\n"
+            '{"topic": "知识点或空", "difficulty": "easy/medium/hard或空", "is_ready": false, "next_message": "你的回复"}\n\n'
+            "规则：\n"
+            '- 若用户说了具体方向（数组/链表/动态规划/二叉树等），topic 填入该方向\n'
+            '- 若用户没有明确 topic，topic 留空 ，引导追问\n'
+            '- 若 topic + difficulty 都明确，is_ready=true\n'
+            '- next_message 是给用户的自然语言回复\n'
+        )
+        resp = llm.invoke([("human", prompt)])
+        text = resp.content if hasattr(resp, "content") else str(resp)
+        # 提取 JSON
+        json_match = re.search(r'\{[\s\S]*"topic"[\s\S]*"next_message"[\s\S]*\}', text)
+        if json_match:
+            data = json.loads(json_match.group())
+            return DialogIntent(**data)
+    except Exception as exc:
+        logger.warning("Fallback LLM parse failed: %s", exc)
+
+    # 最终兜底：用正则从用户消息中提取 topic
+    known_topics = [
+        "动态规划", "数组", "链表", "二叉树", "字符串", "回溯", "贪心",
+        "双指针", "滑动窗口", "二分查找", "栈", "队列", "哈希表", "排序",
+        "递归", "前缀和", "位运算", "图", "堆", "并查集",
+    ]
+    found_topic = ""
+    for topic in known_topics:
+        if topic in last_user_msg or topic in transcript:
+            found_topic = topic
+            break
+
+    if found_topic:
+        # 检测难度
+        diff = ""
+        if any(w in last_user_msg for w in ["简单", "easy", "容易", "入门"]):
+            diff = "easy"
+        elif any(w in last_user_msg for w in ["困难", "hard", "难"]):
+            diff = "hard"
+        elif any(w in last_user_msg for w in ["中等", "medium"]):
+            diff = "medium"
+
+        if diff:
+            _diff_label = {"easy": "简单", "medium": "中等", "hard": "困难"}.get(diff, diff)
+            return DialogIntent(
+                topic=found_topic,
+                difficulty=diff,
+                is_ready=True,
+                next_message=f"好的！我来为你准备一道 **{found_topic}** 方向、**{_diff_label}** 难度的题。请稍等 🚀",
+            )
+        else:
+            return DialogIntent(
+                topic=found_topic,
+                is_ready=False,
+                next_message=f"明白了，你想练习 **{found_topic}** 方向！你想从 Easy（简单）开始热身，还是直接挑战 Medium（中等）？",
+            )
+
+    logger.warning("All fallback methods failed — returning generic prompt")
+    return DialogIntent(
+        next_message="我没理解清楚，能再详细说说你想练什么类型的题吗？比如数组、动态规划、链表……",
+    )
 
 
 def analyze_user_intent(
@@ -117,6 +317,8 @@ def analyze_user_intent(
     model_alias: str = "agnes",
 ) -> DialogIntent:
     """Synchronous structured analysis — reliable JSON via with_structured_output.
+
+    Falls back to raw LLM + regex parsing if structured output fails.
 
     Args:
         history: Conversation history.
@@ -127,24 +329,28 @@ def analyze_user_intent(
     """
     logger.info("▶ analyze_user_intent() — %d messages", len(history))
     transcript = _build_transcript(history)
+    profile_summary = _build_profile_summary()
 
     try:
         llm = get_llm(model_alias, temperature=0.7)
         structured_llm = llm.with_structured_output(DialogIntent)
-        user_prompt = f"## 对话历史\n\n{transcript}\n\n请分析用户的意图。"
+        system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
+        user_prompt = (
+            f"## 对话历史\n\n{transcript}\n\n"
+            + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
+            + "请分析用户的意图。"
+        )
 
         result: DialogIntent = structured_llm.invoke([
-            ("system", AGENT_DIALOG_SYSTEM),
+            ("system", system_prompt),
             ("human", user_prompt),
         ])
         logger.info("intent → topic=%s diff=%s ready=%s",
                      result.topic or "?", result.difficulty or "?", result.is_ready)
         return result
     except Exception as exc:
-        logger.warning("LLM structured output failed: %s", exc)
-        return DialogIntent(
-            next_message="我没理解清楚，能再详细说说你想练什么类型的题吗？",
-        )
+        logger.warning("LLM structured output failed, trying fallback: %s", exc)
+        return _fallback_parse_intent(transcript, profile_summary)
 
 
 async def stream_dialog_response(
@@ -164,10 +370,15 @@ async def stream_dialog_response(
         Tokens of the natural language response.
     """
     transcript = _build_transcript(history)
+    profile_summary = _build_profile_summary()
 
     # 构建自然对话 prompt（不输出 JSON）
-    system = CHAT_STREAM_SYSTEM
-    user_prompt = f"## 对话历史\n\n{transcript}\n\n## 当前消息\n{history[-1].content if history else ''}\n\n请回复。"
+    system = CHAT_STREAM_SYSTEM.format(profile_section=profile_summary or "")
+    user_prompt = (
+        f"## 对话历史\n\n{transcript}\n\n"
+        + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
+        + f"## 当前消息\n{history[-1].content if history else ''}\n\n请回复。"
+    )
 
     try:
         llm = get_llm(model_alias, temperature=0.7)
@@ -189,6 +400,23 @@ async def stream_dialog_response(
 
 
 def build_initial_message() -> Message:
+    profile_summary = _build_profile_summary()
+    if profile_summary:
+        # 从画像中提取弱项列表，拼接到欢迎消息中
+        weak_names: list[str] = []
+        for line in profile_summary.split("\n"):
+            stripped = line.strip()
+            if stripped.startswith("- **") and "**：" in stripped:
+                name = stripped.split("**")[1]
+                weak_names.append(name)
+        if weak_names:
+            suggestions = "、".join(weak_names[:3])
+            return Message(
+                role="tutor",
+                content=f"你好！我是你的 AI 编程导师 🧑‍🏫\n\n"
+                        f"我注意到你的薄弱项有：**{suggestions}**。"
+                        f"今天想针对这些方向练习，还是试试别的知识点？",
+            )
     return Message(
         role="tutor",
         content="你好！我是你的 AI 编程导师 🧑‍🏫 今天想练习什么类型的算法题？"

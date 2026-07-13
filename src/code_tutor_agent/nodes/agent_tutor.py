@@ -45,14 +45,15 @@ def agent_tutor_node(state: SessionState) -> Command:
     cycle = state.judge_cycle
     logger.info("▶ agent_tutor_node() — verdict=%s cycle=%d", verdict, cycle)
 
-    # ── AC: 全部通过 → 完成 ──
+    # ── AC: 全部通过 → 完成（设 phase=reviewing，前端根据此状态显示"下一题"按钮）──
     if verdict == "AC":
-        logger.info("AC on cycle %d — session done", cycle)
+        logger.info("AC on cycle %d — session done, waiting for user to request next problem", cycle)
         return Command(
             update={
                 "status": "done",
+                "phase": "reviewing",
             },
-            goto="planner_node",
+            goto="__end__",
         )
 
     # ── 未通过 → 循环等待用户修改 ──

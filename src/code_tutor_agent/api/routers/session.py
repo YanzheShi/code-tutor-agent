@@ -13,7 +13,7 @@ from code_tutor_agent.api.serializers import serialize_state, empty_state
 from code_tutor_agent.api.services.generation import run_generation, run_fast_path
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
-from code_tutor_agent.schemas.state import SessionState, ProblemMeta
+from code_tutor_agent.schemas.state import SessionState, ProblemMeta, Message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -190,9 +190,10 @@ async def create_session_with_existing(problem_id: int):
 async def next_problem(sid: str, body: NextProblemReq):
     """Continue to the next problem within the same session.
 
-    Uses update_state(as_node="critic_node") to route the graph through
-    critic flush → planner → generator, preserving the generation
-    self-verification chain.
+    - Agent mode: re-enter the tutor dialog (preserve history, hide the
+      problem).  No new problem is generated until the user and tutor
+      agree on a new topic/difficulty in chat (Bug 5/8/9).
+    - Other modes: route through critic → planner → generator (existing).
     """
     graph = get_graph()
     config = {"configurable": {"thread_id": sid}}
@@ -203,7 +204,74 @@ async def next_problem(sid: str, body: NextProblemReq):
         raise HTTPException(404, f"Session {sid} not found")
 
     vals = state.values
+    mode = vals.get("mode", "practice")
 
+    # ── Agent mode: re-enter the tutor dialog (keep history, no new problem) ──
+    if mode == "agent":
+        from code_tutor_agent.progress import _generation_progress
+        _generation_progress[sid] = ["回到与导师的对话…"]
+        # 清掉题目与出题参数，保留完整对话历史；
+        # as_node 让 graph 干净停在 dialog（清掉 solving 态的 wait_for_submit 中断）
+        #
+        # 重要：update_state(as_node="agent_dialog_node") 后 graph.invoke(None)
+        # 是空操作（agent_dialog_node → __end__，无后续节点），必须在本层直接
+        # 构建"下一题"引导消息并写入 tutor_messages，不能依赖 agent_dialog_node 生成
+        _full_history = vals.get("tutor_messages") or vals.get("agent_dialog_history") or []
+        # 统一转为 Message 对象，避免混入 dict 导致 _build_transcript 中 msg.role 报错
+        _norm_history: list[Message] = []
+        for m in _full_history:
+            if isinstance(m, Message):
+                _norm_history.append(m)
+            elif isinstance(m, dict):
+                _norm_history.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
+            else:
+                _norm_history.append(Message(role="tutor", content=str(m)))
+        _updated_history = _norm_history + [Message(
+            role="tutor",
+            content=(
+                "上一题已完成！接下来想练习什么类型的算法题？"
+                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
+            ),
+        )]
+        graph.update_state(config, {
+            "status": "dialog",
+            "problem": None,
+            "agent_dialog_complete": False,
+            "agent_dialog_history": _updated_history,
+            "tutor_messages": _updated_history,
+            "topic": "",
+            "difficulty": "",
+            "phase": "dialog",
+            "last_verdict": None,
+            "judge_report": None,
+            "hint_level": 0,
+            "pending_abandon": False,
+            "next_preference": None,
+        }, as_node="agent_dialog_node")
+
+        # invoke(None) 在这里是空操作，但保留以维持 checkpointer 一致性
+        await asyncio.to_thread(graph.invoke, None, config)
+
+        new_state = graph.get_state(config)
+        new_vals = new_state.values
+        # 返回完整连续对话（含出题前 + 做题中 + 反馈 + 下一题引导）
+        history = new_vals.get("tutor_messages") or new_vals.get("agent_dialog_history") or []
+
+        def _ser(m):
+            return m.model_dump() if hasattr(m, "model_dump") else (
+                m if isinstance(m, dict) else {"role": "tutor", "content": str(m)}
+            )
+
+        logger.info("Agent re-enter dialog — history=%d", len(history))
+        return NextProblemResp(
+            session_id=sid,
+            problem=None,
+            phase="dialog",
+            hint_level=0,
+            tutor_messages=[_ser(m) for m in history],
+        )
+
+    # ── Normal modes: critic flush → planner → generator (existing flow) ──
     # 1. Check if current problem has a terminal verdict
     has_terminal = (
         vals.get("last_verdict") in ("AC", "WA")
@@ -221,10 +289,10 @@ async def next_problem(sid: str, body: NextProblemReq):
         "next_preference": body.preference,
     }, as_node="critic_node")
 
-    # 3. Invoke — generator self-verify is sync, run in threadpool
+    # 4. Invoke — generator self-verify is sync, run in threadpool
     await asyncio.to_thread(graph.invoke, None, config)
 
-    # 4. Read new state
+    # 5. Read new state
     new_state = graph.get_state(config)
     new_vals = new_state.values
 

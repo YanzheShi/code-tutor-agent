@@ -60,6 +60,23 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
               ))}
             </div>
 
+            {/* WA 期望 vs 实际对比 */}
+            {s.verdict !== 'AC' && s.judge_results?.some(j => j.phase === 'base' && j.status !== 'AC') && (() => {
+              const fail = s.judge_results?.find(j => j.phase === 'base' && j.status !== 'AC');
+              const hasInput = (fail?.input_args?.length ?? 0) > 0;
+              const hasExpected = !!fail?.expected_output;
+              const hasActual = !!fail?.actual_output;
+              if (!hasInput && !hasExpected && !hasActual) return null;
+              return (
+                <div className="rounded border border-ct-warn/30 bg-amber-900/10 p-2 mb-2 text-xs space-y-1">
+                  <span className="font-semibold text-ct-warn">首个失败用例对比</span>
+                  {hasInput && <div><span className="text-ct-muted">输入: </span><code className="text-ct-text">{JSON.stringify(fail!.input_args)}</code></div>}
+                  {hasExpected && <div><span className="text-ct-muted">期望: </span><code className="text-ct-success">{fail!.expected_output}</code></div>}
+                  {hasActual && <div><span className="text-ct-muted">实际: </span><code className="text-ct-error">{fail!.actual_output}</code></div>}
+                </div>
+              );
+            })()}
+
             {/* 代码区：展开显示全文，未展开截断 */}
             <pre
               className={'rounded bg-slate-900/50 p-2 text-ct-muted text-xs overflow-x-auto ' + (isExpanded ? 'max-h-none' : 'max-h-24 overflow-y-hidden')}
