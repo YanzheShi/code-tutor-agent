@@ -1,22 +1,59 @@
-"""Session router — create session, submit code, by-problem, state, reference."""
+"""Session router — create, list, delete session, submit code, by-problem, state, reference."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import sqlite3
+import time
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from langgraph.types import Command
 
 from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.api.serializers import serialize_state, empty_state
 from code_tutor_agent.api.services.generation import run_generation, run_fast_path
+from code_tutor_agent.config import get_checkpoint_db_path
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
 from code_tutor_agent.schemas.state import SessionState, ProblemMeta, Message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# ── checkpointer 辅助 ──
+
+CHECKPOINT_DB = get_checkpoint_db_path()
+
+
+def _checkpointer_conn() -> sqlite3.Connection | None:
+    """获取 checkpointer 底层的 SQLite 连接，用于直查/直删。"""
+    try:
+        graph = get_graph()
+        cp = graph.checkpointer
+        if hasattr(cp, "conn"):
+            return cp.conn
+    except RuntimeError:
+        pass
+    return None
+
+
+def _session_exists(thread_id: str) -> bool:
+    """检查 checkpoints.db 中是否存在该 thread_id。"""
+    conn = _checkpointer_conn()
+    if not conn:
+        return False
+    try:
+        cur = conn.execute(
+            "SELECT 1 FROM checkpoints WHERE thread_id = ? LIMIT 1",
+            (thread_id,),
+        )
+        return cur.fetchone() is not None
+    except Exception:
+        return False
 
 
 @router.post("")
@@ -41,9 +78,171 @@ async def create_session(body: CreateSessionRequest | None = None):
     if body and body.leetcode and body.leetcode.get("parsed_test_cases"):
         return run_fast_path(sid, body.model_dump() if hasattr(body, "model_dump") else body, graph, config)
 
+    # 记录活跃时间（TTL 清理用）
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
+
     _generation_progress[sid] = []
     asyncio.create_task(run_generation(sid, initial_dict))
     return {"session_id": sid, "status": "generating"}
+
+
+# ── 会话列表 / 删除 ──
+
+
+@router.get("/list")
+async def list_sessions(
+    limit: int = Query(default=50, ge=1, le=200, description="最多返回条数"),
+):
+    """列出所有持久化的会话（按最近活跃倒序）。
+
+    返回每个会话的 session_id、状态摘要和最后活跃时间。
+    依赖于 checkpoints.db 中的数据。
+    """
+    conn = _checkpointer_conn()
+    if not conn:
+        return {"sessions": [], "total": 0}
+
+    try:
+        # 每个 thread 取最新一条 checkpoint 的 metadata
+        rows = conn.execute(
+            """
+            SELECT
+                thread_id,
+                checkpoint,
+                metadata,
+                MAX(ROWID) AS _rowid
+            FROM checkpoints
+            GROUP BY thread_id
+            ORDER BY _rowid DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+        sessions: list[dict[str, Any]] = []
+        for row in rows:
+            thread_id = row[0]
+            checkpoint_blob = row[1]
+            metadata_blob = row[2]
+
+            # 解析 checkpoint blob → 提取状态字段
+            info = {
+                "session_id": thread_id,
+                "status": "unknown",
+                "topic": "",
+                "difficulty": "",
+                "mode": "practice",
+                "problem_title": "",
+                "last_verdict": "",
+            }
+
+            try:
+                if checkpoint_blob:
+                    # LangGraph checkpoint 序列化格式
+                    cp = json.loads(checkpoint_blob)
+                    ch_values = cp.get("channel_values", {})
+                    # channel_values 的值通常是 BLOB（base64 编码的 pickled dict）
+                    # 尝试从 channel_values 中提取关键字段
+                    for key in ("status", "topic", "difficulty", "mode",
+                                "last_verdict", "session_id"):
+                        if key in ch_values:
+                            info[key] = str(ch_values[key])
+
+                    # 尝试提取 problem title
+                    problem = ch_values.get("problem", "")
+                    if problem and isinstance(problem, str) and len(problem) > 5:
+                        info["problem_title"] = problem[:80]
+            except Exception:
+                pass
+
+            sessions.append(info)
+
+        return {"sessions": sessions, "total": len(sessions)}
+
+    except Exception as exc:
+        logger.exception("list_sessions failed")
+        raise HTTPException(500, f"Failed to list sessions: {exc}")
+
+
+@router.delete("/{sid}")
+async def delete_session(sid: str):
+    """删除一个会话及其所有 checkpoint 数据。
+
+    清理内容：
+    - LangGraph checkpointer 中该 thread_id 的所有 checkpoint
+    - 内存中的进度消息（_generation_progress）
+    """
+    graph = get_graph()
+
+    if not _session_exists(sid):
+        raise HTTPException(404, f"Session {sid} not found")
+
+    try:
+        checkpointer = graph.checkpointer
+        if hasattr(checkpointer, "delete_thread"):
+            checkpointer.delete_thread(sid)
+            logger.info("Deleted thread %s from checkpointer", sid)
+
+        _generation_progress.pop(sid, None)
+
+        # 清理活跃时间记录
+        try:
+            from code_tutor_agent.db.database import delete_session_activity
+            delete_session_activity(sid)
+        except Exception as exc:
+            logger.warning("delete_session_activity failed for %s: %s", sid, exc)
+
+        return {"session_id": sid, "deleted": True}
+    except Exception as exc:
+        logger.exception("Failed to delete session %s", sid)
+        raise HTTPException(500, f"Failed to delete session: {exc}")
+
+
+@router.post("/cleanup")
+async def cleanup_sessions(
+    max_age_hours: int = Query(default=168, ge=1, description="清理多少小时前的会话（默认 7 天）"),
+    dry_run: bool = Query(default=True, description="仅预览，不实际删除"),
+):
+    """清理过期会话的 checkpoint 数据。
+
+    基于 session_activity 表的 last_active_at 时间戳精确判断过期，
+    不再使用 ROWID 近似。
+    """
+    from code_tutor_agent.db.database import get_stale_sessions, delete_session_activity
+
+    stale = get_stale_sessions(max_age_hours)
+
+    if dry_run:
+        return {
+            "cleaned": 0,
+            "dry_run": True,
+            "stale_count": len(stale),
+            "stale_sessions": stale[:20],  # 最多预览 20 个
+            "message": f"Dry run: 发现 {len(stale)} 个过期会话（>{max_age_hours}h 未活跃）",
+        }
+
+    graph = get_graph()
+    checkpointer = graph.checkpointer
+    cleaned = 0
+    errors = 0
+
+    for tid in stale:
+        try:
+            if hasattr(checkpointer, "delete_thread"):
+                checkpointer.delete_thread(tid)
+            delete_session_activity(tid)
+            _generation_progress.pop(tid, None)
+            cleaned += 1
+        except Exception as exc:
+            logger.warning("Cleanup failed for session %s: %s", tid, exc)
+            errors += 1
+
+    logger.info("Cleanup: %d deleted, %d errors, %d total stale", cleaned, errors, len(stale))
+    return {"cleaned": cleaned, "errors": errors, "dry_run": False, "stale_count": len(stale)}
 
 
 @router.post("/{sid}/submit", response_model=SubmitResponse)
@@ -59,6 +258,13 @@ async def submit_code(sid: str, body: SubmitRequest):
 
     if state.values.get("status") == "done":
         raise HTTPException(400, "Session is already done")
+
+    # 记录活跃时间
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
 
     logger.info("POST /session/%s/submit → code=%d chars", sid, len(body.code))
 
@@ -81,7 +287,7 @@ async def submit_code(sid: str, body: SubmitRequest):
                     r.model_dump() if hasattr(r, "model_dump") else r
                     for r in raw_results
                 ]
-                last_row_id = save_submission(pid, body.code, verdict, serialised)
+                last_row_id = save_submission(pid, body.code, verdict, serialised, session_id=sid)
                 logger.info("saved submission successfully lastrowid,  %s", last_row_id)
     except Exception as exc:
         logger.warning("Failed to persist submission: %s", exc)
@@ -103,9 +309,22 @@ async def submit_code(sid: str, body: SubmitRequest):
 
 @router.get("/{sid}/state", response_model=SessionStateResponse)
 async def get_session_state(sid: str):
-    """Poll the current session state."""
+    """Poll the current session state.
+
+    如果 session 不存在则返回 404，前端可据此区分"生成中"和"无效会话"。
+    """
     graph = get_graph()
     config = {"configurable": {"thread_id": sid}}
+
+    if not _session_exists(sid):
+        raise HTTPException(404, f"Session {sid} not found")
+
+    # 记录活跃时间（TTL 清理用）
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
 
     try:
         state = graph.get_state(config)
@@ -203,21 +422,39 @@ async def next_problem(sid: str, body: NextProblemReq):
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
+    # 记录活跃时间
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
+
     vals = state.values
     mode = vals.get("mode", "practice")
 
-    # ── Agent mode: re-enter the tutor dialog (keep history, no new problem) ──
+    # ── Agent mode: re-enter the tutor dialog with cross-problem summary ──
+    #
+    # 上下文管理 v2：
+    #   - 不再全量保留历史对话（第 N 题时不再包含前 N-1 题的完整 transcript）
+    #   - 换题时生成跨题摘要存入 context_summary
+    #   - 同时构建下一题引导消息，重置对话到初始状态
+    #
+    # 效果：第 3 题时 LLM 看到的上下文 = 跨题摘要(~300 token) + 当前题对话(~3000 token)
+    #      而不是旧方案的 全量历史(~15000+ token) + 当前题对话
     if mode == "agent":
+        from code_tutor_agent.context_manager import build_cross_problem_context
         from code_tutor_agent.progress import _generation_progress
+
         _generation_progress[sid] = ["回到与导师的对话…"]
-        # 清掉题目与出题参数，保留完整对话历史；
-        # as_node 让 graph 干净停在 dialog（清掉 solving 态的 wait_for_submit 中断）
-        #
-        # 重要：update_state(as_node="agent_dialog_node") 后 graph.invoke(None)
-        # 是空操作（agent_dialog_node → __end__，无后续节点），必须在本层直接
-        # 构建"下一题"引导消息并写入 tutor_messages，不能依赖 agent_dialog_node 生成
+
+        # ── 1. 构建跨题上下文摘要 ──
+        # 从 problem_history 中提取每道题的结构化结果，不保留对话原文
+        problem_history = vals.get("problem_history") or []
+        cross_context = build_cross_problem_context(problem_history)
+
+        # ── 2. 生成本题对话摘要（如果有对话内容） ──
         _full_history = vals.get("tutor_messages") or vals.get("agent_dialog_history") or []
-        # 统一转为 Message 对象，避免混入 dict 导致 _build_transcript 中 msg.role 报错
+        # 统一转为 Message 对象，避免混入 dict 导致后续处理报错
         _norm_history: list[Message] = []
         for m in _full_history:
             if isinstance(m, Message):
@@ -226,19 +463,45 @@ async def next_problem(sid: str, body: NextProblemReq):
                 _norm_history.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
             else:
                 _norm_history.append(Message(role="tutor", content=str(m)))
-        _updated_history = _norm_history + [Message(
+
+        # 异步生成本题对话摘要
+        dialogue_summary = ""
+        if problem_history:
+            try:
+                from code_tutor_agent.context_manager import generate_summary
+                last_record = problem_history[-1] if problem_history else None
+                dialogue_summary = generate_summary(_norm_history, last_record)
+            except Exception as exc:
+                logger.warning("Failed to generate dialogue summary: %s", exc)
+
+        # ── 3. 合并跨题上下文 + 本提摘要 → context_summary ──
+        if dialogue_summary:
+            new_summary = f"{cross_context}\n\n## 上一题对话要点\n{dialogue_summary}" if cross_context else dialogue_summary
+        else:
+            new_summary = cross_context or None
+
+        # ── 4. 构造"下一题"引导消息，重置对话 ──
+        # 只保留一条引导消息作为对话起点，历史对话全部由 summary 承载
+        guide_msg = Message(
             role="tutor",
             content=(
                 "上一题已完成！接下来想练习什么类型的算法题？"
                 "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
             ),
-        )]
+        )
+
+        # tutor_messages 不清空：保留完整对话历史供前端展示，
+        # 追加下一题引导消息。LLM 上下文由 agent_dialog_history（当前题）+ context_summary（跨题摘要）承载。
+        _existing_tutor = vals.get("tutor_messages") or []
+        _display_history = list(_existing_tutor) + [guide_msg]
+
         graph.update_state(config, {
             "status": "dialog",
             "problem": None,
             "agent_dialog_complete": False,
-            "agent_dialog_history": _updated_history,
-            "tutor_messages": _updated_history,
+            "agent_dialog_history": [guide_msg],
+            "tutor_messages": _display_history,
+            "context_summary": new_summary,
             "topic": "",
             "difficulty": "",
             "phase": "dialog",

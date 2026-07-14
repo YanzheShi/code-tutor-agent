@@ -337,3 +337,13 @@ class SessionState(BaseModel):
         default=None,
         description="Most recent problem diagnosis summary",
     )
+
+    # ── 上下文摘要（滑动窗口 + 摘要策略）──
+    context_summary: Optional[str] = Field(
+        default=None,
+        description=(
+            "压缩后的历史对话摘要。当对话 token 超预算时，"
+            "旧消息被 LLM 压缩到此字段，新消息保留原文。"
+            "Agent 模式换题时生成跨题摘要存入此字段。"
+        ),
+    )

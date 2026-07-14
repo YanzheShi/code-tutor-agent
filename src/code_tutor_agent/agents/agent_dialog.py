@@ -73,22 +73,25 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 - 后续轮次：根据回答深入追问，逐步缩小范围
   - 用户说 "数组" → "数组的哪方面？遍历、排序、双指针、还是滑动窗口？"
   - 用户说 "动态规划" 或 "DP" → topic 直接设为 "动态规划"，追问难度
-  - 用户说 "随便" → 推荐几个方向让用户选
+  - 用户说 "随便" 或 "随机出题" → 这是关键场景：
+    * 如果对话刚开始（1-2 轮），推荐几个方向让用户选
+    * 如果用户已经 2 轮以上表示无偏好，不要再追问！直接从用户画像弱项中选一个 topic，难度默认 medium，告知用户你的选择并标记 is_ready=true
   - 用户说 "给我出题" 或 "出题吧" → 若 topic 已明确则追问难度，若 topic+难度都明确则 is_ready=true
   - 用户 topic 明确后 → 追问难度："你想从 Easy 开始热身，还是直接挑战 Medium？"
-  - 用户说 "难度无所谓" → "那我建议从 Medium 开始，既有挑战又不会太难"
+  - 用户说 "难度无所谓" → 难度设为 medium，话题已明确则直接标记 is_ready=true
   - 用户主动指定 topic 和 difficulty（如 "简单动态规划"、"中等难度的数组题"）→ 直接设置 is_ready=true
 - 用中文交流，语气友好、鼓励
-- 不要急于一次确定所有信息，享受对话过程
+- 最多 3 轮对话就应该能确定 topic 和 difficulty，不要陷入反复追问
 
 ## topic 识别规则
 - 需要从对话中提取具体的算法知识点（不是泛泛的"算法"、"编程"、"题目"）
 - 如果用户说了多个知识点，取最后一个明确的
-- 如果用户说"随便"或"都行"，topic 保持空串，给选项引导
+- 如果用户说"随便"或"都行"且已有多轮无偏好对话，从用户画像弱项中选一个，不要留空
 
 ## 何时标记 is_ready=true
-只有当 topic 和 difficulty 都足够明确，可以直接出题时才设为 true。
-确认清楚："topic 数组 + difficulty easy" 这样的才算 ready。
+- topic 和 difficulty 都明确 → is_ready=true
+- 用户多次表示无偏好（2+ 轮"随便"）→ 自动选一个 topic+medium 难度 → is_ready=true
+- 用户明确说"出题吧"/"给我出题"且 topic 和 difficulty 都已确定 → is_ready=true
 
 ## 输出 JSON
 ```json
@@ -223,13 +226,21 @@ def _to_msg_dict(msg) -> dict:
     return {"role": "tutor", "content": str(msg)}
 
 
-def _build_transcript(history: list[Message]) -> str:
-    lines = []
-    for msg in history:
-        d = _to_msg_dict(msg)
-        prefix = "用户" if d["role"] == "user" else "AI导师"
-        lines.append(f"{prefix}: {d['content']}")
-    return "\n".join(lines)
+def _build_transcript(history: list[Message], context_summary: str | None = None) -> str:
+    """构建对话 transcript，带 token 预算管理（滑动窗口 + 摘要压缩）。
+
+    当对话 token 数超过预算阈值时，自动对旧消息应用滑动窗口裁剪；
+    如果提供了 context_summary（之前的压缩摘要），会拼接到 transcript 开头。
+
+    Args:
+        history: 对话历史消息列表。
+        context_summary: 压缩后的旧消息摘要（SessionState.context_summary）。
+
+    Returns:
+        格式化后的 transcript，保证 token 不超过预算。
+    """
+    from code_tutor_agent.context_manager import build_transcript_with_budget, DEFAULT_CONFIG
+    return build_transcript_with_budget(history, context_summary, DEFAULT_CONFIG)
 
 
 def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogIntent:
@@ -312,9 +323,29 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
     )
 
 
+def _pick_auto_topic(profile_summary: str) -> str:
+    """从用户画像中提取弱项 topic，无画像时随机选。"""
+    # 尝试从画像中提取弱项名称
+    weak_names: list[str] = []
+    for line in profile_summary.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("- **") and "**：" in stripped:
+            name = stripped.split("**")[1]
+            weak_names.append(name)
+
+    if weak_names:
+        return weak_names[0]
+
+    # 无画像 → 随机选一个常用方向
+    fallback = ["数组", "双指针", "链表", "动态规划", "滑动窗口", "二分查找", "字符串"]
+    import random
+    return random.choice(fallback)
+
+
 def analyze_user_intent(
     history: list[Message],
     model_alias: str = "agnes",
+    context_summary: str | None = None,
 ) -> DialogIntent:
     """Synchronous structured analysis — reliable JSON via with_structured_output.
 
@@ -323,12 +354,37 @@ def analyze_user_intent(
     Args:
         history: Conversation history.
         model_alias: LLM alias.
+        context_summary: 压缩后的旧消息摘要（来自 SessionState.context_summary）。
 
     Returns:
         DialogIntent with determined fields.
     """
     logger.info("▶ analyze_user_intent() — %d messages", len(history))
-    transcript = _build_transcript(history)
+
+    # ── 硬守护：检测"随便"循环，避免反复追问 ──
+    _no_pref_keywords = ["随便", "随机", "都可以", "都行", "无所谓", "你来选", "你定吧"]
+    _user_msgs = [m.content for m in history if _to_msg_dict(m).get("role") == "user"]
+    _no_pref_count = sum(
+        1 for msg in _user_msgs[-3:]  # 只看最近 3 条用户消息
+        if any(kw in msg for kw in _no_pref_keywords)
+    )
+    if _no_pref_count >= 2 and len(history) >= 4:
+        # 用户连续 2+ 轮无偏好 → 自动选方向，不再追问
+        logger.info("'随便' loop detected — auto-selecting topic")
+        # 尝试从画像弱项中选
+        profile_summary = _build_profile_summary()
+        auto_topic = _pick_auto_topic(profile_summary)
+        return DialogIntent(
+            topic=auto_topic,
+            difficulty="medium",
+            is_ready=True,
+            next_message=(
+                f"好的，我看到你还没确定方向，那我帮你选一道 **{auto_topic}** 的题吧！"
+                "难度中等，不会太简单也不会太难，马上为你生成 🚀"
+            ),
+        )
+
+    transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
 
     try:
@@ -356,6 +412,7 @@ def analyze_user_intent(
 async def stream_dialog_response(
     history: list[Message],
     model_alias: str = "agnes-stream",
+    context_summary: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the AI's dialog response to the user.
 
@@ -365,11 +422,12 @@ async def stream_dialog_response(
     Args:
         history: Conversation history.
         model_alias: Streaming LLM alias.
+        context_summary: 压缩后的旧消息摘要（来自 SessionState.context_summary）。
 
     Yields:
         Tokens of the natural language response.
     """
-    transcript = _build_transcript(history)
+    transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
 
     # 构建自然对话 prompt（不输出 JSON）

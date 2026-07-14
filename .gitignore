@@ -17,6 +17,8 @@ node_modules/
 
 # === 运行时数据 ===
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 
 # === IDE ===
