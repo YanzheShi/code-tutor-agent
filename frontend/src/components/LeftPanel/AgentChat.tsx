@@ -52,7 +52,7 @@ export default function AgentChat({
               className={`max-w-[85%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
                 msg.role === 'user'
                   ? 'bg-ct-accent/20 text-ct-text'
-                  : 'bg-slate-800/60 text-ct-text'
+                  : 'bg-ct-surface text-ct-text'
               }`}
             >
               <div className="text-xs text-ct-muted mb-1">
@@ -73,7 +73,7 @@ export default function AgentChat({
           placeholder={disabled ? '对话已完成...' : inputPlaceholder}
           disabled={disabled}
           onKeyDown={handleKeyDown}
-          className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40 resize-none"
+          className="w-full rounded-lg border border-ct-border bg-ct-input px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40 resize-none"
         />
       </div>
     </div>

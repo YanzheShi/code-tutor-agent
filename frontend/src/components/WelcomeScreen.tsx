@@ -2,24 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 const BASE = 'http://localhost:8765';
 
-const TOPICS = [
-  { id: '数组', label: '数组', desc: '遍历、查找、排序基础' },
-  { id: '数组+哈希表', label: '数组+哈希表', desc: '空间换时间，O(n) 查找' },
-  { id: '双指针', label: '双指针', desc: '滑动窗口、相向指针' },
-  { id: '链表', label: '链表', desc: '反转、环检测、合并' },
-  { id: '动态规划', label: '动态规划', desc: 'DP 状态定义与转移' },
-  { id: '二分查找', label: '二分查找', desc: '有序数组中的搜索' },
-  { id: '递归', label: '递归', desc: '递归思维与回溯' },
-];
-
-const DIFFICULTIES = [
-  { id: 'easy', label: 'Easy', color: 'bg-green-900/50 text-green-400 border-green-700' },
-  { id: 'medium', label: 'Medium', color: 'bg-amber-900/50 text-amber-400 border-amber-700' },
-  { id: 'hard', label: 'Hard', color: 'bg-red-900/50 text-red-400 border-red-700' },
-];
-
-type Tab = 'ai' | 'existing' | 'leetcode' | 'agent' | 'profile';
-type ProblemBrief = { id: number; title: string; topic: string; difficulty: string };
+type Tab = 'existing' | 'leetcode' | 'agent' | 'profile';
+type ProblemBrief = { id: number; title: string; topic: string; difficulty: string; verdict?: string };
 
 /* ── ProfileView 子组件 ── */
 
@@ -49,7 +33,7 @@ function ProfileView() {
   if (!profile) return <p className="text-sm text-ct-muted text-center py-8">暂无画像数据，做几道题后再来看看</p>;
 
   const bar = (val: number, color: string) => (
-    <div className="h-2 w-full rounded-full bg-slate-700">
+    <div className="h-2 w-full rounded-full bg-ct-hover">
       <div className={'h-2 rounded-full ' + color} style={{ width: Math.round(val * 100) + '%' }} />
     </div>
   );
@@ -69,7 +53,7 @@ function ProfileView() {
       <h2 className="text-sm font-semibold text-ct-text">📊 我的画像</h2>
 
       {/* 总体指标 */}
-      <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-3 text-sm">
+      <div className="rounded-lg border border-ct-border bg-ct-surface p-4 space-y-3 text-sm">
         <div className="flex justify-between mb-1">
           <span className="text-ct-muted">综合熟练度</span>
           <span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span>
@@ -95,7 +79,7 @@ function ProfileView() {
             <span className="text-ct-muted text-xs block mb-1">常见错误</span>
             <div className="flex flex-wrap gap-1">
               {(profile.common_errors as string[]).map((e, i) => (
-                <span key={i} className="rounded bg-red-900/30 px-2 py-0.5 text-xs text-red-400">{e}</span>
+                <span key={i} className="rounded bg-ct-error-bg px-2 py-0.5 text-xs text-ct-error">{e}</span>
               ))}
             </div>
           </div>
@@ -104,7 +88,7 @@ function ProfileView() {
 
       {/* Per-tag 画像 */}
       {tagEntries.length > 0 && (
-        <div className="rounded-lg border border-ct-border bg-slate-800/30 p-4 space-y-2 text-sm">
+        <div className="rounded-lg border border-ct-border bg-ct-surface p-4 space-y-2 text-sm">
           <h3 className="text-xs font-semibold text-ct-muted mb-2">
             各知识点熟练度（{tagEntries.length} 个）
           </h3>
@@ -156,9 +140,7 @@ export default function WelcomeScreen({
   onStartLeetcode?: (url: string) => void;
   onOpenAdmin?: () => void;
 }) {
-  const [tab, setTab] = useState<Tab>('ai');
-  const [topic, setTopic] = useState('数组');
-  const [difficulty, setDifficulty] = useState('easy');
+  const [tab, setTab] = useState<Tab>('agent');
   const [problems, setProblems] = useState<ProblemBrief[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [leetcodeUrl, setLeetcodeUrl] = useState('');
@@ -184,9 +166,8 @@ export default function WelcomeScreen({
         </div>
 
         {/* 标签切换 */}
-        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1">
+        <div className="flex gap-1 rounded-lg bg-ct-input p-1">
           {[
-            { id: 'ai' as Tab, label: 'AI 出题' },
             { id: 'agent' as Tab, label: '🤖 Agent 导师' },
             { id: 'existing' as Tab, label: '从题库选' },
             { id: 'profile' as Tab, label: '📊 我的画像' },
@@ -207,39 +188,6 @@ export default function WelcomeScreen({
           ))}
         </div>
 
-        {/* ── AI 出题 ── */}
-        {tab === 'ai' && (
-          <>
-            <section>
-              <h2 className="mb-3 text-sm font-semibold text-ct-text">选择知识点</h2>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {TOPICS.map(t => (
-                  <button key={t.id} onClick={() => setTopic(t.id)}
-                    className={`rounded-lg border px-3 py-2 text-left text-sm transition ${topic === t.id ? 'border-ct-accent bg-ct-accent/10 text-ct-accent' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
-                    <div className="font-medium">{t.label}</div>
-                    <div className="mt-0.5 text-xs opacity-70">{t.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </section>
-            <section>
-              <h2 className="mb-3 text-sm font-semibold text-ct-text">选择难度</h2>
-              <div className="flex gap-3">
-                {DIFFICULTIES.map(d => (
-                  <button key={d.id} onClick={() => setDifficulty(d.id)}
-                    className={`flex-1 rounded-lg border px-4 py-2 text-center text-sm font-medium transition ${difficulty === d.id ? d.color + ' border-2' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
-                    {d.label}
-                  </button>
-                ))}
-              </div>
-            </section>
-            <button onClick={() => onStart(topic, difficulty, 'practice')}
-              className="w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90">
-              开始练习
-            </button>
-          </>
-        )}
-
         {/* ── 从题库选 ── */}
         {tab === 'existing' && (
           <section>
@@ -250,14 +198,19 @@ export default function WelcomeScreen({
               <p className="text-sm text-ct-muted">题库为空，先用 AI 出几道题吧</p>
             ) : (
               <div className="max-h-96 space-y-1 overflow-y-auto">
-                {problems.map(p => (
+                {problems.map(p => {
+                  const verdictIcon = p.verdict === 'AC' ? '✅' : p.verdict ? '⏸' : '';
+                  const verdictTitle = p.verdict === 'AC' ? '已通过' : p.verdict ? '已提交' : '';
+                  return (
                   <button key={p.id} onClick={() => setSelectedPid(p.id)}
                     className={`w-full rounded-lg border px-4 py-2 text-left text-sm transition ${selectedPid === p.id ? 'border-ct-accent bg-ct-accent/10 text-ct-accent' : 'border-ct-border text-ct-muted hover:border-ct-accent/50'}`}>
+                    <span className="mr-1 inline-block w-5 text-center" title={verdictTitle}>{verdictIcon}</span>
                     <span className="font-medium text-ct-text">{p.id}. {p.title}</span>
                     <span className="ml-2 text-xs">{p.topic}</span>
-                    <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${p.difficulty === 'easy' ? 'bg-green-900/50 text-green-400' : p.difficulty === 'medium' ? 'bg-amber-900/50 text-amber-400' : 'bg-red-900/50 text-red-400'}`}>{p.difficulty}</span>
+                    <span className={`ml-2 rounded px-1.5 py-0.5 text-xs ${p.difficulty === 'easy' ? 'bg-ct-success-bg text-ct-success' : p.difficulty === 'medium' ? 'bg-ct-warn-bg text-ct-warn' : 'bg-ct-error-bg text-ct-error'}`}>{p.difficulty}</span>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             )}
             <button onClick={() => selectedPid && onStartExisting?.(selectedPid)} disabled={!selectedPid}
@@ -273,7 +226,7 @@ export default function WelcomeScreen({
             <h2 className="mb-3 text-sm font-semibold text-ct-text">粘贴 LeetCode 题目链接</h2>
             <input type="text" value={leetcodeUrl} onChange={e => setLeetcodeUrl(e.target.value)}
               placeholder="https://leetcode.com/problems/two-sum/"
-              className="w-full rounded-lg border border-ct-border bg-slate-800/50 px-4 py-3 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent" />
+              className="w-full rounded-lg border border-ct-border bg-ct-input px-4 py-3 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent" />
             <p className="mt-2 text-xs text-ct-muted">支持 leetcode.com 和 leetcode.cn 的题目链接</p>
             <button onClick={() => leetcodeUrl.trim() && onStartLeetcode?.(leetcodeUrl.trim())} disabled={!leetcodeUrl.trim()}
               className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
@@ -285,7 +238,7 @@ export default function WelcomeScreen({
         {/* ── Agent 导师模式 ── */}
         {tab === 'agent' && (
           <section className="text-center">
-            <div className="mb-4 rounded-lg border border-ct-border bg-slate-800/30 p-6">
+            <div className="mb-4 rounded-lg border border-ct-border bg-ct-surface p-6">
               <p className="text-lg font-medium text-ct-text">🧑‍🏫 Agent 导师模式</p>
               <p className="mt-2 text-sm text-ct-muted">与 AI 导师直接对话，告诉 TA 你想练什么类型、难度、具体方向的题目。</p>
               <ul className="mt-3 space-y-1 text-left text-xs text-ct-muted">

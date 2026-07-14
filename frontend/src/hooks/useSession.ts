@@ -92,7 +92,7 @@ export function useSession() {
             editorInitialized.current = true;
           }
           setActiveTabs(prev => ({ ...prev, left: 'desc' }));
-          setActiveTabs(prev => ({ ...prev, right: st.mode === 'agent' ? 'tutor' : 'code' }));
+          setActiveTabs(prev => ({ ...prev, right: 'code' }));
         }
         const msgs = st.progress_messages || [];
         const bgDone = msgs.some(m => m.includes('✅') || m.includes('已就绪') || m.includes('已导入'));
@@ -207,7 +207,7 @@ export function useSession() {
         if (s.problem) {
           applySessionState(s, true);
           if (!s.problem?.starter_code && !editorInitialized.current) { setEditorCode('class Solution:\n    def solution(self):\n        pass\n'); editorInitialized.current = true; }
-          setActiveTabs(prev => ({ ...prev, left: 'desc' })); setActiveTabs(prev => ({ ...prev, right: s.mode === 'agent' ? 'tutor' : 'code' }));
+          setActiveTabs(prev => ({ ...prev, left: 'desc' })); setActiveTabs(prev => ({ ...prev, right: 'code' }));
           return;
         }
         await new Promise(r => setTimeout(r, 1500));

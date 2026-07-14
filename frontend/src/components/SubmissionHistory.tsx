@@ -35,7 +35,7 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
         const isExpanded = expandedIdx === i;
         const hasFullCode = s.code && s.code.length > 300;
         return (
-          <div key={i} className="rounded border border-ct-border bg-slate-800/20 p-3 text-xs">
+          <div key={i} className="rounded border border-ct-border bg-ct-surface p-3 text-xs">
             {/* 头行：判题结论 + 时间 + 展开按钮 */}
             <div className="flex items-center gap-3 mb-2">
               <span className={'font-bold text-sm ' + (s.verdict === 'AC' ? 'text-ct-success' : s.verdict === 'WA' ? 'text-ct-warn' : 'text-ct-error')}>
@@ -68,7 +68,7 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
               const hasActual = !!fail?.actual_output;
               if (!hasInput && !hasExpected && !hasActual) return null;
               return (
-                <div className="rounded border border-ct-warn/30 bg-amber-900/10 p-2 mb-2 text-xs space-y-1">
+                <div className="rounded border border-ct-warn/30 bg-ct-warn-bg p-2 mb-2 text-xs space-y-1">
                   <span className="font-semibold text-ct-warn">首个失败用例对比</span>
                   {hasInput && <div><span className="text-ct-muted">输入: </span><code className="text-ct-text">{JSON.stringify(fail!.input_args)}</code></div>}
                   {hasExpected && <div><span className="text-ct-muted">期望: </span><code className="text-ct-success">{fail!.expected_output}</code></div>}
@@ -79,7 +79,7 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
 
             {/* 代码区：展开显示全文，未展开截断 */}
             <pre
-              className={'rounded bg-slate-900/50 p-2 text-ct-muted text-xs overflow-x-auto ' + (isExpanded ? 'max-h-none' : 'max-h-24 overflow-y-hidden')}
+              className={'rounded bg-ct-surface-secondary p-2 text-ct-muted text-xs overflow-x-auto ' + (isExpanded ? 'max-h-none' : 'max-h-24 overflow-y-hidden')}
               onClick={() => setExpandedIdx(isExpanded ? null : i)}
               style={{ cursor: hasFullCode || !isExpanded ? 'pointer' : 'default' }}
             >

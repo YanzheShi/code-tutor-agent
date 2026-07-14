@@ -1,5 +1,6 @@
 import { useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
+import { useTheme } from '../../hooks/useTheme';
 
 export default function CodeEditor({
   code,
@@ -10,6 +11,7 @@ export default function CodeEditor({
   onChange: (v: string) => void;
   starterCode?: string;
 }) {
+  const { theme } = useTheme();
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
 
   const handleMount: OnMount = (editor) => {
@@ -21,7 +23,7 @@ export default function CodeEditor({
     <Editor
       height="100%"
       defaultLanguage="python"
-      theme="vs-dark"
+      theme={theme === 'light' ? 'vs' : 'vs-dark'}
       value={code}
       onChange={(v) => onChange(v ?? '')}
       onMount={handleMount}

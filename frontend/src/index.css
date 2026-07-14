@@ -1,3 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── Light theme (default) ── */
+:root {
+  --ct-bg: #ffffff;
+  --ct-panel: #f6f8fa;
+  --ct-border: #d0d7de;
+  --ct-text: #1f2328;
+  --ct-muted: #656d76;
+  --ct-accent: #0969da;
+  --ct-success: #1a7f37;
+  --ct-error: #cf222e;
+  --ct-warn: #9a6700;
+  --ct-info: #0969da;
+  --ct-surface: #f3f4f6;
+  --ct-surface-secondary: #e5e7eb;
+  --ct-input: #f9fafb;
+  --ct-hover: #e5e7eb;
+  --ct-overlay: rgba(0, 0, 0, 0.4);
+  --ct-success-bg: rgba(26, 127, 55, 0.10);
+  --ct-error-bg: rgba(207, 34, 46, 0.10);
+  --ct-warn-bg: rgba(154, 103, 0, 0.10);
+  --ct-info-bg: rgba(9, 105, 218, 0.10);
+}
+
+/* ── Dark theme ── */
+.dark {
+  --ct-bg: #0d1117;
+  --ct-panel: #161b22;
+  --ct-border: #30363d;
+  --ct-text: #e6edf3;
+  --ct-muted: #8b949e;
+  --ct-accent: #58a6ff;
+  --ct-success: #3fb950;
+  --ct-error: #f85149;
+  --ct-warn: #d29922;
+  --ct-info: #79c0ff;
+  --ct-surface: #21262d;
+  --ct-surface-secondary: #161b22;
+  --ct-input: #0d1117;
+  --ct-hover: #30363d;
+  --ct-overlay: rgba(0, 0, 0, 0.6);
+  --ct-success-bg: rgba(63, 185, 80, 0.10);
+  --ct-error-bg: rgba(248, 81, 73, 0.10);
+  --ct-warn-bg: rgba(210, 153, 34, 0.10);
+  --ct-info-bg: rgba(121, 192, 255, 0.10);
+}
+
+/* ── Base reset ── */
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--ct-bg);
+  color: var(--ct-text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}

@@ -18,10 +18,10 @@ export default function MsgItem({ msg }: { msg: Message }) {
             code: ({ className, children, ...props }) => {
               const isInline = !className;
               if (isInline) {
-                return <code className="rounded bg-slate-700/50 px-1 py-0.5 text-xs font-mono" {...props}>{children}</code>;
+                return <code className="rounded bg-ct-hover px-1 py-0.5 text-xs font-mono" {...props}>{children}</code>;
               }
               return (
-                <pre className="overflow-x-auto rounded bg-slate-900 p-3 text-xs font-mono">
+                <pre className="overflow-x-auto rounded bg-ct-surface-secondary p-3 text-xs font-mono">
                   <code className={className} {...props}>{children}</code>
                 </pre>
               );
