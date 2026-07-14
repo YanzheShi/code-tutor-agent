@@ -356,6 +356,45 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
         raise
 
 
+def get_all_problem_verdicts() -> dict[int, str]:
+    """Return the latest verdict for every problem that has submissions.
+
+    Returns dict mapping problem_id → verdict (e.g. {1: 'AC', 2: 'WA'}).
+    """
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT s.problem_id, s.verdict FROM submissions s "
+            "JOIN (SELECT problem_id, MAX(id) AS max_id FROM submissions GROUP BY problem_id) latest "
+            "ON s.problem_id = latest.problem_id AND s.id = latest.max_id"
+        ).fetchall())
+        return {row[0]: row[1] for row in rows if row[1]}
+    except Exception as exc:
+        logger.error("get_all_problem_verdicts() failed: %s", exc)
+        return {}
+
+
+def get_all_submissions(limit: int = 100) -> list[dict]:
+    """Return all recent submissions across all problems (for admin panel)."""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
+            "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
+            "ORDER BY s.id DESC LIMIT ?",
+            (limit,),
+        ).fetchall())
+        return [{
+            "id": row[0],
+            "problem_id": row[1],
+            "problem_title": row[2] or f"Problem #{row[1]}",
+            "verdict": row[3],
+            "code": row[4],
+            "created_at": row[5],
+        } for row in rows]
+    except Exception as exc:
+        logger.error("get_all_submissions() failed: %s", exc)
+        return []
+
+
 # ── User profile ──
 
 # ── User profile ──

@@ -3,6 +3,20 @@ import WelcomeScreen from './components/WelcomeScreen';
 import AdminPanel from './components/AdminPanel';
 import MainLayout, { type MainLayoutProps } from './components/MainLayout';
 import { useSession } from './hooks/useSession';
+import { useTheme } from './hooks/useTheme';
+
+function ThemeToggle() {
+  const { theme, toggle } = useTheme();
+  return (
+    <button
+      onClick={toggle}
+      className="fixed top-3 right-3 z-50 rounded-full border border-ct-border bg-ct-panel/90 p-2 text-sm shadow-sm backdrop-blur-sm transition hover:opacity-80"
+      title={theme === 'dark' ? '切换浅色主题' : '切换深色主题'}
+    >
+      {theme === 'dark' ? '☀️' : '🌙'}
+    </button>
+  );
+}
 
 export default function App() {
   const s = useSession();
@@ -10,8 +24,8 @@ export default function App() {
 
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'welcome') return (
-    <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-      onStartLeetcode={s.onStartLeetcode} onOpenAdmin={s.onOpenAdmin} />
+    <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
+      onStartLeetcode={s.onStartLeetcode} onOpenAdmin={s.onOpenAdmin} /></>
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') return <AdminPanel onClose={() => s.setScreen('welcome')} />;

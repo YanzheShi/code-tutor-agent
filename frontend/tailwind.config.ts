@@ -4,19 +4,30 @@ export default {
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
         ct: {
-          bg: '#0f172a',       // slate-900
-          panel: '#1e293b',    // slate-800
-          border: '#334155',   // slate-700
-          text: '#e2e8f0',     // slate-200
-          muted: '#94a3b8',    // slate-400
-          accent: '#38bdf8',   // sky-400
-          success: '#4ade80',  // green-400
-          error: '#f87171',    // red-400
-          warn: '#fbbf24',     // amber-400
+          bg: 'var(--ct-bg)',
+          panel: 'var(--ct-panel)',
+          border: 'var(--ct-border)',
+          text: 'var(--ct-text)',
+          muted: 'var(--ct-muted)',
+          accent: 'var(--ct-accent)',
+          success: 'var(--ct-success)',
+          error: 'var(--ct-error)',
+          warn: 'var(--ct-warn)',
+          info: 'var(--ct-info)',
+          surface: 'var(--ct-surface)',
+          'surface-secondary': 'var(--ct-surface-secondary)',
+          input: 'var(--ct-input)',
+          hover: 'var(--ct-hover)',
+          overlay: 'var(--ct-overlay)',
+          'success-bg': 'var(--ct-success-bg)',
+          'error-bg': 'var(--ct-error-bg)',
+          'warn-bg': 'var(--ct-warn-bg)',
+          'info-bg': 'var(--ct-info-bg)',
         },
       },
     },

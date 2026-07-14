@@ -180,3 +180,12 @@ async def admin_get_profile_v2():
     """Get the per-tag UserProfile from the profile module."""
     from code_tutor_agent.db.database import get_user_profile_v2
     return get_user_profile_v2()
+
+
+@router.post("/submissions")
+async def admin_list_submissions(body: AdminPasswordRequest = AdminPasswordRequest()):
+    """List all recent submissions across all problems."""
+    if not _verify_admin(body.model_dump()):
+        raise HTTPException(401, "密码错误")
+    from code_tutor_agent.db.database import get_all_submissions
+    return {"submissions": get_all_submissions()}

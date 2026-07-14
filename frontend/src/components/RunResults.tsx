@@ -15,7 +15,7 @@ export default function RunResults({ results, running }: { results: RunResult[] 
         <span className="ml-2 text-[10px] text-ct-muted font-normal">Judge0</span>
       </h3>
       {results!.map(r => (
-        <div key={r.test_case_id} className={'rounded border p-3 text-xs ' + (r.passed ? 'border-green-800/30 bg-green-900/10' : 'border-red-800/30 bg-red-900/10')}>
+        <div key={r.test_case_id} className={'rounded border p-3 text-xs ' + (r.passed ? 'border-ct-success/20 bg-ct-success-bg' : 'border-ct-error/20 bg-ct-error-bg')}>
           <div className="flex items-center gap-2 mb-1">
             <span className={'font-bold ' + (r.passed ? 'text-ct-success' : 'text-ct-error')}>{r.passed ? '\u2713' : '\u2717'}</span>
             <span className="text-ct-text font-medium">用例 #{r.test_case_id}</span>
