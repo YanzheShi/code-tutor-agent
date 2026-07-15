@@ -276,7 +276,7 @@ export default function MainLayout(props: MainLayoutProps) {
             <>
               <div className="flex border-b border-ct-border bg-ct-surface-secondary text-xs">
                 <button onClick={onNext} className="mr-auto rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text" title="返回出题页">← 返回</button>
-                {panelTabs.right.map(tid => (
+                {panelTabs.right.filter(tid => tid !== 'tutor').map(tid => (
                   <TabButton key={tid} label={TAB_LABELS[tid]} tabId={tid}
                     active={activeTabs.right === tid}
                     onClick={() => onSetActiveTabs(prev => ({ ...prev, right: tid }))}

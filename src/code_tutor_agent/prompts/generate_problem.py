@@ -51,6 +51,7 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   - 包含正确的函数签名、参数名、返回类型注解
   - 方法体只写 `pass` 或 `...`，留给用户实现
   - **不要加 `from typing import ...`** 等导入语句
+  - **树/图/链表题必须包含数据结构定义**：如果题目涉及二叉树，starter_code 开头必须包含 `class TreeNode` 定义；链表题包含 `class ListNode`；图题包含 `class GraphNode`。参考 LeetCode 格式，放在 `class Solution` 之前。
 
 ### 4. 函数签名描述（用于解析示例输入）
 - `function_signature`: 描述方法的参数类型和返回类型，格式如：

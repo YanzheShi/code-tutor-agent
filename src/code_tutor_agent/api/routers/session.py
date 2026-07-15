@@ -481,14 +481,25 @@ async def next_problem(sid: str, body: NextProblemReq):
             new_summary = cross_context or None
 
         # ── 4. 构造"下一题"引导消息，重置对话 ──
-        # 只保留一条引导消息作为对话起点，历史对话全部由 summary 承载
-        guide_msg = Message(
-            role="tutor",
-            content=(
-                "上一题已完成！接下来想练习什么类型的算法题？"
+        # 根据上一题的 verdict 选择不同措辞
+        prev_verdict = vals.get("last_verdict")
+        if prev_verdict == "AC":
+            _guide_content = (
+                "上一题完美拿下！接下来想练习什么类型的算法题？"
                 "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
-            ),
-        )
+            )
+        elif prev_verdict == "WA":
+            _guide_content = (
+                "这道题还差一点，不过没关系，换个方向转换一下思路。"
+                "接下来想练什么类型？数组、链表、双指针、动态规划都可以~"
+            )
+        else:
+            # 用户未提交就放弃，或没有 verdict
+            _guide_content = (
+                "好的，这道题先放一放。接下来想练习什么类型的算法题？"
+                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
+            )
+        guide_msg = Message(role="tutor", content=_guide_content)
 
         # tutor_messages 不清空：保留完整对话历史供前端展示，
         # 追加下一题引导消息。LLM 上下文由 agent_dialog_history（当前题）+ context_summary（跨题摘要）承载。
