@@ -5,7 +5,6 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from langchain_core.messages import HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.deps import get_graph
@@ -38,6 +37,13 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
+    # 记录活跃时间（TTL 清理用）
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
+
     message = (body or {}).get("message", "").strip()
     if not message:
         raise HTTPException(400, "Message is empty")
@@ -69,16 +75,36 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             else:
                 history.append(Message(role="tutor", content=str(m)))
         history.append(Message(role="user", content=message))
-        graph.update_state(config, {"agent_dialog_history": history, "tutor_messages": history})
+
+        # 构建完整前端展示历史（保留跨题对话，不清空）
+        _full_display: list[Message] = []
+        for m in (values.get("tutor_messages") or []):
+            if isinstance(m, Message):
+                _full_display.append(m)
+            elif isinstance(m, dict):
+                _full_display.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
+            else:
+                _full_display.append(Message(role="tutor", content=str(m)))
+        _full_display.append(Message(role="user", content=message))
+
+        graph.update_state(config, {
+            "agent_dialog_history": history,
+            "tutor_messages": _full_display,
+        })
+
+        # 提取跨题摘要（Agent 模式换题时生成），注入到意图分析中
+        context_summary = values.get("context_summary")
+        if context_summary:
+            logger.info("Agent dialog enriched with context_summary: %d chars", len(str(context_summary)))
 
         async def dialog_event_stream():
-            nonlocal history
+            nonlocal history, context_summary
 
             # ── 先判定意图（单次结构化调用），再决定回复内容与路由 ──
             # 把「自然回复」与「is_ready 路由判定」合并为同一次 LLM 判定，
             # 避免两个模型各说各话、互相矛盾（对话衔接修复-2）
             try:
-                intent = analyze_user_intent(history)
+                intent = analyze_user_intent(history, context_summary=context_summary)
             except Exception as exc:
                 logger.warning("analyze_user_intent failed: %s", exc)
                 intent = DialogIntent(
@@ -92,6 +118,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
                 # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
                 ready_msg = build_ready_message(topic, difficulty)
                 history.append(ready_msg)
+                _full_display.append(ready_msg)
                 # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）
                 graph.update_state(config, {
                     "agent_dialog_history": history,
@@ -99,7 +126,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
                     "status": "awaiting_problem",
                     "topic": topic,
                     "difficulty": difficulty,
-                    "tutor_messages": history,
+                    "tutor_messages": _full_display,
                 })
 
                 # 伪流式输出固定收尾文案，保持打字效果
@@ -114,9 +141,10 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
                 # 非 ready：回复来自同一次判定的 next_message（已合并，无需再调自由模型）
                 reply = intent.next_message or "好的，我明白了，能再具体说说吗？"
                 history.append(Message(role="tutor", content=reply))
+                _full_display.append(Message(role="tutor", content=reply))
                 graph.update_state(config, {
                     "agent_dialog_history": history,
-                    "tutor_messages": history,
+                    "tutor_messages": _full_display,
                 })
                 for chunk in _chunk_text(reply):
                     yield f"data: {chunk}\n\n"
@@ -130,86 +158,93 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         )
 
     # ── Normal tutoring chat ──
-    # 检查 graph 是否在 interrupt 处暂停（wait_for_submit_node）。
-    # 如果是，astream 不可用 — 降级为直接 LLM 流式输出。
-    state_snap = graph.get_state(config)
-    has_interrupt = bool(state_snap.next)
+    # 所有非 agent-dialog 聊天统一走直接 LLM 流式输出。
+    # 原因：graph 可能在 interrupt 处（SqliteSaver 不支持 astream）
+    #       或 graph 停在 END（如 AC 后 phase=reviewing），
+    #       graph.stream(None, config) 从 END 不会重启，返回空。
+    # 统一走直接 LLM 是最可靠的做法。
+    from code_tutor_agent.config import get_llm
+    llm = get_llm("agnes-stream", temperature=0.7)
 
-    if has_interrupt:
-        # 直接 LLM 流式输出（graph 在 interrupt 处，无法 astream）
-        from code_tutor_agent.config import get_llm
-        llm = get_llm("agnes-stream", temperature=0.7)
+    problem = values.get("problem")
+    title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
 
-        # 在 prompt 中反映最近的消息
-        problem = values.get("problem")
-        title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+    # 收集 tutor_messages 中近期对话作为上下文
+    _tutor_msgs = values.get("tutor_messages") or []
+    _context_lines = []
+    for msg in _tutor_msgs[-8:]:  # 只取最近 8 条
+        role = msg.get("role", "tutor") if isinstance(msg, dict) else getattr(msg, "role", "tutor")
+        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+        if content:
+            label = "导师" if role == "tutor" else "用户"
+            _context_lines.append(f"{label}: {content}")
+    _chat_context = "\n".join(_context_lines) if _context_lines else "（无）"
 
-        async def direct_stream():
-            prompt = (
-                f"你是一个编程导师。用户正在做一道算法题「{title}」。\n"
-                f"用户当前的消息：{message}\n\n"
-                f"请给出有帮助的指导和建议，不要直接给出完整代码。回复控制在 200 字以内。"
-            )
-            full = []
-            try:
-                async for chunk in llm.astream(prompt):
-                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                    if token:
-                        full.append(token)
-                        yield f"data: {token}\n\n"
-            except Exception as exc:
-                logger.warning("Direct chat LLM failed: %s", exc)
-                yield "data: 【抱歉，我现在无法回答。请稍后再试。】\n\n"
+    # 根据 phase 匹配合适的 system prompt
+    _phase = values.get("phase", "")
+    _verdict = values.get("last_verdict", "")
 
-            # 手动保存到 state
-            reply = "".join(full)
-            tutor_msgs = list(values.get("tutor_messages", []))
-            tutor_msgs.append({"role": "user", "content": message})
-            tutor_msgs.append({"role": "tutor", "content": reply})
-            try:
-                graph.update_state(config, {"tutor_messages": tutor_msgs})
-            except Exception as exc:
-                logger.warning("Failed to save chat: %s", exc)
-            yield "data: __DONE__\n\n"
+    if _phase == "reviewing":
+        # AC 后复盘/讨论模式
+        system = (
+            "你是 AI 编程导师，用户刚通过了一道算法题（AC），"
+            "现在在回顾和讨论这道题。你的任务是：\n"
+            "- 解释解题思路、时间/空间复杂度\n"
+            "- 讨论其他可能的解法（暴力/优化/不同数据结构）\n"
+            "- 分析这道题的易错点和面试常见追问\n"
+            "- 如果用户要求出下一题，引导他说出想练的方向\n"
+            "语气鼓励、专业，回复控制在 300 字以内。"
+        )
+    elif _verdict == "WA":
+        # 刚提交 WA，正在辅导中
+        system = (
+            "你是 AI 编程导师，语气温暖鼓励。用户刚提交的代码没有通过（WA），"
+            "根据对话上下文分析问题、给出针对性建议。"
+            "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+        )
+    else:
+        system = (
+            "你是 AI 编程导师，语气温暖鼓励。用户正在做题，"
+            "根据对话上下文分析问题、给出针对性建议。"
+            "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+        )
 
-        return StreamingResponse(direct_stream(), media_type="text/event-stream")
-
-    # Graph is not at interrupt — use chat_node via astream
-    current_msgs = list(values.get("messages", []))
-    current_msgs.append(HumanMessage(content=message))
-    graph.update_state(config, {
-        "messages": current_msgs,
-        "tutor_messages": values.get("tutor_messages", []) + [{"role": "user", "content": message}],
-    })
-
-    async def event_stream():
-        collected = []
+    async def normal_chat_stream():
+        user_prompt = (
+            f"算法题：{title}\n\n"
+            f"近期对话：\n{_chat_context}\n\n"
+            f"用户当前消息：{message}"
+        )
+        full = []
         try:
-            async for event in graph.astream(None, config, stream_mode="custom"):
-                if isinstance(event, dict) and event.get("type") == "token":
-                    token = event["content"]
-                    if token:
-                        collected.append(token)
-                        yield f"data: {token}\n\n"
+            async for chunk in llm.astream([
+                ("system", system),
+                ("human", user_prompt),
+            ]):
+                token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                if token:
+                    full.append(token)
+                    yield f"data: {token}\n\n"
         except Exception as exc:
-            logger.warning("Graph chat streaming failed: %s", exc)
-            yield "data: 【抱歉，我现在无法回答。请稍后再试。】\n\n"
+            logger.warning("Normal chat LLM failed: %s", exc)
 
+        reply = "".join(full)
+        if not reply.strip():
+            reply = "抱歉，我现在无法回答。请稍后再试。"
+        if not full:
+            yield f"data: {reply}\n\n"
+
+        # 手动保存到 state
+        tutor_msgs = list(values.get("tutor_messages", []))
+        tutor_msgs.append({"role": "user", "content": message})
+        tutor_msgs.append({"role": "tutor", "content": reply})
         try:
-            final_state = graph.get_state(config)
-            final_msgs = final_state.values.get("messages", [])
-            if final_msgs:
-                last = final_msgs[-1]
-                ai_content = last.content if hasattr(last, "content") else (last.get("content", "") if isinstance(last, dict) else "")
-                tutor_msgs = list(values.get("tutor_messages", []))
-                tutor_msgs.append({"role": "tutor", "content": ai_content})
-                graph.update_state(config, {"tutor_messages": tutor_msgs})
+            graph.update_state(config, {"tutor_messages": tutor_msgs})
         except Exception as exc:
-            logger.warning("Failed to sync chat state: %s", exc)
-
+            logger.warning("Failed to save chat: %s", exc)
         yield "data: __DONE__\n\n"
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(normal_chat_stream(), media_type="text/event-stream")
 
 
 @router.post("/{sid}/chat")
@@ -223,6 +258,13 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
         state = graph.get_state(config)
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
+
+    # 记录活跃时间（TTL 清理用）
+    try:
+        from code_tutor_agent.db.database import touch_session
+        touch_session(sid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
 
     message = (body or {}).get("message", "").strip()
     if not message:
@@ -247,21 +289,38 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
             else:
                 history.append(Message(role="tutor", content=str(m)))
         history.append(Message(role="user", content=message))
-        graph.update_state(config, {"agent_dialog_history": history, "tutor_messages": history})
 
-        intent = analyze_user_intent(history)
+        # 构建完整前端展示历史（保留跨题对话，不清空）
+        _full_display: list[Message] = []
+        for m in (values.get("tutor_messages") or []):
+            if isinstance(m, Message):
+                _full_display.append(m)
+            elif isinstance(m, dict):
+                _full_display.append(Message(role=m.get("role", "tutor"), content=m.get("content", "")))
+            else:
+                _full_display.append(Message(role="tutor", content=str(m)))
+        _full_display.append(Message(role="user", content=message))
+
+        graph.update_state(config, {
+            "agent_dialog_history": history,
+            "tutor_messages": _full_display,
+        })
+
+        context_summary = values.get("context_summary")
+        intent = analyze_user_intent(history, context_summary=context_summary)
 
         if intent.is_ready:
             topic = intent.topic or values.get("topic", "数组")
             difficulty = intent.difficulty or values.get("difficulty", "easy")
             ready_msg = build_ready_message(topic, difficulty)
             history.append(ready_msg)
+            _full_display.append(ready_msg)
             graph.update_state(config, {
                 "agent_dialog_history": history,
                 "agent_dialog_complete": True,
                 "topic": topic,
                 "difficulty": difficulty,
-                "tutor_messages": history,
+                "tutor_messages": _full_display,
             })
             async def _safe_invoke():
                 try:
@@ -273,32 +332,55 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
             return {"response": intent.next_message or ready_msg.content}
         else:
             history.append(Message(role="tutor", content=intent.next_message))
-            graph.update_state(config, {"agent_dialog_history": history, "tutor_messages": history})
+            _full_display.append(Message(role="tutor", content=intent.next_message))
+            graph.update_state(config, {
+                "agent_dialog_history": history,
+                "tutor_messages": _full_display,
+            })
             return {"response": intent.next_message}
 
     # ── Normal tutoring chat (non-streaming) ──
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
 
-    # ── Reviewing phase: resume graph via tutor_router ──
-    if values.get("phase") == "reviewing":
-        current_msgs = list(values.get("tutor_messages", []))
-        current_msgs.append({"role": "user", "content": message})
-        graph.update_state(config, {"tutor_messages": current_msgs})
-        await asyncio.to_thread(graph.invoke, None, config)
-        final_state = graph.get_state(config)
-        final_msgs = final_state.values.get("tutor_messages", [])
-        reply = final_msgs[-1]["content"] if final_msgs and isinstance(final_msgs[-1], dict) else (final_msgs[-1].content if final_msgs else "")
-        return {"response": reply}
-
+    # ── Normal tutoring chat (non-streaming): 统一走直接 LLM ──
+    # 原因同流式路径：graph 可能在 interrupt 或 END，无法可靠地通过 graph.invoke 走 chat_node
     llm = get_llm("agnes", temperature=0.7)
-    prompt = (
-        f"你是一个编程导师。用户正在做一道算法题「{title}」。\n"
-        f"用户当前的消息：{message}\n\n"
-        f"请给出有帮助的指导和建议，不要直接给出完整代码。回复控制在 200 字以内。"
+
+    _phase = values.get("phase", "")
+    _verdict = values.get("last_verdict", "")
+
+    if _phase == "reviewing":
+        system = (
+            "你是 AI 编程导师，用户刚通过了一道算法题（AC），"
+            "现在在回顾和讨论这道题。你的任务是：\n"
+            "- 解释解题思路、时间/空间复杂度\n"
+            "- 讨论其他可能的解法\n"
+            "- 分析易错点和面试常见追问\n"
+            "语气鼓励、专业，回复控制在 300 字以内。"
+        )
+    elif _verdict == "WA":
+        system = (
+            "你是 AI 编程导师，语气温暖鼓励。用户刚提交的代码没有通过（WA），"
+            "根据对话上下文分析问题、给出针对性建议。"
+            "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+        )
+    else:
+        system = (
+            "你是 AI 编程导师，语气温暖鼓励。用户正在做题，"
+            "根据对话上下文分析问题、给出针对性建议。"
+            "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+        )
+
+    user_prompt = (
+        f"算法题：{title}\n\n"
+        f"用户当前消息：{message}"
     )
     try:
-        response = llm.invoke(prompt)
+        response = llm.invoke([
+            ("system", system),
+            ("human", user_prompt),
+        ])
         reply = response.content if hasattr(response, "content") else str(response)
     except Exception as exc:
         logger.warning("Chat LLM failed: %s", exc)

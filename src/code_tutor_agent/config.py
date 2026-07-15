@@ -84,3 +84,34 @@ def get_llm(alias: str = "sensenova", **kwargs):
         raise ValueError(f"模型 '{alias}' 的配置不完整，请检查 .env 文件中的环境变量")
 
     return init_chat_model(**config)
+
+
+# ── Checkpoint DB (LangGraph session persistence) ──
+def get_checkpoint_db_path() -> str:
+    """获取 LangGraph checkpointer 的 SQLite 数据库路径。
+
+    从环境变量 CHECKPOINT_DB_PATH 读取，默认 data/checkpoints.db。
+    """
+    default_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "data",
+        "checkpoints.db",
+    )
+    return os.getenv("CHECKPOINT_DB_PATH", default_path)
+
+
+# ── Session TTL (auto-cleanup) ──
+def get_session_ttl_hours() -> int:
+    """会话过期时间（小时），超过后自动清理。
+
+    从环境变量 SESSION_TTL_HOURS 读取，默认 168（7 天）。
+    """
+    return int(os.getenv("SESSION_TTL_HOURS", "168"))
+
+
+def get_cleanup_interval_minutes() -> int:
+    """自动清理任务运行间隔（分钟）。
+
+    从环境变量 SESSION_CLEANUP_INTERVAL_MINUTES 读取，默认 60（1 小时）。
+    """
+    return int(os.getenv("SESSION_CLEANUP_INTERVAL_MINUTES", "60"))

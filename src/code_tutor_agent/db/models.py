@@ -65,6 +65,7 @@ class DBSubmission(BaseModel):
     """Maps 1:1 to the ``submissions`` table in SQLite."""
     id: int = Field(description="Primary key")
     problem_id: int = Field(description="FK → problems.id")
+    session_id: str = Field(default="", description="所属会话 ID")
     student_code: str = Field(description="用户提交的代码")
     status: str = Field(description="状态（judged / ...）")
     verdict: str = Field(default="", description="最终判题结论")

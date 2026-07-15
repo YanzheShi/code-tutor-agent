@@ -86,6 +86,7 @@ def _init_db_tables(cursor) -> None:
         "ALTER TABLE problems ADD COLUMN constraints_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
+        "ALTER TABLE submissions ADD COLUMN session_id TEXT DEFAULT ''",
     ]:
         try:
             cursor.execute(col_sql)
@@ -100,6 +101,14 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
+    # ── 会话活跃时间表（TTL 自动清理用）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS session_activity (
+            session_id TEXT PRIMARY KEY,
+            last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     try:
         cursor.execute("ALTER TABLE problems DROP COLUMN solution")
     except sqlite3.OperationalError:
@@ -109,6 +118,7 @@ def _init_db_tables(cursor) -> None:
         CREATE TABLE IF NOT EXISTS submissions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             problem_id INTEGER NOT NULL,
+            session_id TEXT DEFAULT '',
             student_code TEXT NOT NULL,
             status TEXT NOT NULL,
             verdict TEXT DEFAULT '',
@@ -315,18 +325,18 @@ def update_problem_optimal_solution(problem_id: int, code: str) -> None:
         raise
 
 
-def save_submission(problem_id: int, code: str, verdict: str, judge_results: list[dict]) -> int:
+def save_submission(problem_id: int, code: str, verdict: str, judge_results: list[dict], session_id: str = "") -> int:
     """Save a submission record to the database. Returns the submission ID."""
     try:
         def _do(cursor):
                     cursor.execute(
-                        "INSERT INTO submissions (problem_id, student_code, status, verdict, judge_results) "
-                        "VALUES (?, ?, 'judged', ?, ?)",
-                        (problem_id, code, verdict, json.dumps(judge_results, ensure_ascii=False)),
+                        "INSERT INTO submissions (problem_id, session_id, student_code, status, verdict, judge_results) "
+                        "VALUES (?, ?, ?, 'judged', ?, ?)",
+                        (problem_id, session_id, code, verdict, json.dumps(judge_results, ensure_ascii=False)),
                     )
                     return cursor.lastrowid
         sub_id = _with_conn(_do)
-        logger.info("save_submission() — id=%d, problem=%d, verdict=%s", sub_id, problem_id, verdict)
+        logger.info("save_submission() — id=%d, problem=%d, session=%s, verdict=%s", sub_id, problem_id, session_id, verdict)
         return sub_id
     except Exception as exc:
         logger.error("Failed to save submission for problem %d: %s", problem_id, exc)
@@ -340,7 +350,7 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
     """
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
-            "SELECT id, problem_id, student_code, verdict, judge_results, status, created_at "
+            "SELECT id, problem_id, session_id, student_code, verdict, judge_results, status, created_at "
             "FROM submissions WHERE problem_id = ? ORDER BY id DESC LIMIT ?",
             (problem_id, limit),
         ).fetchall())
@@ -353,6 +363,26 @@ def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
         return result
     except Exception as exc:
         logger.error("get_submissions_by_problem(%d) failed: %s", problem_id, exc)
+        raise
+
+
+def get_submissions_by_session(session_id: str, limit: int = 50) -> list[dict]:
+    """Return all submissions for a given session."""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT id, problem_id, session_id, student_code, verdict, judge_results, status, created_at "
+            "FROM submissions WHERE session_id = ? ORDER BY id DESC LIMIT ?",
+            (session_id, limit),
+        ).fetchall())
+
+        result = []
+        for row in rows:
+            sub = DBSubmission(**dict(row))
+            result.append(sub.to_dict())
+        logger.info("get_submissions_by_session() — session=%s, %d rows", session_id, len(result))
+        return result
+    except Exception as exc:
+        logger.error("get_submissions_by_session(%s) failed: %s", session_id, exc)
         raise
 
 
@@ -371,6 +401,49 @@ def get_all_problem_verdicts() -> dict[int, str]:
     except Exception as exc:
         logger.error("get_all_problem_verdicts() failed: %s", exc)
         return {}
+
+
+# ── 会话活跃时间（TTL 自动清理）──
+
+
+def touch_session(session_id: str) -> None:
+    """记录会话的最后活跃时间（upsert）。
+
+    每次用户操作（chat、submit、poll state 等）时调用。
+    """
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO session_activity (session_id, last_active_at) VALUES (?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(session_id) DO UPDATE SET last_active_at = CURRENT_TIMESTAMP",
+            (session_id,),
+        ))
+    except Exception as exc:
+        logger.warning("touch_session(%s) failed: %s", session_id, exc)
+
+
+def get_stale_sessions(max_age_hours: int) -> list[str]:
+    """返回超过 max_age_hours 未活跃的 session_id 列表。"""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT session_id FROM session_activity "
+            "WHERE last_active_at < datetime('now', '-' || ? || ' hours')",
+            (str(max_age_hours),),
+        ).fetchall())
+        return [row["session_id"] for row in rows]
+    except Exception as exc:
+        logger.error("get_stale_sessions(%d) failed: %s", max_age_hours, exc)
+        return []
+
+
+def delete_session_activity(session_id: str) -> None:
+    """从 session_activity 表中删除一条记录。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "DELETE FROM session_activity WHERE session_id = ?",
+            (session_id,),
+        ))
+    except Exception as exc:
+        logger.warning("delete_session_activity(%s) failed: %s", session_id, exc)
 
 
 def get_all_submissions(limit: int = 100) -> list[dict]:

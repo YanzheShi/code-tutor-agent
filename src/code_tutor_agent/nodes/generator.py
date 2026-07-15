@@ -41,6 +41,7 @@ from code_tutor_agent.agents.problem_generator import generate_problem
 from code_tutor_agent.db.database import save_problem, update_problem_optimal_solution
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.progress import _generation_progress
+from code_tutor_agent.sandbox.ds import get_struct_prologue
 from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.schemas.state import Message as TutorMsg
 from code_tutor_agent.schemas.state import ProblemMeta, SessionPhase, SessionState
@@ -178,6 +179,11 @@ def _generate_from_leetcode(
 
     # Derive a topic from the first tag, or fall back to "算法"
     topic = tags[0] if tags else "算法"
+
+    # ── 注入树/图/链表结构体定义到 starter_code ──
+    struct_prologue = get_struct_prologue(topic, description, starter_code)
+    if struct_prologue and not starter_code.startswith(struct_prologue.strip()[:20]):
+        starter_code = struct_prologue + starter_code
 
     # Extract function_signature from starter_code
     func_sig = extract_function_signature(starter_code)
@@ -387,6 +393,13 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         for tc in sample_tcs
     ]
 
+    # ── 注入树/图/链表结构体定义到 starter_code ──
+    _final_starter = db_starter_code or (problem_dict.get("starter_code", "") if problem_dict else "")
+    _final_desc = problem_dict.get("description", "") if problem_dict else ""
+    struct_prologue = get_struct_prologue(topic, _final_desc, _final_starter)
+    if struct_prologue and not _final_starter.startswith(struct_prologue.strip()[:20]):
+        _final_starter = struct_prologue + _final_starter
+
     meta = ProblemMeta(
         problem_id=problem_id,
         title=problem_dict.get("title", "Unknown") if problem_dict else "Unknown",
@@ -394,7 +407,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         difficulty=problem_dict.get("difficulty", difficulty) if problem_dict else difficulty,
         description=problem_dict.get("description", "") if problem_dict else "",
         description_html=problem_dict.get("description", "") if problem_dict else "",
-        starter_code=db_starter_code or (problem_dict.get("starter_code", "") if problem_dict else ""),
+        starter_code=_final_starter,
         visible_test_cases=visible_tcs,
         novelty_score=problem_dict.get("novelty_score", 7.0) if problem_dict else 7.0,
         tag_primary=tag_for(topic),

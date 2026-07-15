@@ -3,6 +3,10 @@
 该节点处理用户聊天消息，通过 LangGraph 状态机路由，
 让 InMemorySaver checkpointer 自动管理消息历史。
 
+上下文管理（v2）：
+    如果 state.context_summary 非空（长对话被压缩后生成的摘要），
+    它会被注入到 prompt 的最前面，保证 LLM 不会丢失之前的关键信息。
+
 节点流转：
     start_router → chat_node → END
 """
@@ -15,6 +19,10 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import StreamWriter
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.context_manager import (
+    DEFAULT_CONFIG,
+    build_transcript_with_budget,
+)
 from code_tutor_agent.schemas.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -35,6 +43,10 @@ def chat_node(state: SessionState, writer: StreamWriter) -> dict:
     Reads the latest user message from ``state.messages``, calls the LLM
     with streaming, pushes tokens via ``writer``, and appends the AI
     response to the message list.
+
+    上下文管理：
+        如果 session 有 context_summary（来自之前的滑动窗口压缩），
+        它会作为对话摘要注入 prompt 开头，保证关键信息不丢失。
 
     Args:
         state: Current session state. Reads ``messages`` list.
@@ -57,8 +69,11 @@ def chat_node(state: SessionState, writer: StreamWriter) -> dict:
     # ── Build LLM prompt from message history ──
     llm = get_llm("agnes-stream", temperature=0.7)
 
-    # Format history for prompt
+    # Format history for prompt, inject context_summary if available
     history_lines = []
+    if state.context_summary:
+        # 将压缩摘要放在对话历史最前面，保证 LLM 了解之前的上下文
+        history_lines.append(f"[对话摘要]\n{state.context_summary}\n")
     for msg in messages[:-1]:  # exclude the latest user message
         role = "用户" if isinstance(msg, HumanMessage) or (isinstance(msg, dict) and msg.get("role") == "user") else "AI导师"
         content = msg.content if hasattr(msg, "content") else msg.get("content", "")

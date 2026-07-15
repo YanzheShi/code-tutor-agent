@@ -4,13 +4,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 
 from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.progress import _generation_progress
-from code_tutor_agent.schemas.state import SessionState
+from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg, SessionState
 
 logger = logging.getLogger(__name__)
+
+# 题目生成超时（秒），可通过环境变量覆盖
+GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT_SECONDS", "120"))
 
 
 def _extract_code_from_llm_response(text: str) -> str:
@@ -77,7 +81,11 @@ async def _generate_optimal_for_leetcode_async(problem_id: int, sid: str):
 
 
 async def run_generation(sid: str, initial_dict: dict):
-    """Full graph invoke in background, then generate complex tests."""
+    """Full graph invoke in background with timeout, then generate complex tests.
+
+    如果 graph 生成超时或 LLM 调用失败，自动降级到静态题库（static pool）。
+    前端通过 progress_messages 看到完整过程。
+    """
     graph = get_graph()
     config = {"configurable": {"thread_id": sid}}
 
@@ -85,7 +93,11 @@ async def run_generation(sid: str, initial_dict: dict):
         initial = SessionState(**initial_dict)
         _generation_progress.setdefault(sid, []).append("\U0001f680 开始生成题目...")
 
-        await asyncio.to_thread(graph.invoke, initial.model_dump(), config)
+        # 带超时的 graph invoke：不能在生成阶段无限等待 LLM
+        await asyncio.wait_for(
+            asyncio.to_thread(graph.invoke, initial.model_dump(), config),
+            timeout=GENERATION_TIMEOUT,
+        )
         _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪，正在后台生成完整测试用例...")
 
         try:
@@ -94,10 +106,6 @@ async def run_generation(sid: str, initial_dict: dict):
             if problem:
                 pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
                 if pid:
-                    # Always trigger background test generation; _generate_complex_tests
-                    # reads optimal_solution / function_signature from the DB directly,
-                    # so it works regardless of whether the problem came from LeetCode
-                    # or from LLM generation.
                     await _generate_complex_tests(pid, sid)
                 else:
                     _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
@@ -107,9 +115,79 @@ async def run_generation(sid: str, initial_dict: dict):
             logger.warning("Background test generation failed: %s", exc)
             _generation_progress.setdefault(sid, []).append("\u26a0\ufe0f 部分测试用例生成失败")
 
+    except asyncio.TimeoutError:
+        logger.error("Generation timed out for %s after %ds, falling back to static pool", sid, GENERATION_TIMEOUT)
+        _generation_progress.setdefault(sid, []).append(
+            f"\u23f0 生成超时（{GENERATION_TIMEOUT}秒），LLM 响应太慢，正在从备用题库选题..."
+        )
+        await _fallback_static_problem(sid, config, initial_dict)
+
     except Exception as exc:
-        logger.exception("Background generation failed for %s", sid)
-        _generation_progress.setdefault(sid, []).append(f"\u274c 生成失败: {exc}")
+        logger.exception("Background generation failed for %s, falling back to static pool", sid)
+        _generation_progress.setdefault(sid, []).append(
+            f"\u274c LLM 生成失败（{_safe_err_msg(exc)}），正在从备用题库选题..."
+        )
+        await _fallback_static_problem(sid, config, initial_dict)
+
+
+def _safe_err_msg(exc: Exception) -> str:
+    """截取异常信息的前 80 个字符，避免在 UI 展示过长的调用栈。"""
+    msg = str(exc)
+    return msg[:80] + "..." if len(msg) > 80 else msg
+
+
+async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
+    """降级策略：从本地静态题库中选一道题，直接注入到会话状态。
+
+    LLM 挂了也不要紧，用户照样能做题。"""
+    from code_tutor_agent.db.database import save_problem
+    from code_tutor_agent.store.static_pool import get_static_problem
+
+    topic = initial_dict.get("topic", "")
+    difficulty = initial_dict.get("difficulty", "medium")
+
+    static = get_static_problem(topic, difficulty)
+    if not static:
+        _generation_progress.setdefault(sid, []).append(
+            "\u274c 备用题库也为空，请稍后重试或从 LeetCode 导入题目"
+        )
+        logger.error("Static pool exhausted — no fallback available for %s", sid)
+        return
+
+    try:
+        problem_id = save_problem(static)
+        meta = ProblemMeta(
+            problem_id=problem_id,
+            title=static["title"],
+            topic=static.get("topic", topic),
+            difficulty=static.get("difficulty", difficulty),
+            description=static.get("description", ""),
+            starter_code=static.get("starter_code", ""),
+            visible_test_cases=static.get("test_cases", [])[:3],
+            tag_primary="array_basics",
+            prob_elo=1200,
+        )
+
+        state = SessionState(
+            session_id=sid,
+            problem=meta,
+            status="awaiting_submit",
+            topic=meta.topic,
+            difficulty=meta.difficulty,
+            tutor_messages=[TutorMsg(role="tutor", content=f"从备用题库选取 **{meta.title}**，加油~")],
+        )
+        graph = get_graph()
+        await asyncio.to_thread(graph.invoke, state.model_dump(), config)
+        _generation_progress.setdefault(sid, []).append(
+            f"\u2705 已从备用题库选取 **{meta.title}**（{meta.difficulty}）"
+        )
+        logger.info("Static fallback loaded problem '%s' for session %s", static["title"], sid)
+
+    except Exception as exc:
+        logger.exception("Static fallback also failed for %s", sid)
+        _generation_progress.setdefault(sid, []).append(
+            f"\u274c 备用题库加载也失败了，请联系老师: {_safe_err_msg(exc)}"
+        )
 
 
 async def _generate_complex_tests(problem_id: int, sid: str):

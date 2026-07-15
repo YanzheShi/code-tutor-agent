@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import sqlite3
 
 from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
 from langgraph.store.memory import InMemoryStore
@@ -106,10 +109,19 @@ def _build_graph() -> StateGraph:
 def compile_graph(
     conn_string: str | None = None,
 ) -> CompiledStateGraph:
-    logger.info("▶ compile_graph() — using InMemorySaver + InMemoryStore")
     builder = _build_graph()
-    checkpointer = InMemorySaver()
+
+    if conn_string:
+        logger.info(f"compile_graph() — using SqliteSaver ({conn_string})")
+        os.makedirs(os.path.dirname(conn_string) or ".", exist_ok=True)
+        conn = sqlite3.connect(conn_string, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        checkpointer = SqliteSaver(conn)
+    else:
+        logger.warning("compile_graph() — no conn_string, falling back to InMemorySaver")
+        checkpointer = InMemorySaver()
+
     store = InMemoryStore()
     graph = builder.compile(checkpointer=checkpointer, store=store)
-    logger.info("Graph compiled — InMemorySaver checkpointer + InMemoryStore")
+    logger.info(f"Graph compiled — checkpointer={type(checkpointer).__name__}")
     return graph

@@ -17,6 +17,8 @@ dependencies = [
     "pydantic>=2.9.0",
     # 环境变量管理
     "python-dotenv>=1.0.0",
+    # Token 计数（上下文管理）
+    "tiktoken>=0.7.0",
     # API 层
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",

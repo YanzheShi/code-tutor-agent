@@ -244,8 +244,9 @@ export function useSession() {
       setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
       setRunResults(null); setSubmissions([]);
       setProgressMsgs([]);
-      // 左栏对话、右栏也显示对话历史，从而隐藏题目与代码栏
-      setActiveTabs({ left: 'agent-history', right: 'agent-history' });
+      // 左栏对话，右栏显示空代码编辑器（占位，不让右侧空着或重复导师面板）
+      setEditorCode('');
+      setActiveTabs({ left: 'agent-history', right: 'code' });
     };
 
     const callNextProblem = async () => {
