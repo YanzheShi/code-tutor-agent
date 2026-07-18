@@ -367,3 +367,97 @@ async def test_run_tool_loop_ignores_unbound_tool():
     msgs = [SystemMessage(content="s"), HumanMessage(content="h")]
     result = await run_tool_loop(fake_llm, msgs, tools=JUDGE_TOOLS)
     assert len(result) == 2  # 未绑工具 → 不追加，messages 不变
+
+
+# ──────────────────────────────────────────────
+#  skill-engine CLI 逃生舱工具
+# ──────────────────────────────────────────────
+
+
+def test_skill_tools_registry():
+    """SKILL_TOOLS 只含 generate_problem_via_skill，且默认不进 AGENT_TOOLS。"""
+    from code_tutor_agent.agents.tools import SKILL_TOOLS
+
+    assert {t.name for t in SKILL_TOOLS} == {"generate_problem_via_skill"}
+    assert "generate_problem_via_skill" not in {t.name for t in AGENT_TOOLS}
+
+
+_CONTRACT_MD = """\
+==== result ====
+## Title
+Move Zeroes
+## Topic
+数组
+## Difficulty
+easy
+## Description
+将数组中所有 0 移动到末尾。
+## Examples
+Example 1:
+Input: nums = [0,1,0,3,2]
+Output: [1,3,2,0,0]
+## StarterCode
+```python
+class Solution:
+    def moveZeroes(self, nums): pass
+```
+## OptimalSolution
+```python
+class Solution:
+    def moveZeroes(self, nums): pass
+```
+"""
+
+
+@pytest.mark.asyncio
+async def test_generate_problem_via_skill_success():
+    """CLI 逃生舱出题成功 → 返回带 title 的 JSON，无 error。"""
+    from code_tutor_agent.agents.tools import generate_problem_via_skill
+
+    with patch(
+        "code_tutor_agent.agents.skill_cli.run_skill_cli",
+        return_value={
+            "ok": True, "exit_code": 0, "stdout": _CONTRACT_MD,
+            "stderr": "", "skill_name": "cta-generate-problem", "error": None,
+        },
+    ):
+        out = await generate_problem_via_skill("数组", "easy")
+    data = json.loads(out)
+    assert data["title"] == "Move Zeroes"
+    assert "error" not in data
+
+
+@pytest.mark.asyncio
+async def test_generate_problem_via_skill_cli_failure_returns_error_json():
+    """CLI 执行失败 → 转成 {"error": ...} JSON，不抛异常。"""
+    from code_tutor_agent.agents.tools import generate_problem_via_skill
+
+    with patch(
+        "code_tutor_agent.agents.skill_cli.run_skill_cli",
+        return_value={
+            "ok": False, "exit_code": 1, "stdout": "", "stderr": "boom",
+            "skill_name": "cta-generate-problem", "error": "boom",
+        },
+    ):
+        out = await generate_problem_via_skill("数组", "easy")
+    data = json.loads(out)
+    assert "error" in data
+    assert "CLI 出题失败" in data["error"]
+
+
+@pytest.mark.asyncio
+async def test_generate_problem_via_skill_parse_failure_returns_error_json():
+    """CLI 成功但契约解析失败（stdout 无 ## 节）→ 转 error JSON。"""
+    from code_tutor_agent.agents.tools import generate_problem_via_skill
+
+    with patch(
+        "code_tutor_agent.agents.skill_cli.run_skill_cli",
+        return_value={
+            "ok": True, "exit_code": 0, "stdout": "no contract here",
+            "stderr": "", "skill_name": "cta-generate-problem", "error": None,
+        },
+    ):
+        out = await generate_problem_via_skill("数组", "easy")
+    data = json.loads(out)
+    assert "error" in data
+    assert "契约解析失败" in data["error"]

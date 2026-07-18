@@ -219,3 +219,35 @@ async def run_tool_loop(
         if not appended:
             break  # LLM 调了未绑定工具 → 停止，避免空转
     return messages
+
+
+# ──────────────────────────────────────────────
+#  skill-engine CLI 逃生舱
+# ──────────────────────────────────────────────
+
+from code_tutor_agent.agents.skill_cli import generate_problem_via_skill_sync
+
+
+async def generate_problem_via_skill(topic: str, difficulty: str) -> str:
+    """通过 skill-engine CLI 逃生舱生成题目（备选出题通道）。
+
+    异步包装：sync 核心在 ``skill_cli.generate_problem_via_skill_sync``，
+    经 ``asyncio.to_thread`` 防阻塞事件循环。函数名与 ``SKILL_TOOLS``
+    里的工具名一致，便于 ``run_tool_loop`` 用 ``getattr`` 动态解析。
+    """
+    return await asyncio.to_thread(generate_problem_via_skill_sync, topic, difficulty)
+
+
+# 仅在「对话/需求澄清阶段」由 LLM 自主选择题型时使用，
+# 默认不进 AGENT_TOOLS（避免辅导环节误暴露出题工具）。
+SKILL_TOOLS = [
+    StructuredTool.from_function(
+        func=generate_problem_via_skill,
+        name="generate_problem_via_skill",
+        description=(
+            "通过 skill-engine CLI 逃生舱生成练习题。当用户在对话中明确要求"
+            "用 skill-engine 出题、或点名某类题型（数学推导/科学计算/工程场景/AI 启发式）时调用。"
+            "参数 topic 与 difficulty 由对话上下文决定。普通 LeetCode 风格出题不要用此工具。"
+        ),
+    ),
+]

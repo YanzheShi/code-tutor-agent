@@ -115,3 +115,30 @@ def get_cleanup_interval_minutes() -> int:
     从环境变量 SESSION_CLEANUP_INTERVAL_MINUTES 读取，默认 60（1 小时）。
     """
     return int(os.getenv("SESSION_CLEANUP_INTERVAL_MINUTES", "60"))
+
+
+# ── skill-engine CLI 逃生舱 ──
+def get_skill_engine_dir() -> str:
+    """skill-engine 项目根目录（含 skills/ 子目录）。
+
+    从环境变量 SKILL_ENGINE_DIR 读取，默认 D:/Code/PycharmProjects/skill-engine。
+    run 命令用 Path.cwd()/skills 扫描 skill，因此 spawn 时必须 cwd 指到这里。
+    """
+    return os.getenv(
+        "SKILL_ENGINE_DIR",
+        "D:/Code/PycharmProjects/skill-engine",
+    )
+
+
+def get_skill_engine_cli_timeout() -> int:
+    """CLI 子进程超时（秒），默认 60。"""
+    return int(os.getenv("SKILL_ENGINE_CLI_TIMEOUT", "60"))
+
+
+#: 允许通过 CLI 执行的 skill 名白名单（防止任意 skill 名注进 subprocess）
+SKILL_ENGINE_CLI_ALLOWLIST: frozenset[str] = frozenset(
+    os.getenv(
+        "SKILL_ENGINE_CLI_ALLOWLIST",
+        "cta-generate-problem,cta-generate-solution",
+    ).split(",")
+)

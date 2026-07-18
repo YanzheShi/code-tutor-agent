@@ -371,16 +371,35 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         writer("✅ 题目已就绪！")
         break
     else:
-        # ── Fallback: static pool ──
-        logger.warning("All %d attempts failed — falling back to static pool", MAX_ATTEMPTS)
-        _progress(sid, "⚠️ 出题超限，切换到静态题库…")
-        writer("⚠️ 出题超限，切换到静态题库…")
-        problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
-        if problem_dict is None:
-            problem_dict = get_static_problem()
-        logger.info("Fallback → %s", problem_dict.get("title", "unknown"))
-        sample_tcs = problem_dict.get("test_cases", [])[:2]
-        sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
+        # ── 路径 C：CLI 逃生舱（LLM 主通道全失败后）──
+        # 进程隔离地复用 skill-engine 里维护的出题资产（cta-generate-problem）。
+        logger.warning("LLM 出题 %d 次失败 — 尝试 CLI 逃生舱", MAX_ATTEMPTS)
+        _progress(sid, "⚠️ 进程内出题失败，尝试 CLI 逃生舱…")
+        writer("⚠️ 进程内出题失败，尝试 CLI 逃生舱…")
+        from code_tutor_agent.agents.skill_cli import run_skill_cli, parse_problem_markdown
+        cli_res = run_skill_cli(
+            "cta-generate-problem", {"topic": topic, "difficulty": difficulty}
+        )
+        cli_parsed = (
+            parse_problem_markdown(cli_res.get("stdout", "")) if cli_res.get("ok") else None
+        )
+        if cli_parsed:
+            logger.info("CLI 逃生舱出题成功: %s", cli_parsed.get("title"))
+            _progress(sid, "✅ CLI 逃生舱出题成功！")
+            writer("✅ CLI 逃生舱出题成功！")
+            problem_dict = cli_parsed
+            sample_tcs = cli_parsed.get("test_cases", [])[:2]
+        else:
+            # ── 路径 D：静态池（CLI 也失败）──
+            logger.warning("CLI 逃生舱也失败 — 回退静态题库")
+            _progress(sid, "⚠️ CLI 失败，切换到静态题库…")
+            writer("⚠️ CLI 失败，切换到静态题库…")
+            problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
+            if problem_dict is None:
+                problem_dict = get_static_problem()
+            logger.info("Fallback → %s", problem_dict.get("title", "unknown"))
+            sample_tcs = problem_dict.get("test_cases", [])[:2]
+            sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
 
     # ── 持久化到 DB — 先保存示例用例，完整用例后续补充 ──
     # The full test_suite will be generated in the background (API layer)
