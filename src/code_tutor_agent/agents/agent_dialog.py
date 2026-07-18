@@ -470,6 +470,41 @@ async def analyze_user_intent(
                 break  # LLM 调了未绑定工具 → 停止，避免空转
             break  # 已解析 LeetCode，无需多轮
 
+    # ── 兜底：检测到 LeetCode 链接但工具循环未实际解析 ──
+    # 某些模型在工具循环里不会遵循"必须调 parse_leetcode"的指令（尤其
+    # 换题后 context_summary 把上下文搅杂时），导致 tool_results 为空、
+    # is_ready 被结构化 LLM 误判为 False、source 却被它脑补成 leetcode，
+    # 路由层只看 is_ready → 停在对话态、永远不出题（即"卡住"）。
+    # 既然已用正则从 history 提取到了链接，这里**确定性地**解析一次，
+    # 不再依赖模型是否遵循指令。
+    if leetcode_url and "leetcode" not in tool_results:
+        try:
+            out = await parse_leetcode(url=leetcode_url)
+            parsed = json.loads(out)
+        except Exception as e:  # 极端情况：解析本身抛异常
+            parsed = {"error": f"解析失败: {e}"}
+            out = json.dumps(parsed, ensure_ascii=False)
+        if "error" not in parsed:
+            logger.info("LeetCode 链接确定性解析成功（工具循环未触发）— %s", leetcode_url)
+            return DialogIntent(
+                topic=parsed.get("title", ""),
+                difficulty=parsed.get("difficulty", "medium"),
+                is_ready=True,
+                source="leetcode",
+                leetcode_url=leetcode_url,
+                leetcode_payload=out,
+                next_message="好的，已为你解析好 LeetCode 题目，正在生成，请稍等 🚀",
+            )
+        # 解析失败：返回带明确失败提示的意图（而非含糊空话），
+        # 路由层走 else 分支会原样告知用户，不会无限"解析中"。
+        return DialogIntent(
+            is_ready=False,
+            source="leetcode",
+            leetcode_url=leetcode_url,
+            leetcode_payload=out,
+            next_message="抱歉，解析该 LeetCode 题目失败（链接无效或网络异常），请检查链接或换个题试试。",
+        )
+
     # ── 工具用完后再做结构化意图判定（仍复用 DialogIntent）──
     try:
         structured_llm = llm.with_structured_output(DialogIntent)
@@ -568,12 +603,14 @@ def build_initial_message() -> Message:
                 role="tutor",
                 content=f"你好！我是你的 AI 编程导师 🧑‍🏫\n\n"
                         f"我注意到你的薄弱项有：**{suggestions}**。"
-                        f"今天想针对这些方向练习，还是试试别的知识点？",
+                        f"今天想针对这些方向练习，还是试试别的知识点？\n\n"
+                        f"也可以直接把一道 LeetCode 题目链接发给我，我们一起把它啃下来 👇",
             )
     return Message(
         role="tutor",
         content="你好！我是你的 AI 编程导师 🧑‍🏫 今天想练习什么类型的算法题？"
-                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？",
+                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n"
+                "或者直接把一道 LeetCode 题目链接发给我也可以哦～",
     )
 
 

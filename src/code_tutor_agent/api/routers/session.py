@@ -486,18 +486,21 @@ async def next_problem(sid: str, body: NextProblemReq):
         if prev_verdict == "AC":
             _guide_content = (
                 "上一题完美拿下！接下来想练习什么类型的算法题？"
-                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
+                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n"
+                "也可以直接把一道 LeetCode 题目链接发给我，我们接着练 👇"
             )
         elif prev_verdict == "WA":
             _guide_content = (
                 "这道题还差一点，不过没关系，换个方向转换一下思路。"
-                "接下来想练什么类型？数组、链表、双指针、动态规划都可以~"
+                "接下来想练什么类型？数组、链表、双指针、动态规划都可以~\n\n"
+                "或者直接发我一道 LeetCode 题目链接也行～"
             )
         else:
             # 用户未提交就放弃，或没有 verdict
             _guide_content = (
                 "好的，这道题先放一放。接下来想练习什么类型的算法题？"
-                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
+                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n"
+                "也可以直接把一道 LeetCode 题目链接发给我哦～"
             )
         guide_msg = Message(role="tutor", content=_guide_content)
 

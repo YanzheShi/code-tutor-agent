@@ -148,6 +148,63 @@ class TestAnalyzeUserIntent:
             assert "推荐" in result.next_message
 
     @pytest.mark.asyncio
+    async def test_leetcode_url_but_llm_skips_tool_still_ready(self):
+        """回归：贴了链接，但 LLM 在工具循环里没调 parse_leetcode（未遵循指令）。
+
+        必须靠确定性兜底解析，强制 is_ready=True，否则会停在对话态永远不出题
+        （即用户遇到的"三轮后卡住"）。这是修复"给链接却不出题"的关键反例：
+        之前只测了"LLM 调了工具"的 happy path，漏掉了"LLM 不调工具"。
+        """
+        from langchain_core.messages import AIMessage
+
+        class _SkipToolFake:
+            """bind_tools / with_structured_output 都返回自身；invoke 只回纯文本。"""
+
+            def bind_tools(self, tools):
+                return self
+
+            def with_structured_output(self, schema):
+                return self
+
+            def invoke(self, messages):
+                return AIMessage(content="好的，我先看看这道 LeetCode 题")
+
+        _lc = json.dumps(
+            {
+                "title": "Longest Common Prefix",
+                "difficulty": "easy",
+                "description": "找字符串数组的最长公共前缀",
+                "examples": [],
+                "starter_code": "class Solution:",
+            },
+            ensure_ascii=False,
+        )
+
+        history = [
+            Message(role="tutor", content="想练什么类型的题？"),
+            Message(
+                role="user",
+                content="继续解析这个题目来做：https://leetcode.cn/problems/longest-common-prefix/description/",
+            ),
+        ]
+
+        with patch(
+            "code_tutor_agent.agents.agent_dialog.get_llm", return_value=_SkipToolFake()
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog._build_transcript", return_value="t"
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog._build_profile_summary", return_value=""
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog.parse_leetcode",
+            new=AsyncMock(return_value=_lc),
+        ):
+            result = await analyze_user_intent(history)
+
+        assert result.source == "leetcode"
+        assert result.is_ready is True, "LLM 未调工具时，兜底必须确定性解析并强制 is_ready=True"
+        assert "Longest Common Prefix" in result.leetcode_payload
+
+    @pytest.mark.asyncio
     async def test_empty_history_returns_fallback(self):
         """With empty history, get_llm fails → fallback is returned safely."""
         with patch("code_tutor_agent.agents.agent_dialog.get_llm") as mock_get:
