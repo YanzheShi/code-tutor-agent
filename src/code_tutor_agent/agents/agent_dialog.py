@@ -13,14 +13,19 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Literal
 
 from pydantic import BaseModel, Field
+from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 
 from code_tutor_agent.config import get_llm
 from code_tutor_agent.schemas.state import Message
+from code_tutor_agent.agents.tools import AGENT_TOOLS, parse_leetcode
 
 logger = logging.getLogger(__name__)
+
+# 工具循环最大轮数，避免 LLM 反复调工具的空转
+MAX_TOOL_ROUNDS = 3
 
 # ── Tag enum → 中文名称映射（与 planner.py 的 _TAG_TO_TOPIC 一致）──
 _TAG_CN: dict[str, str] = {
@@ -54,6 +59,10 @@ class DialogIntent(BaseModel):
     difficulty: str = Field(default="", description="easy/medium/hard")
     is_ready: bool = Field(default=False, description="是否可以出题了")
     next_message: str = Field(default="", description="给用户的下一轮消息")
+    # —— 工具调用扩展（由 agent 工具循环填充，LLM 结构化输出不会生成这些）——
+    source: Literal["generated", "leetcode"] = Field(default="generated", description="题目来源")
+    leetcode_url: str = Field(default="", description="source==leetcode 时记录原始链接")
+    leetcode_payload: str = Field(default="", description="parse_leetcode 工具返回的题目 JSON（供路由层写入 state.leetcode）")
 
 
 # ──────────────────────────────────────────────
@@ -92,6 +101,10 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 - topic 和 difficulty 都明确 → is_ready=true
 - 用户多次表示无偏好（2+ 轮"随便"）→ 自动选一个 topic+medium 难度 → is_ready=true
 - 用户明确说"出题吧"/"给我出题"且 topic 和 difficulty 都已确定 → is_ready=true
+
+## 工具调用（LeetCode 解析）
+- 只要用户消息里出现 LeetCode 链接（leetcode.com 或 leetcode.cn 的 /problems/xxx），**必须**调用 parse_leetcode 工具解析该题目，不要凭记忆猜测题号或标题。
+- 解析成功即代表用户想做这道具体题，应视为已就绪（is_ready=true），直接进入出题流程，不要再追问"先讲思路还是先给描述"之类的问题。
 
 ## 输出 JSON
 ```json
@@ -342,12 +355,31 @@ def _pick_auto_topic(profile_summary: str) -> str:
     return random.choice(fallback)
 
 
-def analyze_user_intent(
+def _extract_leetcode_url(history: list[Message]) -> str | None:
+    """从对话历史里找出第一个 LeetCode 题目链接（若有）。"""
+    pattern = re.compile(r"https?://(?:www\.)?(?:leetcode\.(?:com|cn))/problems/([^/\s?#]+)")
+    for m in history:
+        content = _to_msg_dict(m).get("content", "")
+        if not content:
+            continue
+        mm = pattern.search(content)
+        if mm:
+            return mm.group(0)
+    return None
+
+
+async def analyze_user_intent(
     history: list[Message],
     model_alias: str = "agnes",
     context_summary: str | None = None,
 ) -> DialogIntent:
-    """Synchronous structured analysis — reliable JSON via with_structured_output.
+    """Structured analysis with an optional tool-calling loop.
+
+    If the user pasted a LeetCode link, the LLM is given the ``parse_leetcode``
+    tool and may call it; the parsed payload is attached to the returned
+    ``DialogIntent`` (``source="leetcode"`` + ``leetcode_payload``) so the
+    router can write ``state.leetcode`` and let generator path A build the
+    problem directly.
 
     Falls back to raw LLM + regex parsing if structured output fails.
 
@@ -361,52 +393,115 @@ def analyze_user_intent(
     """
     logger.info("▶ analyze_user_intent() — %d messages", len(history))
 
-    # ── 硬守护：检测"随便"循环，避免反复追问 ──
-    _no_pref_keywords = ["随便", "随机", "都可以", "都行", "无所谓", "你来选", "你定吧"]
-    _user_msgs = [m.content for m in history if _to_msg_dict(m).get("role") == "user"]
-    _no_pref_count = sum(
-        1 for msg in _user_msgs[-3:]  # 只看最近 3 条用户消息
-        if any(kw in msg for kw in _no_pref_keywords)
-    )
-    if _no_pref_count >= 2 and len(history) >= 4:
-        # 用户连续 2+ 轮无偏好 → 自动选方向，不再追问
-        logger.info("'随便' loop detected — auto-selecting topic")
-        # 尝试从画像弱项中选
-        profile_summary = _build_profile_summary()
-        auto_topic = _pick_auto_topic(profile_summary)
-        return DialogIntent(
-            topic=auto_topic,
-            difficulty="medium",
-            is_ready=True,
-            next_message=(
-                f"好的，我看到你还没确定方向，那我帮你选一道 **{auto_topic}** 的题吧！"
-                "难度中等，不会太简单也不会太难，马上为你生成 🚀"
-            ),
+    # ── 提取 LeetCode 链接（决定要不要给 LLM 绑 parse_leetcode 工具）──
+    leetcode_url = _extract_leetcode_url(history)
+
+    # ── 硬守护：检测"随便"循环，避免反复追问（贴了链接就不走此分支）──
+    if not leetcode_url:
+        _no_pref_keywords = ["随便", "随机", "都可以", "都行", "无所谓", "你来选", "你定吧"]
+        _user_msgs = [m.content for m in history if _to_msg_dict(m).get("role") == "user"]
+        _no_pref_count = sum(
+            1 for msg in _user_msgs[-3:]  # 只看最近 3 条用户消息
+            if any(kw in msg for kw in _no_pref_keywords)
         )
+        if _no_pref_count >= 2 and len(history) >= 4:
+            # 用户连续 2+ 轮无偏好 → 自动选方向，不再追问
+            logger.info("'随便' loop detected — auto-selecting topic")
+            profile_summary = _build_profile_summary()
+            auto_topic = _pick_auto_topic(profile_summary)
+            return DialogIntent(
+                topic=auto_topic,
+                difficulty="medium",
+                is_ready=True,
+                next_message=(
+                    f"好的，我看到你还没确定方向，那我帮你选一道 **{auto_topic}** 的题吧！"
+                    "难度中等，不会太简单也不会太难，马上为你生成 🚀"
+                ),
+            )
 
     transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
+    system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
+    user_prompt = (
+        f"## 对话历史\n\n{transcript}\n\n"
+        + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
+        + "请分析用户的意图。"
+    )
 
     try:
         llm = get_llm(model_alias, temperature=0.7)
-        structured_llm = llm.with_structured_output(DialogIntent)
-        system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
-        user_prompt = (
-            f"## 对话历史\n\n{transcript}\n\n"
-            + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
-            + "请分析用户的意图。"
-        )
-
-        result: DialogIntent = structured_llm.invoke([
-            ("system", system_prompt),
-            ("human", user_prompt),
-        ])
-        logger.info("intent → topic=%s diff=%s ready=%s",
-                     result.topic or "?", result.difficulty or "?", result.is_ready)
-        return result
     except Exception as exc:
-        logger.warning("LLM structured output failed, trying fallback: %s", exc)
+        # get_llm 失败（配置/网络）→ 直接走兜底，避免工具循环也崩
+        logger.warning("get_llm failed, using fallback: %s", exc)
         return _fallback_parse_intent(transcript, profile_summary)
+
+    # ── 工具循环：仅当用户贴了 LeetCode 链接时才绑 parse_leetcode ──
+    # 对话意图分析阶段只用解析工具；judge_* 工具留给辅导环节（见设计文档 §2.3）。
+    parse_tool = next((t for t in AGENT_TOOLS if t.name == "parse_leetcode"), None)
+    tools = [parse_tool] if (parse_tool and leetcode_url) else []
+    llm_with_tools = llm.bind_tools(tools) if tools else llm
+
+    messages: list = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_prompt),
+    ]
+    tool_results: dict[str, str] = {}
+
+    if tools:
+        for _ in range(MAX_TOOL_ROUNDS):
+            ai = llm_with_tools.invoke(messages)
+            tcs = getattr(ai, "tool_calls", None) or []
+            if not tcs:
+                break
+            handled = False
+            for tc in tcs:
+                if tc.get("name") != "parse_leetcode":
+                    continue  # 意图分析阶段只接解析工具
+                try:
+                    out = await parse_leetcode(**tc.get("args", {}))
+                except Exception as e:  # 工具异常不崩，转成 error JSON
+                    out = json.dumps({"error": f"解析失败: {e}"})
+                tool_results["leetcode"] = out
+                leetcode_url = tc.get("args", {}).get("url", leetcode_url or "")
+                messages.append(ai)
+                messages.append(ToolMessage(content=out, tool_call_id=tc["id"]))
+                handled = True
+            if not handled:
+                break  # LLM 调了未绑定工具 → 停止，避免空转
+            break  # 已解析 LeetCode，无需多轮
+
+    # ── 工具用完后再做结构化意图判定（仍复用 DialogIntent）──
+    try:
+        structured_llm = llm.with_structured_output(DialogIntent)
+        intent = structured_llm.invoke(messages)
+    except Exception as exc:
+        logger.warning("LLM structured output failed after tool loop, fallback: %s", exc)
+        intent = _fallback_parse_intent(transcript, profile_summary)
+
+    # ── 把解析结果挂到意图上，供路由层写入 state.leetcode ──
+    if "leetcode" in tool_results:
+        try:
+            parsed = json.loads(tool_results["leetcode"])
+            if "error" not in parsed:
+                intent.source = "leetcode"
+                intent.leetcode_url = leetcode_url or ""
+                intent.leetcode_payload = tool_results["leetcode"]
+                # 关键修复：LeetCode 解析成功即视为"已就绪"。
+                # 题目已由具体链接确定，无需再收集 topic/difficulty，
+                # 必须直接触发出题（generator 路径 A），否则路由层
+                # `if intent.is_ready` 会因结构化 LLM 把 is_ready 判为 False
+                # 而停在对话态、丢弃 payload，导致永远不出题。
+                intent.is_ready = True
+                if not intent.next_message:
+                    intent.next_message = "好的，已为你解析好 LeetCode 题目，正在生成，请稍等 🚀"
+            else:
+                intent.next_message = "抱歉，解析该 LeetCode 题目失败，请检查链接或换个题试试。"
+        except json.JSONDecodeError:
+            pass
+
+    logger.info("intent → topic=%s diff=%s ready=%s source=%s",
+                intent.topic or "?", intent.difficulty or "?", intent.is_ready, intent.source)
+    return intent
 
 
 async def stream_dialog_response(

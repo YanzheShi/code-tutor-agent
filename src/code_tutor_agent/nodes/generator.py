@@ -112,7 +112,7 @@ def _generate_optimal_for_leetcode_sync(
     """
     from code_tutor_agent.config import get_llm
 
-    writer = get_stream_writer()
+    writer = get_stream_writer() or (lambda *a, **k: None)
 
     logger.info("Generating optimal_solution for LeetCode '%s' (%d)", title, problem_id)
     writer("🤖 正在生成最优解代码...")
@@ -167,6 +167,11 @@ def _generate_from_leetcode(
     starter code all come from the LeetCode API), but still uses the LLM
     to generate the optimal solution code.
     """
+    # stream writer: 后台 graph.invoke 无 stream 上下文时 get_stream_writer()
+    # 返回 None，用 no-op 兜底避免崩溃；且本函数是独立函数，必须自己定义 writer，
+    # 不能依赖 generator_node 的局部变量（否则 NameError）。
+    writer = get_stream_writer() or (lambda *a, **k: None)
+
     title = lc_data.get("title", "LeetCode Problem")
     description = lc_data.get("description", "")
     difficulty = lc_data.get("difficulty", "medium")
@@ -188,8 +193,11 @@ def _generate_from_leetcode(
     # Extract function_signature from starter_code
     func_sig = extract_function_signature(starter_code)
 
-    # Build visible test cases from examples
-    visible_tcs = _parse_examples_to_test_cases(examples, "")
+    # Build visible test cases from examples.
+    # 优先用 parse_leetcode 已正确解析好的 parsed_test_cases（带函数签名推断），
+    # 不再用 "" 重解析——否则裸 exampleTestcases（无 Input/Output 文本）的题
+    # 会被按 1 个参数错误分组，生成错误用例。
+    visible_tcs = lc_data.get("parsed_test_cases") or _parse_examples_to_test_cases(examples, starter_code)
     logger.info("Parsed %d visible test cases from LeetCode examples", len(visible_tcs))
 
     problem_dict = {
@@ -202,6 +210,10 @@ def _generate_from_leetcode(
         "novelty_score": 9.0,
         "brute_solution": "",
         "function_signature": func_sig,
+        # 落库约束条件：save_problem 已支持写入 constraints_json，
+        # 后台 _generate_complex_tests 读 full.constraints 生成边界用例时
+        # 就有约束引导（否则边界用例缺乏约束，覆盖面弱）。
+        "constraints": lc_data.get("constraints", []),
     }
 
     # Save to DB (returns problem_id)
@@ -267,7 +279,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     """
     logger.info("▶ generator_node() — topic=%s, difficulty=%s", state.topic, state.difficulty)
     sid = state.session_id
-    writer = get_stream_writer()
+    writer = get_stream_writer() or (lambda *a, **k: None)
 
     topic = state.topic
     difficulty = state.difficulty
