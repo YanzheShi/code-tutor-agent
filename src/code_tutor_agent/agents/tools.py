@@ -40,6 +40,18 @@ from code_tutor_agent.sandbox.judge0_client import (
     submit_test_cases,
     check_health,
 )
+# Phase 2（DP-1）：import 主通道。tools 是 LLM 调用 skill 的唯一封装层，
+# 由 mode 决定走 adapter（默认）还是 opt-in CLI 逃生舱。
+from code_tutor_agent.skills import engine_adapter as _engine_adapter
+
+import logging as _logging
+logger = _logging.getLogger(__name__)
+
+# 当前题上下文（请求级）：由 chat.py 在跑工具循环前写入，
+# 供下方 *_via_skill 在日志里回溯「这条题解/这道题是哪个 problem 的」。
+# 默认空 dict，未设置时不报错。
+from contextvars import ContextVar
+current_problem_ctx: ContextVar[dict] = ContextVar("current_problem_ctx", default={})
 
 
 # ──────────────────────────────────────────────
@@ -225,17 +237,101 @@ async def run_tool_loop(
 #  skill-engine CLI 逃生舱
 # ──────────────────────────────────────────────
 
-from code_tutor_agent.agents.skill_cli import generate_problem_via_skill_sync
+from code_tutor_agent.agents.skill_cli import (
+    generate_problem_via_skill_sync,
+    generate_detailed_solution_via_skill_sync,
+)
 
 
-async def generate_problem_via_skill(topic: str, difficulty: str) -> str:
-    """通过 skill-engine CLI 逃生舱生成题目（备选出题通道）。
+async def generate_problem_via_skill(
+    topic: str, difficulty: str, *, mode: str = "adapter"
+) -> str:
+    """通过 skill-engine 生成练习题（备选出题通道）。
 
-    异步包装：sync 核心在 ``skill_cli.generate_problem_via_skill_sync``，
-    经 ``asyncio.to_thread`` 防阻塞事件循环。函数名与 ``SKILL_TOOLS``
-    里的工具名一致，便于 ``run_tool_loop`` 用 ``getattr`` 动态解析。
+    默认走 import 主通道（``engine_adapter.generate_problem``，进程内、结构化、
+    直接喂 DB）；仅当用户在对话中显式要求 ``mode="cli"`` 时，才回退到
+    ``skill_cli`` 子进程逃生舱（1:1 复现 CI 行为 / 调试 skill）。
+
+    异步包装：同步核心经 ``asyncio.to_thread`` 防阻塞事件循环。函数名与
+    ``SKILL_TOOLS`` 里的工具名一致，便于 ``run_tool_loop`` 用 ``getattr`` 解析。
+
+    任何通道失败都归一为 ``{"error": ...}`` JSON，不向外抛。
     """
-    return await asyncio.to_thread(generate_problem_via_skill_sync, topic, difficulty)
+    _ctx = current_problem_ctx.get()
+    logger.info(
+        "▶ 出题（skill）topic=%s difficulty=%s mode=%s problem=%s title=%s",
+        topic, difficulty, mode, _ctx.get("problem_id"), _ctx.get("title"),
+    )
+    if mode == "cli":
+        return await asyncio.to_thread(
+            generate_problem_via_skill_sync, topic, difficulty
+        )
+    # 默认 adapter 主通道
+    try:
+        prob = await asyncio.to_thread(
+            _engine_adapter.generate_problem, topic, difficulty, max_retries=1
+        )
+        return json.dumps(prob, ensure_ascii=False)
+    except Exception as exc:  # adapter 任何异常都降级为 error JSON
+        return json.dumps(
+            {"error": f"adapter 出题失败: {exc}"}, ensure_ascii=False
+        )
+
+
+async def generate_detailed_solution_via_skill(
+    description: str, *, mode: str = "adapter"
+) -> str:
+    """通过 skill-engine 为当前题生成详细题解（Markdown 文本）。
+
+    默认走 import 主通道（``engine_adapter.generate_detailed_solution``）；
+    仅当 ``mode="cli"`` 时回退到 ``skill_cli`` 子进程逃生舱。
+
+    异步包装：同步核心经 ``asyncio.to_thread`` 防阻塞事件循环。函数名与
+    ``AGENT_TOOLS`` 里的工具名一致，便于 ``run_tool_loop`` 用 ``getattr`` 解析。
+
+    任何通道失败都归一为 ``{"error": ...}`` JSON，不向外抛。
+    """
+    _ctx = current_problem_ctx.get()
+    logger.info(
+        "▶ 题解生成（skill）mode=%s problem=%s title=%s len(desc)=%d",
+        mode, _ctx.get("problem_id"), _ctx.get("title"), len(description or ""),
+    )
+    if mode == "cli":
+        return await asyncio.to_thread(
+            generate_detailed_solution_via_skill_sync, description
+        )
+    # 默认 adapter 主通道
+    try:
+        return await asyncio.to_thread(
+            _engine_adapter.generate_detailed_solution, description
+        )
+    except Exception as exc:  # adapter 任何异常都降级为 error JSON
+        return json.dumps(
+            {"error": f"adapter 生成详细题解失败: {exc}"}, ensure_ascii=False
+        )
+
+
+# 注册进 AGENT_TOOLS，使 LLM 在对话中可应请求调用（函数定义在 import 之后，故此处追加）
+AGENT_TOOLS.append(
+    StructuredTool.from_function(
+        func=generate_detailed_solution_via_skill,
+        name="generate_detailed_solution_via_skill",
+        description=(
+            "为『当前已选中的题』生成详细、可教学的题解"
+            "（多思路演进、复杂度分析、可运行代码、易错点、核心洞察），区别于仅给解题代码的 cta-generate-solution。"
+            "当用户在对话中请求『讲讲这题 / 给个详细题解 / 讲讲思路』时调用，"
+            "参数 description 传入该题的完整题面（来自已解析的题目）。"
+            "默认走进程内 import 通道（adapter）；仅当用户显式要求 CLI / 调试 skill 时传 mode='cli'。"
+        ),
+    )
+)
+
+
+# 导师辅导环节工具集：judge_* 现场验证工具 + 详细题解生成工具。
+# 注意：JUDGE_TOOLS 在上方定义时 generate_detailed_solution_via_skill 尚未 append 进
+# AGENT_TOOLS，故此处在其之后重新聚合，供 chat.py 的辅导路径绑定。
+_detailed_solution_tool = get_tool("generate_detailed_solution_via_skill")
+TUTOR_TOOLS = JUDGE_TOOLS + ([_detailed_solution_tool] if _detailed_solution_tool else [])
 
 
 # 仅在「对话/需求澄清阶段」由 LLM 自主选择题型时使用，
@@ -245,9 +341,10 @@ SKILL_TOOLS = [
         func=generate_problem_via_skill,
         name="generate_problem_via_skill",
         description=(
-            "通过 skill-engine CLI 逃生舱生成练习题。当用户在对话中明确要求"
+            "生成练习题（skill-engine 出题资产）。当用户在对话中明确要求"
             "用 skill-engine 出题、或点名某类题型（数学推导/科学计算/工程场景/AI 启发式）时调用。"
             "参数 topic 与 difficulty 由对话上下文决定。普通 LeetCode 风格出题不要用此工具。"
+            "默认走进程内 import 通道（adapter）；仅当用户显式要求 CLI / 调试 skill 时传 mode='cli'。"
         ),
     ),
 ]

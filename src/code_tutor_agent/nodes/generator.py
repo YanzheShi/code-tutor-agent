@@ -43,6 +43,7 @@ from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.sandbox.ds import get_struct_prologue
 from code_tutor_agent.sandbox.runner import run_solution
+from code_tutor_agent.leetcode.leetcode_fetcher import extract_function_signature
 from code_tutor_agent.schemas.state import Message as TutorMsg
 from code_tutor_agent.schemas.state import ProblemMeta, SessionPhase, SessionState
 from code_tutor_agent.store.static_pool import get_static_problem
@@ -69,7 +70,64 @@ _TOPIC_TAG_MAP: dict[str, str] = {
     "位运算": "bit_manip",
     "排序": "array_sorting",
     "前缀和": "array_prefix_sum",
+    # ── 图 / 树 / 堆 / 并查集 等（取值须为合法 Tag 枚举，避免默认 array_basics）──
+    "图": "graph_dfs",
+    "图论": "graph_dfs",
+    "图遍历": "graph_dfs",
+    "图的dfs": "graph_dfs",
+    "图的bfs": "graph_bfs",
+    "图bfs": "graph_bfs",
+    "拓扑排序": "graph_topo",
+    "最短路径": "graph_dfs",
+    "并查集": "union_find",
+    "树": "tree_dfs",
+    "树结构": "tree_dfs",
+    "二叉树": "tree_bfs",
+    "堆": "heap_priority_queue",
+    "优先队列": "heap_priority_queue",
+    "回溯": "backtrack",
+    "数论": "math_number_theory",
 }
+
+
+# ── 中文知识点口语 → 规范化出题描述 ──
+# 典型坑：用户说「图」被 skill/LLM 理解成「图片 / 网格矩阵」，实际指图论
+# （graph theory）。这里把口语归一化为明确的出题描述后再喂给 LLM / skill。
+_TOPIC_GEN_MAP: dict[str, str] = {
+    "图": "图论（graph theory：顶点与边的数据结构与算法，例如图的 DFS/BFS 遍历、连通分量、最短路径、拓扑排序；注意：不是图片/图像/像素，也不是二维网格矩阵 grid）",
+    "图论": "图论（graph theory：顶点与边的数据结构与算法，例如图的 DFS/BFS 遍历、连通分量、最短路径、拓扑排序）",
+    "图遍历": "图论遍历（图的 DFS/BFS，邻接表/邻接矩阵表示，含 visited 集合防环）",
+    "图的bfs": "图的广度优先搜索（BFS，队列实现，邻接表/邻接矩阵表示）",
+    "图的dfs": "图的深度优先搜索（DFS，递归或栈，邻接表/邻接矩阵表示）",
+    "拓扑排序": "拓扑排序（topological sort，有向无环图 DAG，Kahn 算法或 DFS 后序）",
+    "最短路径": "最短路径（图论，Dijkstra / Bellman-Ford / Floyd）",
+    "并查集": "并查集（union-find / disjoint set，路径压缩 + 按秩合并）",
+    "树": "二叉树/树结构（tree，例如遍历、LCA、路径和、直径）",
+    "二叉树": "二叉树（binary tree，例如前中后序遍历、层序、LCA）",
+    "堆": "堆 / 优先队列（heap / priority queue，例如堆排序、Top-K、中位数）",
+    "优先队列": "优先队列（priority queue，heap 实现）",
+    "回溯": "回溯（backtracking，例如排列/组合/子集、N 皇后）",
+    "贪心": "贪心（greedy，局部最优推导全局最优）",
+    "位运算": "位运算（bit manipulation，异或、掩码、lowbit）",
+    "数论": "数论（number theory，质数、GCD、模运算）",
+}
+
+
+def normalize_topic_for_generation(topic: str) -> str:
+    """把用户口语化知识点（如中文「图」）归一化为明确的出题描述。
+
+    优先精确匹配；否则取包含该子串的最长键（如「图的bfs」优先于「图」）；
+    未命中时原样返回，避免误伤英文 slug 或标准术语（如 'two-sum'）。
+    """
+    if not topic:
+        return topic
+    t = topic.strip()
+    if t in _TOPIC_GEN_MAP:
+        return _TOPIC_GEN_MAP[t]
+    for key in sorted(_TOPIC_GEN_MAP, key=len, reverse=True):
+        if key in t:
+            return _TOPIC_GEN_MAP[key]
+    return t
 
 
 def tag_for(topic: str) -> str:
@@ -135,7 +193,10 @@ def _generate_optimal_for_leetcode_sync(
 
     try:
         llm = get_llm("agnes", temperature=0.3)
-        resp = llm.invoke([("human", prompt)], metadata={"node": "generator", "step": "generate_problem"})
+        resp = llm.invoke(
+            [("human", prompt)],
+            config={"metadata": {"node": "generator", "step": "generate_problem"}},
+        )
         code = resp.content if hasattr(resp, "content") else str(resp)
         # Strip markdown fences
         import re
@@ -283,6 +344,9 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
 
     topic = state.topic
     difficulty = state.difficulty
+    # 归一化：把口语知识点（如「图」）转成明确出题描述喂给 LLM/skill，
+    # 但保留原始 topic 用于展示与 tag 归类（见下方 save_problem 覆盖回 topic）。
+    gen_topic = normalize_topic_for_generation(topic)
 
     # ── 路径 A：LeetCode 导入（跳过 LLM 生成）──
     lc_data = state.leetcode
@@ -308,7 +372,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         writer(f"第 {attempt}/{MAX_ATTEMPTS} 次尝试 — 生成中…")
 
         try:
-            problem_obj = generate_problem(topic=topic, difficulty=difficulty)
+            problem_obj = generate_problem(topic=gen_topic, difficulty=difficulty)
             problem_dict = problem_obj.model_dump()
         except Exception as exc:
             logger.warning("LLM generation failed: %s", exc)
@@ -345,7 +409,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
             expected = tc.get("expected_output", "")
             if expected and expected not in ("", "..."):
                 continue
-            results = run_solution(brute_code, [tc], timeout=10.0)
+            results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig)
             if results:
                 r = results[0]
                 actual = r.detail or ""
@@ -371,29 +435,30 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         writer("✅ 题目已就绪！")
         break
     else:
-        # ── 路径 C：CLI 逃生舱（LLM 主通道全失败后）──
-        # 进程隔离地复用 skill-engine 里维护的出题资产（cta-generate-problem）。
-        logger.warning("LLM 出题 %d 次失败 — 尝试 CLI 逃生舱", MAX_ATTEMPTS)
-        _progress(sid, "⚠️ 进程内出题失败，尝试 CLI 逃生舱…")
-        writer("⚠️ 进程内出题失败，尝试 CLI 逃生舱…")
-        from code_tutor_agent.agents.skill_cli import run_skill_cli, parse_problem_markdown
-        cli_res = run_skill_cli(
-            "cta-generate-problem", {"topic": topic, "difficulty": difficulty}
-        )
-        cli_parsed = (
-            parse_problem_markdown(cli_res.get("stdout", "")) if cli_res.get("ok") else None
-        )
-        if cli_parsed:
-            logger.info("CLI 逃生舱出题成功: %s", cli_parsed.get("title"))
-            _progress(sid, "✅ CLI 逃生舱出题成功！")
-            writer("✅ CLI 逃生舱出题成功！")
-            problem_dict = cli_parsed
-            sample_tcs = cli_parsed.get("test_cases", [])[:2]
+        # ── 路径 C：进程内 import 通道（主通道失败后才走，进程内、结构化、直接可落库）──
+        # 复用 skill-engine 里维护的出题资产（cta-generate-problem），经 engine_adapter
+        # 确定性 bootstrap（discover → load_skill → Runner.run(llm=)），不走子进程。
+        logger.warning("LLM 出题 %d 次失败 — 尝试 skill-engine (import)", MAX_ATTEMPTS)
+        _progress(sid, "⚠️ 进程内出题失败，尝试 skill-engine 出题…")
+        writer("⚠️ 进程内出题失败，尝试 skill-engine 出题…")
+        problem_dict = None
+        try:
+            from code_tutor_agent.skills.engine_adapter import generate_problem as _adapter_gen
+            problem_dict = _adapter_gen(gen_topic, difficulty, max_retries=1)
+        except Exception as exc:  # 任何失败都降级，不冒泡
+            logger.warning("skill-engine 出题也失败 — 回退静态题库: %s", exc)
+            _progress(sid, "⚠️ skill-engine 失败，切换到静态题库…")
+            writer("⚠️ skill-engine 失败，切换到静态题库…")
+        if problem_dict:
+            logger.info("skill-engine 出题成功: %s", problem_dict.get("title"))
+            _progress(sid, "✅ skill-engine 出题成功！")
+            writer("✅ skill-engine 出题成功！")
+            sample_tcs = problem_dict.get("test_cases", [])[:2]
         else:
-            # ── 路径 D：静态池（CLI 也失败）──
-            logger.warning("CLI 逃生舱也失败 — 回退静态题库")
-            _progress(sid, "⚠️ CLI 失败，切换到静态题库…")
-            writer("⚠️ CLI 失败，切换到静态题库…")
+            # ── 路径 D：静态池（import 通道也失败）──
+            logger.warning("skill-engine 也失败 — 回退静态题库")
+            _progress(sid, "⚠️ skill-engine 失败，切换到静态题库…")
+            writer("⚠️ skill-engine 失败，切换到静态题库…")
             problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
             if problem_dict is None:
                 problem_dict = get_static_problem()
@@ -406,6 +471,17 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     # and saved via update_problem_test_cases()
     if problem_dict:
         problem_dict["test_cases"] = sample_tcs
+        # skill / 静态池路径常常不产出 function_signature（或解析被漏掉），
+        # 缺签名会让后台 _generate_complex_tests 退化成 0 用例、判题退化。
+        # 优先用 parser 已解析的字段；缺失时从 starter_code 启发式提取。
+        fsig = (problem_dict.get("function_signature") or "").strip()
+        if not fsig:
+            _starter = problem_dict.get("starter_code", "") or ""
+            if _starter:
+                fsig = extract_function_signature(_starter)
+            problem_dict["function_signature"] = fsig
+        # 展示用的知识点用用户原始输入，避免 skill 回填的长描述污染 UI
+        problem_dict["topic"] = topic
     problem_id = save_problem(problem_dict or {})
 
     # If dedup happened (title already existed), reload from DB for correct starter_code

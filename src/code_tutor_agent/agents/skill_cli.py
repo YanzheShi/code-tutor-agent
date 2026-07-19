@@ -7,13 +7,17 @@
 - 中文 argv 乱码：PowerShell 直接塞中文到 argv 会乱码（环境编码问题，非 bug）。
   故一律用 list 形式传参（不走 shell 字符串拼接）；topic 优先用英文键，
   必要时改用 --args-file 临时文件/环境变量传参彻底绕开 argv 编码。
+
+Phase 4（DP-5 延伸）：``run_skill_cli`` 返回结构与 import 主通道共用的
+``SkillResult``（skills/result.py）**同形**，使上层（tools.py 的 mode 路由）
+不感知通道差异，统一以 ``.ok`` / ``.output`` / ``.error`` 消费。
+解析逻辑复用共享模块 skills/parser.parse_problem_markdown（与 adapter 同一份）。
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import subprocess
 
 from code_tutor_agent.config import (
@@ -21,7 +25,13 @@ from code_tutor_agent.config import (
     get_skill_engine_cli_timeout,
     SKILL_ENGINE_CLI_ALLOWLIST,
 )
-from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
+# DP-5：解析逻辑抽到共享模块 skills/parser.py，import 主通道与 CLI 逃生舱共用。
+# 此处 re-export 保持 `from skill_cli import parse_problem_markdown` 的历史导入不破。
+from code_tutor_agent.skills.parser import (  # noqa: F401
+    parse_problem_markdown,
+    _strip_fences,
+)
+from code_tutor_agent.skills.result import SkillResult
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +42,8 @@ def run_skill_cli(
     *,
     use_llm: bool = True,
     timeout: int | None = None,
-) -> dict:
-    """执行一个 skill-engine skill，返回结构化结果。
+) -> SkillResult:
+    """执行一个 skill-engine skill，返回结构化结果（SkillResult 同形）。
 
     Args:
         skill_name: skill 名，必须在 SKILL_ENGINE_CLI_ALLOWLIST 内。
@@ -42,23 +52,26 @@ def run_skill_cli(
         timeout: 子进程超时（秒），默认读配置。
 
     Returns:
-        {
-          "ok": bool,
-          "exit_code": int,
-          "stdout": str,
-          "stderr": str,
-          "skill_name": str,
-          "error": str | None,   # ok=False 时填原因
-        }
+        SkillResult：ok 表示成败；output 为主文本（markdown）；
+        meta 携带 exit_code / stderr / channel（=“cli”）等逃生舱元信息；
+        error 在 ok=False 时填原因。任何异常（超时/命令缺失）均归一为
+        ok=False，**不向外抛**。
     """
     if skill_name not in SKILL_ENGINE_CLI_ALLOWLIST:
-        return {"ok": False, "exit_code": -1, "stdout": "", "stderr": "",
-                "skill_name": skill_name,
-                "error": f"skill '{skill_name}' 不在白名单 {sorted(SKILL_ENGINE_CLI_ALLOWLIST)}"}
+        return SkillResult(
+            skill_name=skill_name,
+            ok=False,
+            error=f"skill '{skill_name}' 不在白名单 {sorted(SKILL_ENGINE_CLI_ALLOWLIST)}",
+        )
 
     timeout = timeout or get_skill_engine_cli_timeout()
-    # -a 参数序列化：skill 约定形如 topic=数组,difficulty=easy
-    args_str = ",".join(f"{k}={v}" for k, v in args.items())
+    # -a 参数序列化：
+    #  - 含 $ARGUMENTS（整段题面，可能含逗号/换行）→ 直接作为整段，注入 skill 的 $ARGUMENTS
+    #  - 否则按 skill 约定形如 topic=数组,difficulty=easy
+    if "$ARGUMENTS" in args:
+        args_str = str(args["$ARGUMENTS"])
+    else:
+        args_str = ",".join(f"{k}={v}" for k, v in args.items())
     cmd = ["skill-engine", "run", skill_name, "-a", args_str]
     if use_llm:
         cmd.append("--llm")
@@ -72,76 +85,51 @@ def run_skill_cli(
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        return {"ok": False, "exit_code": -1, "stdout": "", "stderr": "",
-                "skill_name": skill_name, "error": f"超时（>{timeout}s）"}
+        return SkillResult(
+            skill_name=skill_name, ok=False,
+            error=f"超时（>{timeout}s）",
+        )
     except FileNotFoundError:
-        return {"ok": False, "exit_code": -1, "stdout": "", "stderr": "",
-                "skill_name": skill_name, "error": "skill-engine 命令未找到（SKILL_ENGINE_DIR 配错？）"}
+        return SkillResult(
+            skill_name=skill_name, ok=False,
+            error="skill-engine 命令未找到（SKILL_ENGINE_DIR 配错？）",
+        )
 
     out = proc.stdout or ""
     err = proc.stderr or ""
     ok = proc.returncode == 0 and bool(out.strip())
-    return {
-        "ok": ok,
-        "exit_code": proc.returncode,
-        "stdout": out,
-        "stderr": err,
-        "skill_name": skill_name,
-        "error": None if ok else (err.strip() or f"exit_code={proc.returncode}"),
-    }
-
-
-# cta-generate-problem 输出契约节（## Title / Topic / Difficulty / Description /
-# Examples / Constraints / StarterCode / BruteSolution / OptimalSolution）
-_SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
-
-
-def _strip_fences(s: str) -> str:
-    """去掉 Markdown 代码围栏（```lang ... ```），无围栏则原样 strip。"""
-    m = re.search(r"```[a-zA-Z]*\n?(.*?)```", s, re.DOTALL)
-    return m.group(1).strip() if m else s.strip()
-
-
-def parse_problem_markdown(stdout: str) -> dict | None:
-    """从 skill 输出里抠出契约节 → 扁平 dict。
-
-    返回 None 表示解析不到任何契约节（stdout 异常）。
-    字段映射严格对应 ProblemMeta（见 schemas/state.py）。
-    """
-    if not stdout or "##" not in stdout:
-        return None
-    # 取最后一个 "====" 之后的 body（屏蔽 run 命令自身的前缀日志）
-    body = stdout.split("====")[-1] if "====" in stdout else stdout
-    parts = _SECTION_RE.split(body)
-    # parts: ['', 'Title', '...', 'Topic', '...', ...]
-    if len(parts) < 3:
-        return None
-    sections: dict[str, str] = {}
-    for i in range(1, len(parts) - 1, 2):
-        sections[parts[i].strip().lower()] = parts[i + 1].strip()
-
-    examples_raw = sections.get("examples", "")
-    sample_tcs = _parse_examples_to_test_cases(examples_raw, "")  # 复用现有解析
-
-    return {
-        "title": sections.get("title", "Untitled"),
-        "topic": sections.get("topic", "数组"),
-        "difficulty": (sections.get("difficulty", "easy") or "easy").lower(),
-        "description": sections.get("description", ""),
-        "starter_code": _strip_fences(sections.get("startercode", "")),
-        "optimal_solution": _strip_fences(
-            sections.get("optimalsolution", "") or sections.get("brutesolution", "")
-        ),
-        "test_cases": sample_tcs,
-    }
+    return SkillResult(
+        skill_name=skill_name,
+        ok=ok,
+        output=out,
+        meta={"exit_code": proc.returncode, "stderr": err, "channel": "cli"},
+        error=None if ok else (err.strip() or f"exit_code={proc.returncode}"),
+    )
 
 
 def generate_problem_via_skill_sync(topic: str, difficulty: str) -> str:
-    """Synchronous core: 通过 CLI 逃生舱出题，返回 JSON 字符串。"""
+    """Synchronous core: 通过 CLI 逃生舱出题，返回 JSON 字符串。
+
+    复用共享 parser（DP-5）；消费 SkillResult 统一接口（.ok/.output/.error）。
+    """
     r = run_skill_cli("cta-generate-problem", {"topic": topic, "difficulty": difficulty})
-    if not r["ok"]:
-        return json.dumps({"error": f"CLI 出题失败: {r['error']}"}, ensure_ascii=False)
-    parsed = parse_problem_markdown(r["stdout"])
+    if not r.ok:
+        return json.dumps({"error": f"CLI 出题失败: {r.error}"}, ensure_ascii=False)
+    parsed = parse_problem_markdown(r.output)
     if parsed is None:
         return json.dumps({"error": "CLI 出题成功但契约解析失败"}, ensure_ascii=False)
     return json.dumps(parsed, ensure_ascii=False)
+
+
+def generate_detailed_solution_via_skill_sync(topic_description: str) -> str:
+    """Synchronous core: 通过 CLI 逃生舱生成详细题解，返回 Markdown 文本字符串。
+
+    ``topic_description`` 是整段题面，经 ``$ARGUMENTS`` 注入 skill。
+    复用 SkillResult 统一接口（.ok/.output/.error）。
+    """
+    r = run_skill_cli("cta-generate-solution", {"$ARGUMENTS": topic_description})
+    if not r.ok:
+        return json.dumps(
+            {"error": f"CLI 生成详细题解失败: {r.error}"}, ensure_ascii=False
+        )
+    return r.output.strip()

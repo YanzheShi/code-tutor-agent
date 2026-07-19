@@ -435,8 +435,9 @@ async def analyze_user_intent(
         logger.warning("get_llm failed, using fallback: %s", exc)
         return _fallback_parse_intent(transcript, profile_summary)
 
-    # ── 工具循环：仅当用户贴了 LeetCode 链接时才绑 parse_leetcode ──
-    # 对话意图分析阶段只用解析工具；judge_* 工具留给辅导环节（见设计文档 §2.3）。
+    # ── 工具循环：贴了 LeetCode 链接时绑 parse_leetcode（详见设计文档 §2.3）。
+    #    详细题解生成（generate_detailed_solution_via_skill）在辅导环节(chat.py)暴露，
+    #    此处为出题前对话、尚无题目，故不绑定。
     parse_tool = next((t for t in AGENT_TOOLS if t.name == "parse_leetcode"), None)
     tools = [parse_tool] if (parse_tool and leetcode_url) else []
     llm_with_tools = llm.bind_tools(tools) if tools else llm

@@ -135,7 +135,30 @@ def get_skill_engine_cli_timeout() -> int:
     return int(os.getenv("SKILL_ENGINE_CLI_TIMEOUT", "60"))
 
 
+# ── skill-engine import 主通道（engine_adapter）──
+def get_skill_engine_llm_alias() -> str:
+    """adapter 通道使用的 LLM 别名（单一真源），默认 'agnes'。
+
+    三通道（adapter import / cli_runner --llm / CI --llm）都解析到同一别名，
+    杜绝 "CLI 读另一套 env" 的分裂。
+    """
+    return os.getenv("SKILL_ENGINE_LLM_ALIAS", "agnes")
+
+
+def get_skill_engine_skills_root() -> str:
+    """本系统内置 skill defs 目录（随仓发布，DP-3）；adapter 与 cli 共用。
+
+    默认指向 src/code_tutor_agent/skills/defs（Phase 0 已把两个真实 def
+    还原到此处）。discover(roots=[此绝对路径]) 直接扫描，不经 cwd。
+    """
+    return os.getenv(
+        "SKILL_ENGINE_SKILLS_ROOT",
+        os.path.join(os.path.dirname(__file__), "skills", "defs"),
+    )
+
+
 #: 允许通过 CLI 执行的 skill 名白名单（防止任意 skill 名注进 subprocess）
+#: DP-4：精简为两个真实 def；移除幽灵名 cta-generate-detailed-solution（无对应 def）。
 SKILL_ENGINE_CLI_ALLOWLIST: frozenset[str] = frozenset(
     os.getenv(
         "SKILL_ENGINE_CLI_ALLOWLIST",

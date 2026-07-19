@@ -197,6 +197,16 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
 
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+    pid = problem.problem_id if hasattr(problem, "problem_id") else (problem.get("problem_id") if problem else None)
+    desc = (
+        problem.description
+        if hasattr(problem, "description")
+        else (problem.get("description", "") if problem else "")
+    )
+
+    # 当前题上下文写入 contextvar，供工具里 *_via_skill 日志回溯
+    from code_tutor_agent.agents.tools import current_problem_ctx
+    current_problem_ctx.set({"problem_id": pid, "title": title})
 
     # 收集 tutor_messages 中近期对话作为上下文
     _tutor_msgs = values.get("tutor_messages") or []
@@ -240,7 +250,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
 
     # 工具引导：导师可现场跑代码验证（详见设计文档 §2.3）
     from langchain_core.messages import SystemMessage, HumanMessage
-    from code_tutor_agent.agents.tools import run_tool_loop, JUDGE_TOOLS
+    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_TOOLS
 
     _JUDGE_HINT = (
         "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
@@ -249,11 +259,16 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         "- judge_code(source_code, test_cases_json)：用一批用例判题（LeetCode 风格 class Solution）。\n"
         "- judge_check_health()：探测判题后端是否存活。\n"
         "只在用户确实贴了代码且需要验证时才调用，普通思路讨论不必调用。"
+        "\n\n你还可以调用 **generate_detailed_solution_via_skill** 生成详细、可教学的题解"
+        "（多思路演进、复杂度分析、可运行代码、易错点、核心洞察），区别于只给代码的 cta-generate-solution。"
+        "当用户明确要求『讲讲这题 / 给个详细题解 / 详细讲解思路 / 把完整题解给我』时调用；"
+        "调用时请把上面『算法题』那段完整题面原文作为 description 参数传入。"
     )
 
     async def normal_chat_stream():
         user_prompt = (
             f"算法题：{title}\n\n"
+            f"题面：\n{desc}\n\n"
             f"近期对话：\n{_chat_context}\n\n"
             f"用户当前消息：{message}"
         )
@@ -264,7 +279,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         ]
         # ── 工具循环（非流式）：导师先决定是否跑代码验证 ──
         try:
-            await run_tool_loop(llm, msgs, tools=JUDGE_TOOLS)
+            await run_tool_loop(llm, msgs, tools=TUTOR_TOOLS)
         except Exception as exc:
             logger.warning("Tutor tool loop failed (non-fatal): %s", exc)
         # ── 流式输出最终回复（msgs 已含工具结果）──
@@ -401,6 +416,16 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
     # ── Normal tutoring chat (non-streaming) ──
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+    pid = problem.problem_id if hasattr(problem, "problem_id") else (problem.get("problem_id") if problem else None)
+    desc = (
+        problem.description
+        if hasattr(problem, "description")
+        else (problem.get("description", "") if problem else "")
+    )
+
+    # 当前题上下文写入 contextvar，供工具里 *_via_skill 日志回溯
+    from code_tutor_agent.agents.tools import current_problem_ctx
+    current_problem_ctx.set({"problem_id": pid, "title": title})
 
     # ── Normal tutoring chat (non-streaming): 统一走直接 LLM ──
     # 原因同流式路径：graph 可能在 interrupt 或 END，无法可靠地通过 graph.invoke 走 chat_node
@@ -432,7 +457,7 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
         )
 
     from langchain_core.messages import SystemMessage, HumanMessage
-    from code_tutor_agent.agents.tools import run_tool_loop, JUDGE_TOOLS
+    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_TOOLS
 
     _JUDGE_HINT = (
         "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
@@ -441,10 +466,15 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
         "- judge_code(source_code, test_cases_json)：用一批用例判题（LeetCode 风格 class Solution）。\n"
         "- judge_check_health()：探测判题后端是否存活。\n"
         "只在用户确实贴了代码且需要验证时才调用，普通思路讨论不必调用。"
+        "\n\n你还可以调用 **generate_detailed_solution_via_skill** 生成详细、可教学的题解"
+        "（多思路演进、复杂度分析、可运行代码、易错点、核心洞察），区别于只给代码的 cta-generate-solution。"
+        "当用户明确要求『讲讲这题 / 给个详细题解 / 详细讲解思路 / 把完整题解给我』时调用；"
+        "调用时请把上面『算法题』那段完整题面原文作为 description 参数传入。"
     )
 
     user_prompt = (
         f"算法题：{title}\n\n"
+        f"题面：\n{desc}\n\n"
         f"用户当前消息：{message}"
     )
     msgs = [
@@ -453,7 +483,7 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
     ]
     try:
         # 工具循环（非流式）：导师先决定是否跑代码验证，再生成最终回复
-        await run_tool_loop(llm, msgs, tools=JUDGE_TOOLS)
+        await run_tool_loop(llm, msgs, tools=TUTOR_TOOLS)
         response = llm.invoke(msgs)  # 最终回复（未绑工具，纯文本）
         reply = response.content if hasattr(response, "content") else str(response)
     except Exception as exc:
