@@ -607,6 +607,7 @@ def run_adversarial_suite(
     - review: 多维评审报告（如果全部通过）
     """
     suite = AdversarialSuite()
+    _func_sig = getattr(problem_dict, "function_signature", "") or ""
 
     # ── Step 1: 代码弱点分析 ──
     suite.weakness = analyze_code_weakness(user_code)
@@ -625,7 +626,7 @@ def run_adversarial_suite(
         else:
             validated_cases = []
             for bc in boundary_cases:
-                ref_results = run_solution(ref_code, [bc], timeout=BOUNDARY_TIMEOUT)
+                ref_results = run_solution(ref_code, [bc], timeout=BOUNDARY_TIMEOUT, function_signature=_func_sig)
                 if ref_results and ref_results[0].detail and ref_results[0].status == "Passed":
                     bc["expected_output"] = ref_results[0].detail
                     validated_cases.append(bc)
@@ -634,7 +635,7 @@ def run_adversarial_suite(
             if not validated_cases:
                 logger.warning("No valid boundary cases after ref validation — skipping")
             else:
-                suite.boundary_results = run_solution(user_code, validated_cases, timeout=BOUNDARY_TIMEOUT)
+                suite.boundary_results = run_solution(user_code, validated_cases, timeout=BOUNDARY_TIMEOUT, function_signature=_func_sig)
                 boundary_pass = all(r.status == "Passed" for r in suite.boundary_results)
                 logger.info(
                     "Boundary: %d/%d passed",
@@ -651,7 +652,7 @@ def run_adversarial_suite(
     # ── Step 3: 规模对抗（LLM + 规则） ──
     scale_case = generate_scale_adversarial(problem_dict, user_code, suite.weakness)
     if scale_case:
-        suite.scale_results = run_solution(user_code, [scale_case], timeout=SCALE_ADV_TIMEOUT)
+        suite.scale_results = run_solution(user_code, [scale_case], timeout=SCALE_ADV_TIMEOUT, function_signature=_func_sig)
         scale_pass = all(r.status == "Passed" for r in suite.scale_results)
         logger.info("Scale: %s", "passed" if scale_pass else "failed")
         if not scale_pass:

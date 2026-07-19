@@ -92,6 +92,7 @@ def run_solution(
     code: str,
     test_cases: list[dict],
     timeout: float = TIMEOUT_SECONDS,
+    function_signature: str | None = None,
 ) -> list[RunnerResult]:
     """Execute a reference solution against a batch of test cases.
 
@@ -102,6 +103,9 @@ def run_solution(
         code: Python source (may be markdown-fenced).
         test_cases: List of dicts with ``input_args`` and ``expected_output``.
         timeout: Seconds per-case timeout.
+        function_signature: e.g. ``"head: ListNode, k: int -> ListNode"``.
+            用于把数组形式的入参还原成 ListNode/TreeNode 对象、并把结构化
+            返回值序列化回数组（LeetCode 约定）。
 
     Returns:
         List of ``RunnerResult``, one per test case.
@@ -117,7 +121,9 @@ def run_solution(
         try:
             from code_tutor_agent.sandbox.judge0_client import submit_test_cases
 
-            dict_results = submit_test_cases(code, test_cases)
+            dict_results = submit_test_cases(
+                code, test_cases, function_signature=function_signature,
+            )
             if dict_results and dict_results[0].get("status") != "Judge Error":
                 return [RunnerResult(
                     test_case_id=r["test_case_id"],
@@ -136,7 +142,7 @@ def run_solution(
 
     # ── Fallback: local subprocess ──
     logger.info("  router → local subprocess")
-    harness = _build_harness(code, test_cases)
+    harness = _build_harness(code, test_cases, function_signature)
 
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8")
     try:
@@ -176,18 +182,34 @@ def run_solution(
             os.remove(tmp.name)
 
 
-def _build_harness(code: str, test_cases: list[dict]) -> str:
+def _build_harness(code: str, test_cases: list[dict], function_signature: str | None = None) -> str:
     """Build a standalone Python script that runs test cases against the code.
 
     Injects LeetCode types (from typing import *, TreeNode, ListNode, Node)
-    into the global namespace before the user code.
+    into the global namespace before the user code, and — when a
+    ``function_signature`` is provided — converts array-form arguments into
+    ListNode/TreeNode objects and serialises structured return values back
+    to arrays (LeetCode convention).
     """
     from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
+    from code_tutor_agent.sandbox import struct_convert
+    from code_tutor_agent.sandbox.input_generator import parse_signature
+
+    # 解析签名，得到 (参数类型列表, 返回类型)，用于按类型还原/序列化
+    param_types: list[str] = []
+    return_type = ""
+    if function_signature:
+        params, return_type = parse_signature(function_signature)
+        param_types = [t for _, t in params]
 
     tc_json = json.dumps(test_cases)
+    struct_src = struct_convert.HARNESS_STRUCT_SRC
+    param_types_json = json.dumps(param_types)
+    return_type_json = json.dumps(return_type)
 
     return f"""\
 {INJECT_PROLOGUE}
+{struct_src}
 import ast, json, sys, time, inspect
 import logging
 
@@ -200,7 +222,17 @@ logger = logging.getLogger(__name__)
 # --- Test cases ---
 test_cases = json.loads({tc_json!r})
 
+_param_types = {param_types_json}
+_return_type = {return_type_json}
+
 def _eval_arg(s):
+    # 优先 json.loads：LeetCode 测试用例入参是 JSON 字符串，空节点用 null 表示。
+    # ast.literal_eval 只认 Python 字面量（None），遇 null 会抛错并退回原字符串，
+    # 导致 _cta_tree_from_list 把整个字符串当成一个节点 → 树/链表题判错。
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
     try:
         return ast.literal_eval(s)
     except Exception:
@@ -224,13 +256,26 @@ if not public:
 method_name, method_fn = public[0]
 
 for idx, tc in enumerate(test_cases):
-    args = [_eval_arg(a) for a in tc['input_args']]
+    args = [
+        _cta_coerce_arg(_eval_arg(a), _param_types[i] if i < len(_param_types) else "")
+        for i, a in enumerate(tc['input_args'])
+    ]
     expected = tc['expected_output']
     start = time.perf_counter()
     try:
         result = method_fn(*args)
         elapsed = (time.perf_counter() - start) * 1000
-        actual = _fmt(result)
+        if _cta_is_void_result(result, _return_type):
+            # 原地修改型：读回首个可变入参（LeetCode 约定被修改对象即 args[0]）
+            actual = _fmt(args[0]) if args and isinstance(args[0], (list, dict, set)) else _fmt(None)
+        else:
+            actual = _fmt(_cta_coerce_result(result, _return_type))
+        # 无参考答案（expected 为空）-> 不判定，标记 Skipped 并回传实际输出。
+        # 两个用途：① 后台用例生成借此拿到参考解输出，作为权威 expected；
+        # ② 判题侧跳过这类用例，避免拿空 expected 与正确输出比对而误判 WA。
+        if expected is None or (isinstance(expected, str) and expected.strip() == ""):
+            print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Skipped", "detail": actual, "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": "", "actual_output": actual}}))
+            continue
         # Normalise expected: parse JSON string to compare by value
         try:
             exp_val = json.loads(expected) if isinstance(expected, str) else expected

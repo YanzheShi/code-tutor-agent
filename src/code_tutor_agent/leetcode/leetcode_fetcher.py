@@ -428,19 +428,27 @@ def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> lis
     if has_formatted:
         for ex in examples:
             lines = ex.strip().split("\n")
-            input_line = ""
+            input_lines = []
             output_line = ""
+            capturing = False
             for line in lines:
-                line = line.strip()
-                if line.startswith("输入") or line.startswith("Input"):
-                    input_line = line
-                elif line.startswith("输出") or line.startswith("Output"):
-                    output_line = line
+                s = line.strip()
+                if s.startswith("输入") or s.startswith("Input"):
+                    # 多行输入（如网格题）会把 '[' 之后的内容放到后续行，
+                    # 必须跨行累积，否则只拿到首行的 "grid = ["，解析成 "[".
+                    capturing = True
+                    s = re.sub(r"^(?:输入|Input)\s*[:：]\s*", "", s).strip()
+                    input_lines = [s] if s else []
+                elif s.startswith("输出") or s.startswith("Output"):
+                    capturing = False
+                    output_line = s
+                elif capturing:
+                    input_lines.append(s)
 
-            if not input_line or not output_line:
+            if not input_lines or not output_line:
                 continue
 
-            input_str = re.sub(r"^(?:输入|Input)\s*[:：]\s*", "", input_line).strip()
+            input_str = " ".join(input_lines)
             parts = _split_input_args(input_str)
             input_args = []
             for part in parts:

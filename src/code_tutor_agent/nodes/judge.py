@@ -81,7 +81,10 @@ def judge_node(state: SessionState) -> Command:
     #  Phase 1: 基础判题
     # ════════════════════════════════════════════
     logger.info("Phase 1 — base judging (%d test cases)", len(test_cases))
-    base_results = run_solution(last_sub.code, test_cases, timeout=BASE_TIMEOUT)
+    _func_sig = getattr(problem_dict, "function_signature", "") or ""
+    base_results = run_solution(
+        last_sub.code, test_cases, timeout=BASE_TIMEOUT, function_signature=_func_sig,
+    )
 
     base_verdict = _collapse_verdict(base_results)
     base_result = _build_base_result(base_results)
@@ -107,7 +110,9 @@ def judge_node(state: SessionState) -> Command:
 
         if len(test_cases) >= MIN_TC_FOR_FULL:
             logger.info("Background gen done — re-running Phase 1 with %d test cases", len(test_cases))
-            base_results = run_solution(last_sub.code, test_cases, timeout=BASE_TIMEOUT)
+            base_results = run_solution(
+                last_sub.code, test_cases, timeout=BASE_TIMEOUT, function_signature=_func_sig,
+            )
             base_verdict = _collapse_verdict(base_results)
             # Replace the judge result with new results from full suite
             last_sub.judge_results[-1] = _build_base_result(base_results)
@@ -173,7 +178,10 @@ def _build_base_result(base_results: list) -> JudgeResult:
     / ``actual_output`` of the first non-passed case are carried so the
     frontend can render an "expected vs actual" diff panel (Bug 2).
     """
-    first_fail = next((r for r in base_results if r.status != "Passed"), None)
+    # 「Skipped」是无参考答案（空 expected）的用例，不算失败，排除在外。
+    first_fail = next(
+        (r for r in base_results if r.status not in ("Passed", "Skipped")), None
+    )
     if first_fail is not None:
         input_args = list(getattr(first_fail, "input_args", []) or [])
         expected_output = getattr(first_fail, "expected_output", "") or ""
@@ -183,7 +191,8 @@ def _build_base_result(base_results: list) -> JudgeResult:
         input_args = []
         expected_output = ""
         actual_output = ""
-        detail = f"{sum(1 for r in base_results if r.status == 'Passed')}/{len(base_results)} passed"
+        _judged = [r for r in base_results if r.status != "Skipped"]
+        detail = f"{sum(1 for r in _judged if r.status == 'Passed')}/{len(_judged)} passed"
 
     return JudgeResult(
         status=_collapse_verdict(base_results),
@@ -219,10 +228,16 @@ def _collapse_verdict(results: list) -> str:
     优先级：TLE > RE > WA > AC。
     RunnerResult 返回 "Passed" 而非 "AC"，需映射。
     """
-    tle = any(r.status == "TLE" for r in results)
-    re_err = any(r.status == "Runtime Error" for r in results)
-    wa = any(r.status == "Wrong Answer" for r in results)
-    all_pass = all(r.status == "Passed" for r in results)
+    # 「Skipped」= 无参考答案（空 expected）的用例，不参与判定。
+    judged = [r for r in results if r.status != "Skipped"]
+    if not judged:
+        # 全部被跳过（没有一个有效 expected）→ 视作通过，绝不误判 WA。
+        return "AC"
+
+    tle = any(r.status == "TLE" for r in judged)
+    re_err = any(r.status == "Runtime Error" for r in judged)
+    wa = any(r.status == "Wrong Answer" for r in judged)
+    all_pass = all(r.status == "Passed" for r in judged)
 
     if tle:
         return "TLE"

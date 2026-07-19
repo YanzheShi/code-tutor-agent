@@ -39,7 +39,8 @@ async def run_code(sid: str, body: RunCodeRequest):
         visible = [tc for tc in test_cases if not tc.get("is_hidden", False)]
 
     from code_tutor_agent.sandbox.runner import run_solution
-    results = run_solution(body.code, visible)
+    _func_sig = full.get("function_signature", "") or ""
+    results = run_solution(body.code, visible, function_signature=_func_sig)
 
     run_results = []
     all_pass = True
@@ -47,13 +48,16 @@ async def run_code(sid: str, body: RunCodeRequest):
         passed = r.status == "Passed"
         if not passed:
             all_pass = False
+        # runner 的 test_case_id 是 0 基，直接作为 visible 列表下标。
+        # （之前误用 test_case_id - 1，导致 期望/输入 与用例错位并环绕到最后一条）
+        _vi = r.test_case_id
         run_results.append({
             "test_case_id": r.test_case_id,
             "passed": passed,
             "status": r.status,
             "detail": r.detail[:200] if r.detail else "",
-            "input_args": visible[r.test_case_id - 1].get("input_args", []) if (r.test_case_id - 1) < len(visible) else [],
-            "expected": visible[r.test_case_id - 1].get("expected_output", "") if (r.test_case_id - 1) < len(visible) else "",
+            "input_args": visible[_vi].get("input_args", []) if _vi < len(visible) else [],
+            "expected": visible[_vi].get("expected_output", "") if _vi < len(visible) else "",
             "runtime_ms": r.runtime_ms,
             "memory_kb": r.memory_kb,
         })

@@ -37,6 +37,8 @@ def verify_problem(problem_dict: dict) -> bool:
     """
     logger.info("▶ verify_problem() — checking optimal_solution compiles")
     optimal = _extract_code(problem_dict.get("optimal_solution", ""))
+    # 写回去围栏后的版本，避免 ```python 围栏被落库 / 传入判题 runner 导致编译失败
+    problem_dict["optimal_solution"] = optimal
     if not optimal:
         logger.warning("No optimal_solution — cannot verify")
         return False
@@ -55,8 +57,11 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.warning("optimal_solution syntax error: %s", exc)
         return False
 
-    # 如果 LLM 没有提供合法的 starter_code，从 optimal_solution 自动生成
+    # 先去掉 LLM 结构化输出里可能夹带的 ```python 代码围栏
     sc = problem_dict.get("starter_code", "") or ""
+    if sc:
+        sc = _extract_code(sc)
+        problem_dict["starter_code"] = sc
     if not sc or "class Solution" not in sc or "def " not in sc:
         logger.info("starter_code is missing or invalid — deriving from optimal_solution")
         # 从 optimal_solution 提取方法签名

@@ -85,7 +85,11 @@ class Judge0SubmissionResult:
 # ── Helpers ──
 
 
-def _build_test_case_harness(source_code: str, test_cases: list[dict]) -> str:
+def _build_test_case_harness(
+    source_code: str,
+    test_cases: list[dict],
+    function_signature: str | None = None,
+) -> str:
     """Wrap LeetCode-style ``class Solution`` code for stdio-based Judge0.
 
     The harness encodes all test cases as the first line of stdin (JSON),
@@ -96,11 +100,23 @@ def _build_test_case_harness(source_code: str, test_cases: list[dict]) -> str:
     the entire test batch into the first line, then parse it in-memory.
     """
     from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
+    from code_tutor_agent.sandbox import struct_convert
+    from code_tutor_agent.sandbox.input_generator import parse_signature
+
+    param_types: list[str] = []
+    return_type = ""
+    if function_signature:
+        params, return_type = parse_signature(function_signature)
+        param_types = [t for _, t in params]
 
     tc_json = json.dumps(test_cases)
+    struct_src = struct_convert.HARNESS_STRUCT_SRC
+    param_types_json = json.dumps(param_types)
+    return_type_json = json.dumps(return_type)
 
     return f"""\
 {INJECT_PROLOGUE}
+{struct_src}
 import ast, json, sys, time, inspect
 
 # --- User / solution code ---
@@ -110,7 +126,17 @@ import ast, json, sys, time, inspect
 test_cases_raw = sys.stdin.readline()
 test_cases = json.loads(test_cases_raw)
 
+_param_types = {param_types_json}
+_return_type = {return_type_json}
+
 def _eval_arg(s):
+    # 优先 json.loads：LeetCode 测试用例入参是 JSON 字符串，空节点用 null 表示。
+    # ast.literal_eval 只认 Python 字面量（None），遇 null 会抛错并退回原字符串，
+    # 导致 _cta_tree_from_list 把整个字符串当成一个节点 → 树/链表题判错。
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
     try:
         return ast.literal_eval(s)
     except Exception:
@@ -134,13 +160,30 @@ if not public:
 method_name, method_fn = public[0]
 
 for idx, tc in enumerate(test_cases):
-    args = [_eval_arg(a) for a in tc.get('input_args', [])]
+    args = [
+        _cta_coerce_arg(_eval_arg(a), _param_types[i] if i < len(_param_types) else "")
+        for i, a in enumerate(tc.get('input_args', []))
+    ]
     expected = tc.get('expected_output', '')
     start = time.perf_counter()
     try:
         result = method_fn(*args)
         elapsed = (time.perf_counter() - start) * 1000
-        actual = _fmt(result)
+        if _cta_is_void_result(result, _return_type):
+            # 原地修改型：读回首个可变入参（LeetCode 约定被修改对象即 args[0]）
+            actual = _fmt(args[0]) if args and isinstance(args[0], (list, dict, set)) else _fmt(None)
+        else:
+            actual = _fmt(_cta_coerce_result(result, _return_type))
+        # 无参考答案（expected 为空）-> 不判定，标记 Skipped 并回传实际输出。
+        # 避免拿空 expected 与正确输出比对而误判 WA（与 runner.py 行为一致）。
+        if expected is None or (isinstance(expected, str) and expected.strip() == ""):
+            print('RESULT: ' + json.dumps({{
+                "test_case_id": idx, "status": "Skipped",
+                "detail": actual, "runtime_ms": round(elapsed, 2),
+                "input_args": tc.get('input_args', []), "expected_output": "",
+                "actual_output": actual
+            }}))
+            continue
         # Normalise expected: parse JSON string to compare by value
         exp_raw = expected
         try:
@@ -228,6 +271,7 @@ def submit_test_cases(
     source_code: str,
     test_cases: list[dict],
     language_id: int = JUDGE0_PYTHON_ID,
+    function_signature: str | None = None,
 ) -> list[dict]:
     """Run LeetCode-style code against a batch of test cases via Judge0.
 
@@ -239,6 +283,9 @@ def submit_test_cases(
         source_code: User's ``class Solution: ...`` code.
         test_cases: List of dicts with ``input_args`` and ``expected_output``.
         language_id: Judge0 language id.
+        function_signature: e.g. ``"head: ListNode, k: int -> ListNode"``.
+            用于把数组形式的入参还原成 ListNode/TreeNode 对象、并把结构化
+            返回值序列化回数组。
 
     Returns:
         List of result dicts, one per test case.
@@ -251,7 +298,7 @@ def submit_test_cases(
     n = len(test_cases)
     logger.info("▶ judge0.submit_test_cases() — %d test cases, %d chars", n, len(source_code))
 
-    harness = _build_test_case_harness(source_code, test_cases)
+    harness = _build_test_case_harness(source_code, test_cases, function_signature)
     stdin = json.dumps(test_cases)
 
     try:
