@@ -13,6 +13,9 @@ from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg, Ses
 
 logger = logging.getLogger(__name__)
 
+# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃
+_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
+
 # 题目生成超时（秒），可通过环境变量覆盖
 GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT_SECONDS", "120"))
 
@@ -193,7 +196,11 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
 async def _generate_complex_tests(problem_id: int, sid: str):
     """Generate random + boundary test cases in background."""
     from code_tutor_agent.db.database import get_problem_by_id, update_problem_test_cases
-    from code_tutor_agent.sandbox.input_generator import generate_random_inputs
+    from code_tutor_agent.sandbox.input_generator import (
+        generate_random_inputs,
+        sanitize_test_case,
+        _needs_sorted_inputs,
+    )
     from code_tutor_agent.sandbox.runner import run_solution
 
     logger.info("_generate_complex_tests() — problem_id=%d", problem_id)
@@ -205,6 +212,8 @@ async def _generate_complex_tests(problem_id: int, sid: str):
     # 优先尝试 optimal_solution，再降级到 brute_solution（向后兼容）
     brute_code = full.optimal_solution or full.brute_solution
     func_sig = full.function_signature
+    # 「有序」类题目（合并有序数组 / 有序数组二分等）：对输入数组排序（方案 B）。
+    sort_inputs = _needs_sorted_inputs(*(getattr(full, "constraints", None) or []), getattr(full, "description", None) or "")
     if not brute_code:
         logger.warning("No optimal_solution or brute_solution for %d — skipping bg test gen", problem_id)
         _generation_progress.setdefault(sid, []).append("📝 无参考代码，跳过后台测试生成")
@@ -212,7 +221,11 @@ async def _generate_complex_tests(problem_id: int, sid: str):
 
     _generation_progress.setdefault(sid, []).append("\U0001f9ea 正在生成更多测试用例...")
 
-    random_inputs = generate_random_inputs(func_sig, count=12, seed=problem_id)
+    random_inputs = generate_random_inputs(
+        func_sig, count=12, seed=problem_id,
+        constraints=getattr(full, "constraints", None),
+        description=getattr(full, "description", None),
+    )
     logger.info("Generated %d random inputs", len(random_inputs))
     if not random_inputs:
         _generation_progress.setdefault(sid, []).append("✅ 无函数签名，跳过随机测试生成")
@@ -221,19 +234,31 @@ async def _generate_complex_tests(problem_id: int, sid: str):
     _generation_progress.setdefault(sid, []).append(f"\U0001f527 正在运行暴力解验证 {len(random_inputs)} 个用例...")
     all_tcs: list[dict] = []
     for idx, inp in enumerate(random_inputs):
+        # 先校正 input 契约（重算 m/n、补零到 m+n 等），校正失败则丢弃。
+        # 不校正的话，合并类题的 nums1 没补零，参考解会越界 RE。
+        if func_sig:
+            san = sanitize_test_case(func_sig, {"input_args": inp}, sort_inputs=sort_inputs)
+            if not san or not san.get("input_args"):
+                logger.warning("Random case input malformed, dropping (pid=%d idx=%d)", problem_id, idx)
+                continue
+            inp = san["input_args"]
         tc = {
             "input_args": inp,
             "expected_output": "",
             "is_hidden": idx >= 4,
             "explanation": f"随机生成测试 {idx+1}",
         }
-        results = run_solution(brute_code, [tc], timeout=10.0)
-        if results:
-            r = results[0]
-            actual = r.detail or ""
-            if actual:
-                tc["expected_output"] = actual
-                all_tcs.append(tc)
+        results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig)
+        if not results:
+            continue
+        r = results[0]
+        if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该用例无效，丢弃
+            logger.warning("Random case ref %s, dropping (pid=%d idx=%d)", r.status, problem_id, idx)
+            continue
+        actual = r.detail or ""
+        if actual:
+            tc["expected_output"] = actual
+            all_tcs.append(tc)
 
     _generation_progress.setdefault(sid, []).append("\U0001f916 正在生成边界测试用例...")
     try:
@@ -255,7 +280,7 @@ async def _generate_complex_tests(problem_id: int, sid: str):
             difficulty=full.difficulty,
             function_signature=func_sig,
             constraints=constraints_str,
-            brute_code=brute_code,
+            optimal_code=brute_code,
             existing_cases=existing_cases_str,
             count=8,
         )
@@ -267,24 +292,43 @@ async def _generate_complex_tests(problem_id: int, sid: str):
         ])
         content = resp.content if hasattr(resp, "content") else str(resp)
 
-        json_match = re.search(r"\[.*?\]", content, re.DOTALL)
+        # 贪婪匹配到最后一个 ]：避免 input_args 里的 "[1,2,3]" 等含方括号字符串
+        # 被非贪婪 .*? 提前截断导致 JSON 解析失败
+        json_match = re.search(r"\[.*\]", content, re.DOTALL)
         if json_match:
             boundary_cases = json.loads(json_match.group(0))
             logger.info("LLM generated %d boundary cases", len(boundary_cases))
 
             _generation_progress.setdefault(sid, []).append(f"\U0001f527 正在验证 {len(boundary_cases)} 个边界用例...")
             for bc in boundary_cases:
+                # 先校正 input 契约（重算 m/n、补零等），校正失败则丢弃
+                if func_sig:
+                    bc = sanitize_test_case(func_sig, bc, sort_inputs=sort_inputs) or {}
+                    if not bc.get("input_args"):
+                        logger.warning("Boundary case input malformed, dropping: %s", bc.get("explanation", ""))
+                        continue
                 results = run_solution(brute_code, [{
                     "input_args": bc.get("input_args", []),
-                    "expected_output": bc.get("expected_output", ""),
-                }], timeout=10.0)
-                if results and results[0].detail:
-                    bc["expected_output"] = results[0].detail
+                    # 强制空 expected：让 runner 进入「回传实际输出」模式，
+                    # 避免 LLM 自带的 expected 触发比较模式把 detail 污染成
+                    # "expected=... got=..." 报告字符串。
+                    "expected_output": "",
+                }], timeout=10.0, function_signature=func_sig)
+                if not results:
+                    logger.warning("Boundary case no result, dropping: %s", bc.get("explanation", ""))
+                    continue
+                r = results[0]
+                if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该用例无效，丢弃
+                    logger.warning("Boundary case ref %s, dropping: %s", r.status, bc.get("explanation", ""))
+                    continue
+                actual = r.detail or ""
+                if actual:
+                    bc["expected_output"] = actual
                     bc["is_hidden"] = True
                     bc["explanation"] = bc.get("explanation", "LLM 生成的边界用例")
                     all_tcs.append(bc)
                 else:
-                    logger.warning("Boundary case validation failed: %s", bc.get("explanation", ""))
+                    logger.warning("Boundary case ref produced empty output, dropping: %s", bc.get("explanation", ""))
     except Exception as exc:
         logger.warning("Prompt B (boundary LLM) failed: %s", exc)
 

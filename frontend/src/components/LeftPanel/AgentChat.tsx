@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { Message } from '../../types/session';
+import Markdown from '../Markdown';
 
 /**
  * AgentChat — 左面板的 Agent 对话组件。
@@ -58,7 +59,7 @@ export default function AgentChat({
               <div className="text-xs text-ct-muted mb-1">
                 {msg.role === 'user' ? '你' : 'AI 导师'}
               </div>
-              <div className="whitespace-pre-wrap">{msg.content}</div>
+              <Markdown content={msg.content} />
             </div>
           </div>
         ))}

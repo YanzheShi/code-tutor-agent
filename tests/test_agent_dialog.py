@@ -9,7 +9,8 @@ Coverage:
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -58,18 +59,19 @@ class TestBuildReadyMessage:
 class TestAnalyzeUserIntent:
     """LLM-driven intent analysis with fallback behavior."""
 
-    def test_fallback_on_llm_error(self):
+    @pytest.mark.asyncio
+    async def test_fallback_on_llm_error(self):
         """When LLM fails, should return a safe fallback with is_ready=False."""
         history = [
             Message(role="tutor", content="想练什么类型？"),
-            Message(role="user", content="数组"),
+            Message(role="user", content="我想练点题"),  # 无明确知识点 → 兜底 topic 为空
         ]
 
         # Mock get_llm to raise an exception
         with patch("code_tutor_agent.agents.agent_dialog.get_llm") as mock_get_llm:
             mock_get_llm.side_effect = Exception("LLM unavailable")
 
-            result = analyze_user_intent(history)
+            result = await analyze_user_intent(history)
 
             assert isinstance(result, DialogIntent)
             assert result.is_ready is False
@@ -77,7 +79,8 @@ class TestAnalyzeUserIntent:
             assert result.difficulty == ""
             assert len(result.next_message) > 0  # fallback message
 
-    def test_passes_history_to_llm(self):
+    @pytest.mark.asyncio
+    async def test_passes_history_to_llm(self):
         """Verify the LLM is called with the full conversation transcript."""
         history = [
             Message(role="tutor", content="想练什么类型的题？"),
@@ -95,10 +98,13 @@ class TestAnalyzeUserIntent:
         )
 
         mock_llm = MagicMock()
+        # 工具循环：bind_tools 返回自身；invoke 返回无 tool_calls → 直接进结构化输出
+        mock_llm.bind_tools.return_value = mock_llm
+        mock_llm.invoke.return_value = MagicMock(tool_calls=None)
         mock_llm.with_structured_output.return_value = mock_structured
 
         with patch("code_tutor_agent.agents.agent_dialog.get_llm", return_value=mock_llm):
-            result = analyze_user_intent(history)
+            result = await analyze_user_intent(history)
 
             assert result.topic == "双指针"
             assert result.difficulty == "medium"
@@ -113,7 +119,8 @@ class TestAnalyzeUserIntent:
             assert "双指针" in messages_text
             assert "中等" in messages_text
 
-    def test_not_ready_when_topic_unclear(self):
+    @pytest.mark.asyncio
+    async def test_not_ready_when_topic_unclear(self):
         """If topic is not clear, is_ready should be False."""
         history = [
             Message(role="tutor", content="想练什么类型的题？"),
@@ -129,24 +136,150 @@ class TestAnalyzeUserIntent:
         )
 
         mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = mock_llm
+        mock_llm.invoke.return_value = MagicMock(tool_calls=None)
         mock_llm.with_structured_output.return_value = mock_structured
 
         with patch("code_tutor_agent.agents.agent_dialog.get_llm", return_value=mock_llm):
-            result = analyze_user_intent(history)
+            result = await analyze_user_intent(history)
 
             assert result.is_ready is False
             assert result.topic == ""
             assert "推荐" in result.next_message
 
-    def test_empty_history_returns_fallback(self):
-        """With empty history (shouldn't happen in practice), LLM still gets called."""
+    @pytest.mark.asyncio
+    async def test_leetcode_url_but_llm_skips_tool_still_ready(self):
+        """回归：贴了链接，但 LLM 在工具循环里没调 parse_leetcode（未遵循指令）。
+
+        必须靠确定性兜底解析，强制 is_ready=True，否则会停在对话态永远不出题
+        （即用户遇到的"三轮后卡住"）。这是修复"给链接却不出题"的关键反例：
+        之前只测了"LLM 调了工具"的 happy path，漏掉了"LLM 不调工具"。
+        """
+        from langchain_core.messages import AIMessage
+
+        class _SkipToolFake:
+            """bind_tools / with_structured_output 都返回自身；invoke 只回纯文本。"""
+
+            def bind_tools(self, tools):
+                return self
+
+            def with_structured_output(self, schema):
+                return self
+
+            def invoke(self, messages):
+                return AIMessage(content="好的，我先看看这道 LeetCode 题")
+
+        _lc = json.dumps(
+            {
+                "title": "Longest Common Prefix",
+                "difficulty": "easy",
+                "description": "找字符串数组的最长公共前缀",
+                "examples": [],
+                "starter_code": "class Solution:",
+            },
+            ensure_ascii=False,
+        )
+
+        history = [
+            Message(role="tutor", content="想练什么类型的题？"),
+            Message(
+                role="user",
+                content="继续解析这个题目来做：https://leetcode.cn/problems/longest-common-prefix/description/",
+            ),
+        ]
+
+        with patch(
+            "code_tutor_agent.agents.agent_dialog.get_llm", return_value=_SkipToolFake()
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog._build_transcript", return_value="t"
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog._build_profile_summary", return_value=""
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog.parse_leetcode",
+            new=AsyncMock(return_value=_lc),
+        ):
+            result = await analyze_user_intent(history)
+
+        assert result.source == "leetcode"
+        assert result.is_ready is True, "LLM 未调工具时，兜底必须确定性解析并强制 is_ready=True"
+        assert "Longest Common Prefix" in result.leetcode_payload
+
+    @pytest.mark.asyncio
+    async def test_empty_history_returns_fallback(self):
+        """With empty history, get_llm fails → fallback is returned safely."""
+        with patch("code_tutor_agent.agents.agent_dialog.get_llm") as mock_get:
+            mock_get.side_effect = Exception("API error")
+            result = await analyze_user_intent([])
+
+            assert result.is_ready is False
+            assert len(result.next_message) > 0
+
+    @pytest.mark.asyncio
+    async def test_leetcode_url_triggers_parse_and_forces_ready(self):
+        """贴 LeetCode 链接时：必须调用 parse_leetcode，且解析成功后强制 is_ready=True。
+
+        即使结构化 LLM 把 is_ready 判为 False（如反问"先听思路还是直接做"），
+        也不应停在对话态 —— 解析成功的 LeetCode 题目即视为就绪，应直接触发出题。
+        这是修复"给了链接却不出题"回归的关键断言。
+        """
+        history = [
+            Message(role="tutor", content="想练什么类型的题？"),
+            Message(
+                role="user",
+                content="这个问题 https://leetcode.cn/problems/palindrome-number/description/",
+            ),
+        ]
+
+        lc_payload = json.dumps(
+            {
+                "title": "Palindrome Number",
+                "difficulty": "easy",
+                "description": "判断一个整数是否为回文数",
+                "examples": [],
+                "starter_code": "class Solution:",
+            },
+            ensure_ascii=False,
+        )
+
+        # 工具循环：第一次 invoke 返回带 parse_leetcode 的 tool_call
+        tool_call_msg = MagicMock()
+        tool_call_msg.tool_calls = [
+            {
+                "name": "parse_leetcode",
+                "args": {
+                    "url": "https://leetcode.cn/problems/palindrome-number/description/"
+                },
+                "id": "call_1",
+            }
+        ]
+
+        # 结构化输出：故意返回 is_ready=False，模拟 LLM 没把链接视为就绪
         mock_structured = MagicMock()
-        mock_structured.invoke.side_effect = Exception("API error")
+        mock_structured.invoke.return_value = DialogIntent(
+            topic="",
+            difficulty="",
+            is_ready=False,
+            next_message="你想先听思路还是直接做？",
+        )
 
-        with patch("code_tutor_agent.agents.agent_dialog.get_llm", return_value=MagicMock()):
-            with patch("code_tutor_agent.agents.agent_dialog.get_llm") as mock_get:
-                mock_get.side_effect = Exception("API error")
-                result = analyze_user_intent([])
+        mock_llm = MagicMock()
+        mock_llm.bind_tools.return_value = mock_llm
+        mock_llm.invoke.return_value = tool_call_msg
+        mock_llm.with_structured_output.return_value = mock_structured
 
-                assert result.is_ready is False
-                assert len(result.next_message) > 0
+        with patch(
+            "code_tutor_agent.agents.agent_dialog.get_llm", return_value=mock_llm
+        ), patch(
+            "code_tutor_agent.agents.agent_dialog.parse_leetcode",
+            new=AsyncMock(return_value=lc_payload),
+        ):
+            result = await analyze_user_intent(history)
+
+        # 核心断言：解析成功 → 强制就绪，路由层才会转入出题
+        assert result.source == "leetcode"
+        assert result.is_ready is True, (
+            "LeetCode 解析成功必须强制 is_ready=True，"
+            "否则路由层停在对话态、不出题"
+        )
+        assert result.leetcode_payload == lc_payload
+        assert "Palindrome Number" in result.leetcode_payload

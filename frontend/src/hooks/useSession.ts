@@ -83,6 +83,8 @@ export function useSession() {
         }
         if (st.status !== 'generating' && st.status !== 'dialog' && st.problem && screenRef.current === 'loading') {
           applySessionState(st, true);
+          setProgressMsgs([]);
+          if (pollTimer.current) clearInterval(pollTimer.current);
           setScreen('main');
         }
         if (st.mode === 'agent' && st.problem && st.status !== 'dialog') {
@@ -96,14 +98,17 @@ export function useSession() {
         }
         const msgs = st.progress_messages || [];
         const bgDone = msgs.some(m => m.includes('✅') || m.includes('已就绪') || m.includes('已导入'));
-        const bgFailed = msgs.some(m => m.includes('❌') || m.includes('⚠️'));
-        if (bgDone) {
+        // 只有在「完全没有题目」且出现致命标记（❌）时才判定生成失败。
+        // 注意：skill-engine 兜底路径会写 "⚠️ ..." 这类提示性进度，绝非致命，
+        // 不能据此把已成功生成的题目误判为失败（否则会覆盖主界面 → 黑屏/报错屏）。
+        const bgFailed = !st.problem && msgs.some(m => m.includes('❌'));
+        if (bgDone && !st.problem) {
           if (pollTimer.current) clearInterval(pollTimer.current);
           setProgressMsgs([]);
         }
-        if (bgFailed) {
+        if (bgFailed && screenRef.current === 'loading') {
           if (pollTimer.current) clearInterval(pollTimer.current);
-          if (screenRef.current === 'loading') { setErrorMsg('生成失败，请重试'); setScreen('error'); }
+          setErrorMsg('生成失败，请重试'); setScreen('error');
         }
       } catch {}
     }, 1500);

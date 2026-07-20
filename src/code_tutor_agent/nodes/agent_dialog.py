@@ -59,7 +59,7 @@ def agent_dialog_node(state: SessionState) -> Command:
         from code_tutor_agent.schemas.state import Message as StateMessage
         prompt_msg = StateMessage(
             role="tutor",
-            content="上一题已完成！接下来想练习什么类型的算法题？比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？",
+            content="上一题已完成！接下来想练习什么类型的算法题？比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n也可以直接把一道 LeetCode 题目链接发给我，我们一起练 👇",
         )
         hist = list(state.agent_dialog_history) + [prompt_msg]
         tut = list(state.tutor_messages) + [prompt_msg]

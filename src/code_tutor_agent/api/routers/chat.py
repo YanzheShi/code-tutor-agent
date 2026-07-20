@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
@@ -18,6 +19,30 @@ def _chunk_text(text: str, size: int = 6):
     """把文本切成小段，用于伪流式输出，保持打字效果。"""
     for i in range(0, len(text), size):
         yield text[i : i + size]
+
+
+async def _run_graph_and_generate_tests(graph, config, sid: str):
+    """graph.invoke 出题后，再在后台生成完整测试套件（随机 + 边界）。
+
+    与 session.py 的 fast-path / run_generation 对齐：agent 对话（贴 LeetCode
+    链接或普通 topic/difficulty）出的题也要有完整用例，而不只是 1~2 个可见示例。
+    LeetCode 路径 A 的 optimal_solution 已在 graph.invoke 内同步落库，可直接复用。
+
+    注意：不直接复用 run_generation，因为它内部 SessionState(**initial_dict)
+    会重建状态、清掉本路由已 update_state 的 leetcode / tutor_messages 数据。
+    """
+    cur = graph.get_state(config)
+    await asyncio.to_thread(graph.invoke, dict(cur.values), config)
+    from code_tutor_agent.api.services.generation import _generate_complex_tests
+    try:
+        state = graph.get_state(config)
+        problem = state.values.get("problem")
+        if problem:
+            pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
+            if pid:
+                await _generate_complex_tests(pid, sid)
+    except Exception as e:
+        logger.error("Background complex test generation failed for %s: %s", sid, e, exc_info=True)
 
 
 @router.post("/{sid}/chat/stream")
@@ -52,15 +77,6 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     status = values.get("status", "")
     mode = values.get("mode", "")
     agent_done = values.get("agent_dialog_complete", False)
-
-    # 题目生成后台任务：用 BackgroundTasks 触发，保证 SSE 响应发送后
-    # 一定跑完（不受连接关闭影响），写入 problem 后前端轮询自动跳转
-    async def _safe_invoke():
-        try:
-            cur = graph.get_state(config)
-            await asyncio.to_thread(graph.invoke, dict(cur.values), config)
-        except Exception as e:
-            logger.error("Background graph.invoke failed: %s", e, exc_info=True)
 
     # Agent 对话模式：仅当对话未完成时
     if status == "dialog" and mode == "agent" and not agent_done:
@@ -104,7 +120,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             # 把「自然回复」与「is_ready 路由判定」合并为同一次 LLM 判定，
             # 避免两个模型各说各话、互相矛盾（对话衔接修复-2）
             try:
-                intent = analyze_user_intent(history, context_summary=context_summary)
+                intent = await analyze_user_intent(history, context_summary=context_summary)
             except Exception as exc:
                 logger.warning("analyze_user_intent failed: %s", exc)
                 intent = DialogIntent(
@@ -114,29 +130,42 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             if intent.is_ready:
                 topic = intent.topic or values.get("topic", "数组")
                 difficulty = intent.difficulty or values.get("difficulty", "easy")
+                # LeetCode 来源：用解析数据里的标题/难度，给更贴合的收尾文案
+                if intent.source == "leetcode" and intent.leetcode_payload:
+                    try:
+                        _lc = json.loads(intent.leetcode_payload)
+                        topic = _lc.get("title") or topic
+                        difficulty = _lc.get("difficulty") or difficulty
+                    except json.JSONDecodeError:
+                        pass
                 # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
                 # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
                 ready_msg = build_ready_message(topic, difficulty)
                 history.append(ready_msg)
                 _full_display.append(ready_msg)
                 # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）
-                graph.update_state(config, {
+                _updates = {
                     "agent_dialog_history": history,
                     "agent_dialog_complete": True,
                     "status": "awaiting_problem",
                     "topic": topic,
                     "difficulty": difficulty,
                     "tutor_messages": _full_display,
-                })
+                }
+                if intent.source == "leetcode" and intent.leetcode_payload:
+                    try:
+                        _updates["leetcode"] = json.loads(intent.leetcode_payload)
+                    except json.JSONDecodeError:
+                        pass
+                graph.update_state(config, _updates)
 
                 # 伪流式输出固定收尾文案，保持打字效果
                 for chunk in _chunk_text(ready_msg.content):
                     yield f"data: {chunk}\n\n"
 
                 # 用 BackgroundTasks 可靠触发题目生成（planner→generator），
-                # 避免 SSE 连接关闭后 asyncio.create_task 子任务被取消、
-                # 导致 problem 永不写入、前端无法自动跳转（自动跳转修复）
-                background_tasks.add_task(_safe_invoke)
+                # 并在 graph.invoke 后补跑完整测试套件（与 run_generation 对齐）
+                background_tasks.add_task(_run_graph_and_generate_tests, graph, config, sid)
             else:
                 # 非 ready：回复来自同一次判定的 next_message（已合并，无需再调自由模型）
                 reply = intent.next_message or "好的，我明白了，能再具体说说吗？"
@@ -168,6 +197,16 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
 
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+    pid = problem.problem_id if hasattr(problem, "problem_id") else (problem.get("problem_id") if problem else None)
+    desc = (
+        problem.description
+        if hasattr(problem, "description")
+        else (problem.get("description", "") if problem else "")
+    )
+
+    # 当前题上下文写入 contextvar，供工具里 *_via_skill 日志回溯
+    from code_tutor_agent.agents.tools import current_problem_ctx
+    current_problem_ctx.set({"problem_id": pid, "title": title})
 
     # 收集 tutor_messages 中近期对话作为上下文
     _tutor_msgs = values.get("tutor_messages") or []
@@ -209,18 +248,44 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
         )
 
+    # 工具引导：导师可现场跑代码验证（详见设计文档 §2.3）
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_TOOLS
+
+    _JUDGE_HINT = (
+        "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
+        "- judge_run_code(source_code, stdin)：运行一段 Python 代码并返回 stdout/stderr/状态。"
+        "当用户贴出代码问「这样写对不对 / 运行一下 / 帮我验证」时，优先用它真跑一遍。\n"
+        "- judge_code(source_code, test_cases_json)：用一批用例判题（LeetCode 风格 class Solution）。\n"
+        "- judge_check_health()：探测判题后端是否存活。\n"
+        "只在用户确实贴了代码且需要验证时才调用，普通思路讨论不必调用。"
+        "\n\n你还可以调用 **generate_detailed_solution_via_skill** 生成详细、可教学的题解"
+        "（多思路演进、复杂度分析、可运行代码、易错点、核心洞察），区别于只给代码的 cta-generate-solution。"
+        "当用户明确要求『讲讲这题 / 给个详细题解 / 详细讲解思路 / 把完整题解给我』时调用；"
+        "调用时请把上面『算法题』那段完整题面原文作为 description 参数传入。"
+    )
+
     async def normal_chat_stream():
         user_prompt = (
             f"算法题：{title}\n\n"
+            f"题面：\n{desc}\n\n"
             f"近期对话：\n{_chat_context}\n\n"
             f"用户当前消息：{message}"
         )
+        # 用 LangChain Message 列表承载上下文（工具循环需就地追加 ToolMessage）
+        msgs = [
+            SystemMessage(content=system + _JUDGE_HINT),
+            HumanMessage(content=user_prompt),
+        ]
+        # ── 工具循环（非流式）：导师先决定是否跑代码验证 ──
+        try:
+            await run_tool_loop(llm, msgs, tools=TUTOR_TOOLS)
+        except Exception as exc:
+            logger.warning("Tutor tool loop failed (non-fatal): %s", exc)
+        # ── 流式输出最终回复（msgs 已含工具结果）──
         full = []
         try:
-            async for chunk in llm.astream([
-                ("system", system),
-                ("human", user_prompt),
-            ]):
+            async for chunk in llm.astream(msgs):
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if token:
                     full.append(token)
@@ -307,28 +372,37 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
         })
 
         context_summary = values.get("context_summary")
-        intent = analyze_user_intent(history, context_summary=context_summary)
+        intent = await analyze_user_intent(history, context_summary=context_summary)
 
         if intent.is_ready:
             topic = intent.topic or values.get("topic", "数组")
             difficulty = intent.difficulty or values.get("difficulty", "easy")
+            # LeetCode 来源：用解析数据里的标题/难度，给更贴合的收尾文案
+            if intent.source == "leetcode" and intent.leetcode_payload:
+                try:
+                    _lc = json.loads(intent.leetcode_payload)
+                    topic = _lc.get("title") or topic
+                    difficulty = _lc.get("difficulty") or difficulty
+                except json.JSONDecodeError:
+                    pass
             ready_msg = build_ready_message(topic, difficulty)
             history.append(ready_msg)
             _full_display.append(ready_msg)
-            graph.update_state(config, {
+            _updates = {
                 "agent_dialog_history": history,
                 "agent_dialog_complete": True,
                 "topic": topic,
                 "difficulty": difficulty,
                 "tutor_messages": _full_display,
-            })
-            async def _safe_invoke():
+            }
+            if intent.source == "leetcode" and intent.leetcode_payload:
                 try:
-                    cur = graph.get_state(config)
-                    await asyncio.to_thread(graph.invoke, dict(cur.values), config)
-                except Exception as e:
-                    logger.error("Background graph.invoke failed: %s", e, exc_info=True)
-            background_tasks.add_task(_safe_invoke)
+                    _updates["leetcode"] = json.loads(intent.leetcode_payload)
+                except json.JSONDecodeError:
+                    pass
+            graph.update_state(config, _updates)
+            # 后台 graph.invoke 出题 + 生成完整测试套件（与 run_generation 对齐）
+            background_tasks.add_task(_run_graph_and_generate_tests, graph, config, sid)
             return {"response": intent.next_message or ready_msg.content}
         else:
             history.append(Message(role="tutor", content=intent.next_message))
@@ -342,6 +416,16 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
     # ── Normal tutoring chat (non-streaming) ──
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
+    pid = problem.problem_id if hasattr(problem, "problem_id") else (problem.get("problem_id") if problem else None)
+    desc = (
+        problem.description
+        if hasattr(problem, "description")
+        else (problem.get("description", "") if problem else "")
+    )
+
+    # 当前题上下文写入 contextvar，供工具里 *_via_skill 日志回溯
+    from code_tutor_agent.agents.tools import current_problem_ctx
+    current_problem_ctx.set({"problem_id": pid, "title": title})
 
     # ── Normal tutoring chat (non-streaming): 统一走直接 LLM ──
     # 原因同流式路径：graph 可能在 interrupt 或 END，无法可靠地通过 graph.invoke 走 chat_node
@@ -372,15 +456,35 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
             "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
         )
 
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_TOOLS
+
+    _JUDGE_HINT = (
+        "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
+        "- judge_run_code(source_code, stdin)：运行一段 Python 代码并返回 stdout/stderr/状态。"
+        "当用户贴出代码问「这样写对不对 / 运行一下 / 帮我验证」时，优先用它真跑一遍。\n"
+        "- judge_code(source_code, test_cases_json)：用一批用例判题（LeetCode 风格 class Solution）。\n"
+        "- judge_check_health()：探测判题后端是否存活。\n"
+        "只在用户确实贴了代码且需要验证时才调用，普通思路讨论不必调用。"
+        "\n\n你还可以调用 **generate_detailed_solution_via_skill** 生成详细、可教学的题解"
+        "（多思路演进、复杂度分析、可运行代码、易错点、核心洞察），区别于只给代码的 cta-generate-solution。"
+        "当用户明确要求『讲讲这题 / 给个详细题解 / 详细讲解思路 / 把完整题解给我』时调用；"
+        "调用时请把上面『算法题』那段完整题面原文作为 description 参数传入。"
+    )
+
     user_prompt = (
         f"算法题：{title}\n\n"
+        f"题面：\n{desc}\n\n"
         f"用户当前消息：{message}"
     )
+    msgs = [
+        SystemMessage(content=system + _JUDGE_HINT),
+        HumanMessage(content=user_prompt),
+    ]
     try:
-        response = llm.invoke([
-            ("system", system),
-            ("human", user_prompt),
-        ])
+        # 工具循环（非流式）：导师先决定是否跑代码验证，再生成最终回复
+        await run_tool_loop(llm, msgs, tools=TUTOR_TOOLS)
+        response = llm.invoke(msgs)  # 最终回复（未绑工具，纯文本）
         reply = response.content if hasattr(response, "content") else str(response)
     except Exception as exc:
         logger.warning("Chat LLM failed: %s", exc)

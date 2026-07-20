@@ -90,7 +90,8 @@ def agent_judge_node(state: SessionState) -> Command:
     logger.info("Running %d test cases via Judge0...", len(test_cases))
 
     # ── Run test cases via Judge0 (or local fallback) ──
-    raw_results = run_solution(code, test_cases, timeout=AGENT_JUDGE_TIMEOUT)
+    _func_sig = getattr(problem_dict, "function_signature", "") or ""
+    raw_results = run_solution(code, test_cases, timeout=AGENT_JUDGE_TIMEOUT, function_signature=_func_sig)
     logger.info("Judge0 returned %d results", len(raw_results))
 
     # ── 提取首个失败用例的结构化数据，写入 judge_results ──
