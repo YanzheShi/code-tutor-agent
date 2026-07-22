@@ -91,6 +91,8 @@ JUDGE_ANALYSIS_SYSTEM = """你是 AI 编程导师，负责分析学生提交的�
 ## 输出格式
 
 返回 JSON:
+- 注意：最终 verdict 由执行引擎的客观结果决定（prompt 末尾会给出【权威判题结果】），
+  你必须以其为准撰写反馈，禁止自行改判，也不要臆造任何失败用例的「实际输出」。
 - verdict: "AC" / "WA" / "RE" / "TLE"
 - warm_feedback: 2-3 句温暖反馈，中文，面试导向（AC 时含复杂度分析）
 - repair_suggestion: 具体修复建议（AC 时给优化建议，WA/TLE 给出方向和提示）
@@ -142,6 +144,9 @@ def format_results_for_prompt(results: list[RunnerResult]) -> str:
 
     Returns:
         Formatted string, one line per test case.
+
+    注意：每个用例都展示「期望输出 / 实际输出」，即使是通过的用例也展示，
+    避免 LLM 在看不到实际输出时臆造错误的「你的输出」。
     """
     lines = []
     for i, r in enumerate(results, 1):
@@ -150,9 +155,33 @@ def format_results_for_prompt(results: list[RunnerResult]) -> str:
         memory = f"{r.memory_kb:.0f}KB" if r.memory_kb > 0 else ""
         extra = " | ".join(filter(None, [runtime, memory]))
         lines.append(f"  用例 #{i}: {status_icon} {r.status}  {extra}")
-        if r.status != "Passed" and r.detail:
+        exp = getattr(r, "expected_output", "") or ""
+        act = getattr(r, "actual_output", "") or ""
+        if exp or act:
+            lines.append(f"          期望输出={exp!r} 实际输出={act!r}")
+        elif r.status != "Passed" and r.detail:
             lines.append(f"          {r.detail[:200]}")
     return "\n".join(lines)
+
+
+def _deterministic_verdict(results: list) -> str:
+    """由执行引擎的客观结果归约出权威 verdict——绝不交给 LLM 主观判断。
+
+    优先级：TLE > RE > WA > AC。「Skipped」= 无参考答案（空 expected），
+    不参与判定，视为通过，避免误判 WA。
+    """
+    judged = [r for r in results if getattr(r, "status", "") != "Skipped"]
+    if not judged:
+        return "AC"
+    if any(r.status == "TLE" for r in judged):
+        return "TLE"
+    if any(r.status == "Runtime Error" for r in judged):
+        return "RE"
+    if any(r.status == "Wrong Answer" for r in judged):
+        return "WA"
+    if all(r.status == "Passed" for r in judged):
+        return "AC"
+    return "WA"
 
 
 def analyze_judge_results(
@@ -163,6 +192,7 @@ def analyze_judge_results(
     description: str,
     results: list[RunnerResult],
     model_alias: str = "agnes",
+    forced_verdict: str | None = None,
 ) -> JudgeAnalysis:
     """Ask the LLM to analyze raw judge results and produce warm feedback.
 
@@ -174,6 +204,9 @@ def analyze_judge_results(
         description: Problem description text.
         results: Raw RunnerResult list from run_solution().
         model_alias: LLM model alias.
+        forced_verdict: 权威 verdict（来自执行引擎客观结果）。若提供，则最终
+            返回的 ``verdict`` 与 ``should_retry`` 一律以它为准，LLM 只负责
+            生成反馈文案，不得自行改判或臆造失败输出。
 
     Returns:
         JudgeAnalysis with verdict, feedback, and repair suggestion.
@@ -181,6 +214,8 @@ def analyze_judge_results(
     logger.info("▶ analyze_judge_results() — %d test cases", len(results))
     total = len(results)
     passed = sum(1 for r in results if r.status == "Passed")
+    # 权威 verdict：永远以执行引擎客观结果为准，LLM 的主观判断不可信。
+    authoritative = forced_verdict or _deterministic_verdict(results)
     results_text = format_results_for_prompt(results)
 
     user_prompt = JUDGE_ANALYSIS_USER.format(
@@ -192,6 +227,14 @@ def analyze_judge_results(
         total=total,
         results_text=results_text,
     )
+    # 把权威 verdict 显式注入，约束 LLM 只能据此生成反馈，不得自行改判/臆造输出。
+    user_prompt += (
+        f"\n\n【权威判题结果（来自执行引擎，必须以此为准，禁止质疑或自行改判）】："
+        f"{authoritative}\n"
+        f"请严格基于上述客观结果撰写反馈：若 verdict=AC，请直接祝贺并给复杂度/优化建议，"
+        f"不要声称代码有误，也不要臆造任何失败用例的「实际输出」；若 verdict≠AC，"
+        f"请结合上面每个用例的真实「期望输出/实际输出」定位问题。"
+    )
 
     try:
         llm = get_llm(model_alias, temperature=0.7)
@@ -201,16 +244,18 @@ def analyze_judge_results(
             ("system", JUDGE_ANALYSIS_SYSTEM),
             ("human", user_prompt),
         ])
+        # 最终 verdict 以客观执行结果为准，绝不被 LLM 覆盖。
+        analysis.verdict = authoritative
+        analysis.should_retry = (authoritative != "AC")
         logger.info(
-            "analyze_judge_results() → verdict=%s retry=%s passed=%d/%d",
+            "analyze_judge_results() → verdict=%s (authoritative) retry=%s passed=%d/%d",
             analysis.verdict, analysis.should_retry, passed, total,
         )
         return analysis
     except Exception as exc:
         logger.warning("LLM judge analysis failed: %s — using fallback", exc)
-        # 降级：机械判断 verdict
-        all_pass = all(r.status == "Passed" for r in results)
-        if all_pass:
+        # 降级：verdict 仍以执行引擎客观结果为准，绝不误判。
+        if authoritative == "AC":
             return JudgeAnalysis(
                 verdict="AC",
                 warm_feedback="恭喜！你的代码通过了所有测试用例！🎉",
@@ -218,14 +263,13 @@ def analyze_judge_results(
                 should_retry=False,
             )
         else:
-            # 找到第一个失败原因
             fail_details = []
             for r in results:
-                if r.status != "Passed":
+                if r.status not in ("Passed", "Skipped"):
                     fail_details.append(f"用例 #{r.test_case_id}: {r.status} — {r.detail[:100]}")
-            fail_text = "; ".join(fail_details[:3])
+            fail_text = "; ".join(fail_details[:3]) or "部分用例未通过"
             return JudgeAnalysis(
-                verdict="WA",
+                verdict=authoritative,
                 warm_feedback="你的代码已经跑起来了，但还有一些用例没通过。别灰心，看看具体哪里出了问题 👀",
                 repair_suggestion=f"未通过的用例：{fail_text}",
                 should_retry=True,

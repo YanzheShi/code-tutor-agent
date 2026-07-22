@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 const BASE = 'http://localhost:8765';
 
-type Tab = 'existing' | 'leetcode' | 'agent' | 'profile';
+type Tab = 'existing' | 'leetcode' | 'agent' | 'profile' | 'admin';
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string; verdict?: string };
 
 /* ── ProfileView 子组件 ── */

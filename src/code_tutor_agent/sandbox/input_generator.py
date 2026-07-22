@@ -330,6 +330,24 @@ def _to_arg_str(v: Any) -> str:
     return json.dumps(v, ensure_ascii=False)
 
 
+_KW_PREFIX_RE = re.compile(r"^[A-Za-z_]\w*\s*[:=]\s*(.*)$", re.DOTALL)
+
+
+def _strip_kw_prefix(raw: str) -> str:
+    """剥离 LeetCode 示例常见的变量名前缀。
+
+    LLM 生成的 Example ``Input`` 常写成 ``nums = [1,2,3]`` 或 ``nums: [1,2,3]``，
+    直接 ``ast.literal_eval`` 会 SyntaxError → 整条用例被丢弃（见题目 15 那类
+    「Sample/visible case input malformed, dropping」）。剥掉 ``name = `` / ``name:``
+    前缀再解析即可。合法字面量（无此前缀）原样返回，不受影响。
+    """
+    s = raw.strip()
+    m = _KW_PREFIX_RE.match(s)
+    if not m:
+        return raw
+    return m.group(1).strip()
+
+
 def sanitize_test_case(func_sig: str, tc: dict, sort_inputs: bool = False) -> dict | None:
     """校验并校正一条测试用例的 ``input_args``，使其满足函数签名契约。
 
@@ -356,9 +374,24 @@ def sanitize_test_case(func_sig: str, tc: dict, sort_inputs: bool = False) -> di
         # 参数个数对不上，无法安全校正 -> 交给调用方丢弃
         return None
 
-    try:
-        values = [ast.literal_eval(a) for a in raw_args]
-    except Exception:
+    values: list = []
+    rewrote = False  # 是否有元素剥掉了变量名前缀（需回写 input_args）
+    for a in raw_args:
+        try:
+            values.append(ast.literal_eval(a))
+            continue
+        except Exception:
+            pass
+        # 兜底：整体无法解析时，尝试剥掉 "name = "/ "name:" 前缀再解析
+        # （LeetCode 格式示例： "nums = [1,2,3]"）。
+        stripped = _strip_kw_prefix(a)
+        if stripped != a:
+            try:
+                values.append(ast.literal_eval(stripped))
+                rewrote = True
+                continue
+            except Exception:
+                pass
         return None
 
     # 找出 (List 参数下标, 紧随的长度参数下标) 对
@@ -368,8 +401,9 @@ def sanitize_test_case(func_sig: str, tc: dict, sort_inputs: bool = False) -> di
             if _looks_like_length(params[j + 1][0]):
                 length_pairs.append((j, j + 1))
 
-    if not length_pairs:
-        return tc  # 无数组长度参数，无需校正
+    # 既无长度参数、又未剥前缀 -> 原样返回，保留输入格式（如 "[2,7,11,15]" 不加空格）
+    if not length_pairs and not rewrote:
+        return tc
 
     # 重算每个长度参数为真实数组长度。
     # 仅当数组「已补零」（声明长度为正 且 数组长度 > 声明长度，即 len==m+n>m）

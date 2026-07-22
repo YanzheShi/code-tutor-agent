@@ -32,7 +32,10 @@ def serialize_state(state: Any) -> dict:
         "status": d.get("status", "generating"),
         "phase": d.get("phase", "solving"),
         "total_problems": d.get("total_problems", 0),
-        "problem_history": d.get("problem_history", []),
+        "problem_history": [
+            r.model_dump() if hasattr(r, "model_dump") else r
+            for r in (d.get("problem_history") or [])
+        ],
         "problem": problem,
         "submissions": [
             {

@@ -10,12 +10,13 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 
 from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.api.serializers import serialize_state, empty_state
-from code_tutor_agent.api.services.generation import run_generation, run_fast_path
+from code_tutor_agent.api.services.generation import run_generation, run_fast_path, GENERATION_TIMEOUT
 from code_tutor_agent.config import get_checkpoint_db_path
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
@@ -57,7 +58,7 @@ def _session_exists(thread_id: str) -> bool:
 
 
 @router.post("")
-async def create_session(body: CreateSessionRequest | None = None):
+async def create_session(background_tasks: BackgroundTasks, body: CreateSessionRequest | None = None):
     """Create a new tutoring session (background generation)."""
     graph = get_graph()
     sid = str(uuid.uuid4())
@@ -86,7 +87,10 @@ async def create_session(body: CreateSessionRequest | None = None):
         logger.warning("touch_session failed for %s: %s", sid, exc)
 
     _generation_progress[sid] = []
-    asyncio.create_task(run_generation(sid, initial_dict))
+    # 用 FastAPI BackgroundTasks 跑完整“出题 + 标注/生成完整用例”，响应返回后才执行、
+    # 客户端断开也不会被取消（比 asyncio.create_task 更稳）；立即返回 session_id，
+    # 前端进入 loading 用 SSE 收进度。
+    background_tasks.add_task(run_generation, sid, initial_dict)
     return {"session_id": sid, "status": "generating"}
 
 
@@ -256,7 +260,12 @@ async def submit_code(sid: str, body: SubmitRequest):
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
-    if state.values.get("status") == "done":
+    # AC 后 critic_node 会让 graph 重新暂停在 wait_for_submit_node（interrupt），
+    # 此时 status 仍为 "done"，但存在待执行的 wait_for_submit_node，
+    # 应允许通过 Command(resume) 续跑判题（前端「继续提交不同解法」）。
+    # 仅当 graph 真正终止（无待执行节点）时才拒绝提交。
+    _next = list(state.next or [])
+    if state.values.get("status") == "done" and "wait_for_submit_node" not in _next:
         raise HTTPException(400, "Session is already done")
 
     # 记录活跃时间
@@ -332,6 +341,85 @@ async def get_session_state(sid: str):
         return empty_state(sid)
 
     return serialize_state(state.values)
+
+
+@router.get("/{sid}/progress/stream")
+async def stream_progress(sid: str):
+    """SSE 端点：实时推送出题进度，替代前端 setInterval 轮询。
+
+    前端用 EventSource 订阅本端点：
+      - 每出现新进度消息，推送 `event: progress`（`data: {"message": "..."}`）；
+      - 题目就绪（problem 非空且状态非 dialog）后，推送最终
+        `event: done`（`data: <serialize_state 结果>`）并关闭连接；
+      - 生成失败（无题目且出现终态错误标记，或超时），推送 `event: error` 并关闭。
+    """
+    graph = get_graph()
+    config = {"configurable": {"thread_id": sid}}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + GENERATION_TIMEOUT + 30
+
+    # 终态错误标记：出现这些字样说明降级也已失败，可安全判定为生成失败。
+    # 注意「LLM 生成失败…正在从备用题库选题…」是过渡消息，紧接着 _fallback_static_problem
+    # 很可能成功，不能据此误报错误（否则会把本可成功的题目判成失败）。
+    TERMINAL_ERROR_MARKERS = ("请稍后重试", "请联系老师")
+
+    async def event_gen():
+        last_idx = 0
+        # 先推送已存在的进度快照（避免错过创建前已写入的消息）
+        try:
+            initial = list(_generation_progress.get(sid, []))
+            for m in initial:
+                yield f"event: progress\ndata: {json.dumps({'message': m}, ensure_ascii=False)}\n\n"
+            last_idx = len(initial)
+        except Exception:
+            pass
+
+        while True:
+            msgs = list(_generation_progress.get(sid, []))
+            if len(msgs) > last_idx:
+                for m in msgs[last_idx:]:
+                    yield f"event: progress\ndata: {json.dumps({'message': m}, ensure_ascii=False)}\n\n"
+                last_idx = len(msgs)
+
+            # 检测完成 / 失败
+            state = None
+            try:
+                if _session_exists(sid):
+                    st = graph.get_state(config)
+                    state = st.values
+            except Exception:
+                state = None
+
+            status = (state or {}).get("status")
+            mode = (state or {}).get("mode")
+            problem = (state or {}).get("problem")
+            tutor_msgs = (state or {}).get("tutor_messages") or (state or {}).get("agent_dialog_history")
+            if problem and status != "dialog":
+                yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
+                return
+            # Agent 模式：对话阶段（status=dialog 且已有对话内容）即视为“就绪”，
+            # 推送 done 让前端进入对话界面，从而去掉前端对 getState 的轮询
+            # （dialog 阶段后端不会生成题目，没有题目可等）。
+            if mode == "agent" and status == "dialog" and tutor_msgs:
+                yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
+                return
+            # 仅当无任何题目、且出现“终态错误”消息（降级也失败）时才报错。
+            if not problem and any(
+                any(mk in m for mk in TERMINAL_ERROR_MARKERS) for m in msgs
+            ):
+                yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"
+                return
+
+            if loop.time() > deadline:
+                if problem:
+                    yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
+                else:
+                    yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"
+                return
+
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 @router.get("/{sid}/reference")
@@ -432,16 +520,19 @@ async def next_problem(sid: str, body: NextProblemReq):
     vals = state.values
     mode = vals.get("mode", "practice")
 
-    # ── Agent mode: re-enter the tutor dialog with cross-problem summary ──
+    # ── Agent mode (or "continue generating" after AC): re-enter the tutor dialog ──
     #
     # 上下文管理 v2：
     #   - 不再全量保留历史对话（第 N 题时不再包含前 N-1 题的完整 transcript）
     #   - 换题时生成跨题摘要存入 context_summary
     #   - 同时构建下一题引导消息，重置对话到初始状态
     #
+    # "continue_dialog" 语义（2026-07-22）：AC 后用户点"继续出题"，只回到出题对话、
+    # 给出出题提示，而不是直接生成下一道题。practice 模式也走这条路径并切到 agent 模式。
+    #
     # 效果：第 3 题时 LLM 看到的上下文 = 跨题摘要(~300 token) + 当前题对话(~3000 token)
     #      而不是旧方案的 全量历史(~15000+ token) + 当前题对话
-    if mode == "agent":
+    if mode == "agent" or body.preference == "continue_dialog":
         from code_tutor_agent.context_manager import build_cross_problem_context
         from code_tutor_agent.progress import _generation_progress
 
@@ -510,6 +601,7 @@ async def next_problem(sid: str, body: NextProblemReq):
         _display_history = list(_existing_tutor) + [guide_msg]
 
         graph.update_state(config, {
+            "mode": "agent",
             "status": "dialog",
             "problem": None,
             "agent_dialog_complete": False,

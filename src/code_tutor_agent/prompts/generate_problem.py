@@ -52,6 +52,7 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   - 方法体只写 `pass` 或 `...`，留给用户实现
   - **不要加 `from typing import ...`** 等导入语句
   - **树/图/链表题必须包含数据结构定义**：如果题目涉及二叉树，starter_code 开头必须包含 `class TreeNode` 定义；链表题包含 `class ListNode`；图题包含 `class GraphNode`。参考 LeetCode 格式，放在 `class Solution` 之前。
+  - **非树/图/链表题禁止包含任何数据结构定义**：数组、字符串、数学、哈希、动态规划、贪心、双指针、模拟等题型，starter_code 应只保留 `class Solution` 与方法签名（例如 `def length_of_longest_substring(self, s: str) -> int:`），**不要**写 `class TreeNode` / `class ListNode` / `class GraphNode` 等无关定义，也不要写 `# Definition for a binary tree node.` 这类注释。
 
 ### 4. 函数签名描述（用于解析示例输入）
 - `function_signature`: 描述方法的参数类型和返回类型，格式如：

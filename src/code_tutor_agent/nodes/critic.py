@@ -148,15 +148,31 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
             })
         return Command(goto="planner_node", update=updates)
     elif verdict == "AC":
-        logger.info("critic_node → goto=END (verdict=AC, phase=reviewing)")
-        # AC 不清 problem/tutor_messages，让前端展示 AC 消息
-        return Command(goto="__end__", update={
-            "problem_history": new_history,
-            "total_problems": state.total_problems + 1,
-            "phase": "reviewing",
-            "pending_abandon": False,
-            "next_preference": None,
-        })
+        logger.info("critic_node → goto=wait_for_submit_node (verdict=AC, 重新暂停等待重提交)")
+        # AC 后不清 problem/tutor_messages（前端需展示 AC 消息），
+        # 并重新暂停在 wait_for_submit_node（interrupt），使得用户「继续提交不同解法」
+        # 时 submit 端点可通过 Command(resume) 正常续跑判题，无需终止 graph。
+        # 去重：若末条 problem_history 已为同一题且 verdict 相同（重复 AC 重提交），
+        # 不再追加重复记录。
+        cur_pid = state.problem.problem_id if state.problem else 0
+        last_rec = state.problem_history[-1] if state.problem_history else None
+        if (last_rec is not None
+                and last_rec.problem_id == cur_pid
+                and last_rec.verdict == verdict):
+            ac_update = {
+                "phase": "reviewing",
+                "pending_abandon": False,
+                "next_preference": None,
+            }
+        else:
+            ac_update = {
+                "problem_history": new_history,
+                "total_problems": state.total_problems + 1,
+                "phase": "reviewing",
+                "pending_abandon": False,
+                "next_preference": None,
+            }
+        return Command(goto="wait_for_submit_node", update=ac_update)
     else:
         logger.info("critic_node → goto=wait_for_submit_node (verdict=%s)", verdict)
         return Command(goto="wait_for_submit_node", update=updates)

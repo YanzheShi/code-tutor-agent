@@ -1,6 +1,7 @@
 """Run router — POST /session/{sid}/run."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
@@ -40,7 +41,15 @@ async def run_code(sid: str, body: RunCodeRequest):
 
     from code_tutor_agent.sandbox.runner import run_solution
     _func_sig = full.get("function_signature", "") or ""
-    results = run_solution(body.code, visible, function_signature=_func_sig)
+    # 跑用户代码是同步阻塞（subprocess），必须丢进线程池，否则会冻结事件循环、
+    # 与 SSE 推流/其他请求互相拖累；再套一层硬超时，防个别用例死循环拖垮整个请求。
+    try:
+        results = await asyncio.wait_for(
+            asyncio.to_thread(run_solution, body.code, visible, function_signature=_func_sig),
+            timeout=30.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(504, "运行超时（可能代码含死循环或用例过大）")
 
     run_results = []
     all_pass = True

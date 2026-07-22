@@ -37,7 +37,7 @@ def _clean_error(stderr: str) -> str:
 
 
 # ── Tunables ──
-TIMEOUT_SECONDS = 5.0       # how long before TLE (per test-case suite)
+TIMEOUT_SECONDS = 10.0      # how long before TLE (per test-case suite)
 HARNESS_TIMEOUT = 2.0       # outer subprocess timeout (includes startup + TLE guard)
 
 

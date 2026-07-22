@@ -16,7 +16,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from code_tutor_agent.agents.agent_judge import analyze_judge_results
+from code_tutor_agent.agents.agent_judge import analyze_judge_results, _deterministic_verdict
 from code_tutor_agent.db.database import get_problem_by_id
 from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.schemas.state import JudgeResult, SessionState
@@ -94,6 +94,9 @@ def agent_judge_node(state: SessionState) -> Command:
     raw_results = run_solution(code, test_cases, timeout=AGENT_JUDGE_TIMEOUT, function_signature=_func_sig)
     logger.info("Judge0 returned %d results", len(raw_results))
 
+    # ── 权威 verdict：永远以执行引擎客观结果为准（不信任 LLM 的主观判断） ──
+    deterministic_verdict = _deterministic_verdict(raw_results)
+
     # ── 提取首个失败用例的结构化数据，写入 judge_results ──
     first_fail = next((r for r in raw_results if r.status != "Passed"), None)
     _status_map = {"Passed": "AC", "Wrong Answer": "WA", "Runtime Error": "RE", "TLE": "TLE", "Time Limit Exceeded": "TLE"}
@@ -121,7 +124,7 @@ def agent_judge_node(state: SessionState) -> Command:
         updated_submissions[-1] = updated_submissions[-1].model_copy(deep=True)
         updated_submissions[-1].judge_results.append(base_result)
 
-    # ── LLM analysis of raw results ──
+    # ── LLM analysis of raw results（verdict 以执行引擎客观结果为准） ──
     description = problem_dict.description
     analysis = analyze_judge_results(
         code=code,
@@ -130,6 +133,7 @@ def agent_judge_node(state: SessionState) -> Command:
         topic=problem_dict.topic or state.topic,
         description=description,
         results=raw_results,
+        forced_verdict=deterministic_verdict,
     )
 
     logger.info("Verdict: %s | should_retry=%s", analysis.verdict, analysis.should_retry)
@@ -150,20 +154,30 @@ def agent_judge_node(state: SessionState) -> Command:
         "submissions": updated_submissions,
     }
 
-    # ── 更新用户画像（与普通 judge 一致） ──
+    # ── 兼容旧版 v1 全局画像（综合熟练度/做题数等顶部指标，每次判题都更新） ──
     try:
         from code_tutor_agent.db.database import update_profile_on_result
         topic = state.problem.topic if state.problem else "未知"
         update_profile_on_result(topic=topic, verdict=analysis.verdict)
     except Exception:
-        logger.warning("Agent profile update failed (non-fatal)", exc_info=True)
+        logger.warning("Agent v1 profile update failed (non-fatal)", exc_info=True)
 
-    # ── Route based on verdict ──
-    if analysis.verdict == "AC":
-        logger.info("AC — routing to agent_tutor_node (done)")
+    # ── 分 tag 画像（v2）：仅在 AC 时经 update_profile_node 单写者通道落库 ──
+    # 关键修复：旧逻辑只调 update_profile_on_result（v1 全局画像），从不写 v2 分 tag 画像，
+    # 导致 agent 模式 AC 后「我的画像」里对应知识点（如 滑动窗口）分数恒为 0。
+    # 与常规 judge 保持一致：只有最终 AC 才记录（WA 重试不写画像）。
+    if analysis.verdict == "AC" and state.problem:
+        update["profile_delta"] = {
+            "tag_primary": state.problem.tag_primary,
+            "prob_elo": state.problem.prob_elo,
+            "outcome": analysis.verdict,
+            "fingerprints": [],
+        }
+        logger.info("AC — routing to update_profile_node → agent_tutor_node")
         update["status"] = "tutoring"
-        return Command(update=update, goto="agent_tutor_node")
-    else:
-        logger.info("Not AC — routing to agent_tutor_node for retry guidance")
-        update["status"] = "tutoring"
-        return Command(update=update, goto="agent_tutor_node")
+        return Command(update=update, goto="update_profile_node")
+
+    # ── WA：直接回 agent_tutor_node 给重试指导（不写画像） ──
+    logger.info("Not AC — routing to agent_tutor_node for retry guidance")
+    update["status"] = "tutoring"
+    return Command(update=update, goto="agent_tutor_node")

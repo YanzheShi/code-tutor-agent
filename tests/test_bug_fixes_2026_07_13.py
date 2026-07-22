@@ -34,7 +34,7 @@ def test_generate_problem_all_llm_failures_raises_runtimeerror():
     failing_llm = MagicMock()
     failing_llm.with_structured_output.return_value = _FailingStructured()
     with patch(
-        "code_tutor_agent.agents.problem_generator.get_llm", return_value=failing_llm
+        "code_tutor_agent.agents.agent_problem.get_llm", return_value=failing_llm
     ):
         with pytest.raises(RuntimeError):
             generate_problem("数组", "easy", max_retries=0)
@@ -51,7 +51,7 @@ def test_generate_problem_passes_max_tokens_cap():
         return failing_llm
 
     with patch(
-        "code_tutor_agent.agents.problem_generator.get_llm", side_effect=_get_llm
+        "code_tutor_agent.agents.agent_problem.get_llm", side_effect=_get_llm
     ):
         with pytest.raises(RuntimeError):
             generate_problem("数组", "easy", max_retries=0)

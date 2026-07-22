@@ -1,8 +1,10 @@
 # CodeTutor Agent — 系统架构与完整流程梳理
 
-> 适用分支：`feat/agent-toolcall`
+> 适用分支：`feat/agent-toolcall`（出题能力已在本分支之后由 `feat/problem-agent` 收敛为独立 **Problem Agent**，见下文 §0 / §10）
 > 目标：从「节点 → 条件路由 → 流转逻辑 → 循环机制 → 分层架构」五个层次，完整、可复盘地描述本系统如何运转。
-> 配套设计文档：`agent-leetcode-toolcall-design.md`（仅覆盖 tool-calling 增强部分，本文件是全局视角）。
+> 配套设计文档：
+> - `agent-leetcode-toolcall-design.md`（仅覆盖 tool-calling 增强部分）
+> - `problem-agent-flow.md`（**出题 Agent 内部流程图**：`LLM → adapter → cli → static` 降级链，本文件是全局视角）
 
 ---
 
@@ -32,7 +34,7 @@
 │  agents/ (LLM 编排)       │                   │  sandbox/ (判题执行)        │
 │  · agent_dialog (意图分析) │                   │  · runner (run_solution)    │
 │  · agent_judge (LLM 判题) │                   │  · adversarial (对抗测试)   │
-│  · problem_generator       │                   │  · judge0_client (Judge0)   │
+│  · agent_problem (出题 Agent)│                 │  · judge0_client (Judge0)   │
 │  · tools (tool-calling 循环)│                  │  · input_generator          │
 └───────────────┬──────────┘                   └─────────────┬──────────────┘
                 │                                            │
@@ -73,7 +75,7 @@
 | 节点 | 性质 | 职责 | 主要输出 / 路由 |
 |------|------|------|----------------|
 | `planner_node` | 规则引擎 | 按画像/偏好选 topic+difficulty，或复用 dialog 结果 | `problem?` → wait : generator |
-| `generator_node` | LLM+本地 | LLM 生成题+参考解 → 本地跑 2 个样例 I/O → 落库；LeetCode 导入走 path A | 固定 → `wait_for_submit_node` |
+| `generator_node` | LLM+本地 | 经 `ProblemAgent` 出题（LLM→adapter→cli→static 降级）→ 本地跑 2 个样例 I/O → 落库；LeetCode 导入走 path A | 固定 → `wait_for_submit_node` |
 | `wait_for_submit_node` | **唯一 interrupt** | 暂停等用户代码；resume 时收代码入 `submissions` | → judge(普通) / agent_judge(agent) |
 | `judge_node` | 三阶段判题 | 基础→对抗→评审，确定性流水线 | 永远 → `tutor_router_node` |
 | `tutor_router_node` | LLM/规则 | 读末条用户消息+情绪，决定 CONTINUE/ESCALATE/RESOLVED | RESOLVED→wait；其余→`tutor_node` |
@@ -318,6 +320,7 @@ agent_dialog_node:
 
 `api/services/generation.py`：
 - `run_generation`：`graph.invoke` 带超时（默认 120s），超时/失败自动降级**静态题库**（`store/static_pool.py`）。
+- **出题统一入口（`agents/agent_problem.py`，见 `problem-agent-flow.md`）**：`generator_node` / `run_generation` 最终都走 `ProblemAgent.generate()`，按 **`LLM → adapter → cli → static`** 顺序降级，返回 `GenerationOutcome(problem, channel, error)`；`problem_generator.py` 已退化为只 re-export `agent_problem` 的向后兼容 shim，旧调用方（generator 节点、benchmark、旧测试）无需改动。出题内部还有 `verify_problem` 自校验（去围栏 / 防思维链泄漏 / `compile` 最优解 / 推导 `starter_code`）与 `max_tokens=4096` 限流（修复 Bug7 截断）。
 - `_generate_complex_tests`：用参考解跑 12 组随机输入 + LLM 生成边界用例 → 合并更新 DB 测试套件（用户写代码期间异步完成）。
 - LeetCode 快速路径 `run_fast_path`：跳过 graph 出题，直接落库 + 后台补最优解/用例。
 
@@ -332,6 +335,7 @@ agent_dialog_node:
 5. **多题模式 bug 历史**（已修）：`tutor_messages` dict/Message 混用导致 `AttributeError`；`SessionPhase` 缺 `dialog` 值。现已统一在 API 层转 `Message`。
 6. **`run_tool_loop` 动态 `getattr` 解析工具**：使单测能用 `patch` 模块属性替换工具函数，离线全绿。
 7. **agent-dialog 与 chat 双入口**：流式（`/chat/stream`）与 `BackgroundTasks` 触发生成，避免 SSE 连接关闭导致题目永不写入。
+8. **出题收敛为 Problem Agent**（`feat/problem-agent`）：`problem_generator.py` 退化为 re-export 兼容 shim；真实逻辑在 `agents/agent_problem.py`，统一入口 `ProblemAgent.generate()` 按 `LLM→adapter→cli→static` 降级，skill 通道（adapter/cli/static）产物经 `_flat_to_problem` 归一为 `Problem`。配套流程图见 `problem-agent-flow.md`。
 
 ---
 

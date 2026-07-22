@@ -21,26 +21,42 @@ export async function submitCode(
   sid: string,
   code: string,
 ): Promise<SubmitResponse> {
-  const r = await fetch(`${BASE}/session/${sid}/submit`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, language: 'python' }),
-  });
-  if (!r.ok) throw new Error(`submit failed: ${r.status}`);
-  return r.json();
+  // 加硬超时，避免后端判题异常卡死时「判题中」永远不解除
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 180000);
+  try {
+    const r = await fetch(`${BASE}/session/${sid}/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: 'python' }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`submit failed: ${r.status}`);
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function runCode(
   sid: string,
   code: string,
 ): Promise<RunCodeResponse> {
-  const r = await fetch(`${BASE}/session/${sid}/run`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, language: 'python' }),
-  });
-  if (!r.ok) throw new Error(`runCode failed: ${r.status}`);
-  return r.json();
+  // 加硬超时，避免后端异常卡死时「运行中」永远不解除
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60000);
+  try {
+    const r = await fetch(`${BASE}/session/${sid}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, language: 'python' }),
+      signal: ctrl.signal,
+    });
+    if (!r.ok) throw new Error(`runCode failed: ${r.status}`);
+    return r.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function getState(sid: string): Promise<SessionStateResp> {

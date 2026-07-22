@@ -235,11 +235,11 @@ export default function MainLayout(props: MainLayoutProps) {
                 <TabButton label="Agent 对话" active={true} onClick={() => {}} />
               </div>
               <div className="flex-1 overflow-hidden relative">
-                <AgentChat messages={tutorMessages} onSend={onAgentSend} disabled={!!problem || isGenerating} />
-                {isGenerating && (
+                <AgentChat messages={tutorMessages} onSend={onAgentSend} disabled={!!problem || isGenerating || (isDialogPhase && progressMsgs.length > 0)} />
+                {(isGenerating || (isDialogPhase && progressMsgs.length > 0)) && (
                   <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-ct-border bg-ct-surface px-4 py-2 text-xs text-ct-muted">
                     <div className="h-3 w-3 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
-                    <span>正在为你生成题目 🚀</span>
+                    <span className="flex-1">{progressMsgs.length > 0 ? progressMsgs[progressMsgs.length - 1] : '正在为你生成题目 🚀'}</span>
                   </div>
                 )}
               </div>
@@ -284,14 +284,20 @@ export default function MainLayout(props: MainLayoutProps) {
                 ))}
               </div>
               {renderPanelContent('right')}
-              <div className="flex items-center gap-3 border-t border-ct-border p-3">
-                <button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
-                  className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
-                <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
-                  className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
-                {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
-                <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">{phase === 'solving' ? '放弃这题' : '换一题'}</button>
-              </div>
+              {problem ? (
+                <div className="flex items-center gap-3 border-t border-ct-border p-3">
+                  <button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
+                    className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
+                  <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
+                    className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
+                  {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
+                  <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">{phase === 'solving' ? '放弃这题' : '换一题'}</button>
+                </div>
+              ) : (
+                <div className="flex items-center border-t border-ct-border p-3">
+                  <span className="text-xs text-ct-muted">题目生成后可运行、提交，或让导师换一题</span>
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -309,17 +315,17 @@ export default function MainLayout(props: MainLayoutProps) {
               </div>
               {renderPanelContent('right')}
               <div className="flex items-center gap-3 border-t border-ct-border p-3">
+                <button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
+                  className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
+                <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
+                  className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
+                {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
                 {isDone ? (
-                  <><button onClick={onNext} className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white hover:opacity-90">下一题</button>
-                  <span className="text-xs text-ct-muted">AC 了！继续挑战下一题</span></>
+                  <><span className="text-xs text-ct-success">AC 了！可继续提交不同解法</span>
+                  <button onClick={onNext} className="ml-auto rounded bg-ct-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90">继续出题</button></>
                 ) : (
-                  <><button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
-                    className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
-                  <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
-                    className="rounded bg-ct-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-40">{submittingFlag ? '判题中...' : '提交'}</button>
-                  {latestVerdict && <span className="text-xs text-ct-muted">上次: <VerdictBadge verdict={latestVerdict} /></span>}
                   <button onClick={onNext} className="ml-auto text-xs text-ct-muted hover:text-ct-text">{phase === 'solving' ? '放弃这题' : '换一题'}</button>
-                  </>)}
+                )}
               </div>
             </>
           )}
