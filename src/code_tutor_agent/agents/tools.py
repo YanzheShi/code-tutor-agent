@@ -333,6 +333,13 @@ AGENT_TOOLS.append(
 _detailed_solution_tool = get_tool("generate_detailed_solution_via_skill")
 TUTOR_TOOLS = JUDGE_TOOLS + ([_detailed_solution_tool] if _detailed_solution_tool else [])
 
+# 交互式聊天循环用的轻量工具集：仅含本地沙箱判题验证工具（judge_*）。
+# 故意排除 generate_detailed_solution_via_skill —— 该工具走 skill-engine 跑一次完整
+# 题解 LLM 生成（默认 agnes 模型），单次耗时可达 90s，放进阻塞式 /chat/stream 回复会
+# 把导师答复卡死（用户实测 60~90s 才出结果）。导师本身就能在回复里直接写代码 / 讲解，
+# 无需为每次对话触发重型 skill 生成；详细题解走出题 / 专用入口按需生成即可。
+TUTOR_CHAT_TOOLS = JUDGE_TOOLS
+
 
 # 仅在「对话/需求澄清阶段」由 LLM 自主选择题型时使用，
 # 默认不进 AGENT_TOOLS（避免辅导环节误暴露出题工具）。

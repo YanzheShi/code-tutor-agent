@@ -26,6 +26,18 @@ from typing import Annotated, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
+def last_phase(current: "SessionPhase | None", update: "SessionPhase | list") -> "SessionPhase":
+    """phase 通道的 reducer：同一步内多个 node 写 phase 时取最后一个（最新当前阶段）。
+
+    默认 last_value 通道在「同一步收到多个写」时会抛
+    InvalidUpdateError("Can receive only one value per step")；用 reducer 允许这种情况，
+    语义上 phase 就是「当前阶段」，last-wins 正确。
+    """
+    if isinstance(update, list):
+        return update[-1]
+    return update
+
+
 # ──────────────────────────────────────────────
 #  Sub-types carried inside SessionState
 # ──────────────────────────────────────────────
@@ -293,7 +305,11 @@ class SessionState(BaseModel):
     )
 
     # ── Phase（前端消费态，node 出口写）──
-    phase: SessionPhase = Field(
+    # 多个 node（generator / planner / tutor_router / agent_tutor / critic）都会写 phase。
+    # 在部分多轮状态下，两个写者会落进 langgraph 的「同一图步」，默认的 last_value
+    # 通道会抛 InvalidUpdateError("Can receive only one value per step")。
+    # 因此用 reducer：同一步内多写时取最后一个（即最新的当前阶段），语义正确。
+    phase: Annotated[SessionPhase, last_phase] = Field(
         default=SessionPhase.solving,
         description="Frontend-facing phase: solving / reviewing / done",
     )

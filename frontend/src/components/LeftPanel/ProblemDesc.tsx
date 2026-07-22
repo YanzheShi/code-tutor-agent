@@ -1,11 +1,9 @@
 import type { ProblemMeta } from '../../types/session';
+import Markdown from '../Markdown';
 
 export default function ProblemDesc({ problem }: { problem: ProblemMeta }) {
-  // Use HTML if available, otherwise wrap plain text in <p> tags
+  // 后端提供 HTML 时直接用；否则用 Markdown 组件渲染（支持 **加粗** / 代码块 / KaTeX）
   const hasHtml = !!problem.description_html;
-  const descToRender = hasHtml
-    ? problem.description_html
-    : '<p>' + (problem.description || '').replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>') + '</p>';
 
   return (
     <div className="space-y-4">
@@ -21,11 +19,17 @@ export default function ProblemDesc({ problem }: { problem: ProblemMeta }) {
         </span>
       </div>
 
-      {/* 描述 — 富文本 HTML */}
-      <div
-        className="prose max-w-none text-sm leading-relaxed text-ct-text [&_pre]:rounded [&_pre]:bg-ct-surface-secondary [&_pre]:p-3 [&_pre]:text-xs [&_code]:rounded [&_code]:bg-ct-hover [&_code]:px-1 [&_code]:py-0.5 [&_img]:max-w-full [&_sup]:text-[0.65em] [&_sup]:align-top [&_strong]:font-semibold"
-        dangerouslySetInnerHTML={{ __html: descToRender }}
-      />
+      {/* 描述 — 富文本 HTML 或 Markdown */}
+      {hasHtml ? (
+        <div
+          className="prose max-w-none text-sm leading-relaxed text-ct-text [&_pre]:rounded [&_pre]:bg-ct-surface-secondary [&_pre]:p-3 [&_pre]:text-xs [&_code]:rounded [&_code]:bg-ct-hover [&_code]:px-1 [&_code]:py-0.5 [&_img]:max-w-full [&_sup]:text-[0.65em] [&_sup]:align-top [&_strong]:font-semibold"
+          dangerouslySetInnerHTML={{ __html: problem.description_html! }}
+        />
+      ) : (
+        <div className="text-sm leading-relaxed text-ct-text">
+          <Markdown content={problem.description || ''} />
+        </div>
+      )}
 
       {/* 可见测试用例 */}
       {(problem.visible_test_cases ?? []).length > 0 && (

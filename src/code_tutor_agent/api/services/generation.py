@@ -109,7 +109,9 @@ async def run_generation(sid: str, initial_dict: dict):
             if problem:
                 pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
                 if pid:
-                    await _generate_complex_tests(pid, sid)
+                    # 彻底独立于 run_generation 生命周期：题目就绪后即可进做题，
+                    # 复杂测试用例在独立 task 中后台生成（不阻塞本协程返回）。
+                    asyncio.create_task(_run_complex_tests_safe(pid, sid))
                 else:
                     _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
             else:
@@ -193,8 +195,30 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
         )
 
 
-async def _generate_complex_tests(problem_id: int, sid: str):
-    """Generate random + boundary test cases in background."""
+async def _run_complex_tests_safe(problem_id: int, sid: str):
+    """Wrapper that swallows exceptions from background test generation.
+
+    Prevents ``asyncio.create_task`` "Task exception was never retrieved"
+    warnings and keeps a dangling reference to the failure in the UI.
+    """
+    try:
+        # 关键：整段用例生成是纯同步阻塞（subprocess 跑参考解验证 + LLM 生成边界用例），
+        # 必须丢进线程池，否则会独占事件循环，导致 SSE 的 done 事件要等全部用例生成完
+        # 才能推送、题目迟迟不显示。to_thread 释放事件循环，题目就绪即可推。
+        await asyncio.to_thread(_generate_complex_tests, problem_id, sid)
+    except Exception as exc:
+        logger.warning("Background complex test generation failed for %d: %s", problem_id, exc)
+        _generation_progress.setdefault(sid, []).append("\u26a0\ufe0f 部分测试用例生成失败")
+
+
+def _generate_complex_tests(problem_id: int, sid: str):
+    """Generate random + boundary test cases (SYNCHRONOUS).
+
+    整段是纯同步阻塞：subprocess 跑参考解做验证 + LLM 生成边界用例。
+    一律由调用方用 ``asyncio.to_thread`` 丢进线程池执行，切勿直接 await，
+    否则会独占事件循环，导致 SSE 的 done 事件要等全部用例生成完才推送、
+    题目迟迟不显示。
+    """
     from code_tutor_agent.db.database import get_problem_by_id, update_problem_test_cases
     from code_tutor_agent.sandbox.input_generator import (
         generate_random_inputs,
@@ -332,11 +356,45 @@ async def _generate_complex_tests(problem_id: int, sid: str):
     except Exception as exc:
         logger.warning("Prompt B (boundary LLM) failed: %s", exc)
 
+    # ── 关键修复：验证 LLM 生成的示例/可见用例 ──
+    # 这些用例的 expected 是 LLM 在题目契约 Examples 里直接编的（从未验证），
+    # 会出现「编错数字」类错误（如题目 15 把 [-7,-3,2,3,11] 期望写成 [4,9,16,49,121]）。
+    # 用参考解重算期望并校验，参考解跑挂的用例直接丢弃。
     existing_tcs = full.test_cases
     sample_tcs = [tc for tc in existing_tcs if not tc.get("is_hidden", False)][:2]
-    full_suite = sample_tcs + all_tcs
+    verified_visible: list[dict] = []
+    for tc in sample_tcs:
+        san = dict(tc)
+        if func_sig:
+            san = sanitize_test_case(func_sig, san, sort_inputs=sort_inputs) or {}
+        if not san or not san.get("input_args"):
+            logger.warning("Sample/visible case input malformed, dropping: %s", tc.get("explanation", ""))
+            continue
+        results = run_solution(
+            brute_code,
+            [{"input_args": san["input_args"], "expected_output": ""}],
+            timeout=10.0, function_signature=func_sig,
+        )
+        if not results:
+            logger.warning("Sample/visible case no result, dropping: %s", tc.get("explanation", ""))
+            continue
+        r = results[0]
+        if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该示例无效，丢弃
+            logger.warning("Sample/visible case ref %s, dropping: %s", r.status, tc.get("explanation", ""))
+            continue
+        actual = r.detail or ""
+        if actual:
+            san["expected_output"] = actual
+            san["is_hidden"] = False
+            verified_visible.append(san)
+        else:
+            logger.warning("Sample/visible case ref produced empty output, dropping: %s", tc.get("explanation", ""))
 
-    update_problem_test_cases(problem_id, full_suite)
+    full_suite = verified_visible + all_tcs
+    # 可见用例 = 已验证的示例用例 + 已验证的随机用例兜底（至多 4 条），全部经参考解验证。
+    visible_final = [tc for tc in full_suite if not tc.get("is_hidden", False)][:4]
+
+    update_problem_test_cases(problem_id, full_suite, visible_final)
     _generation_progress.setdefault(sid, []).append(f"\u2705 共 {len(full_suite)} 个测试用例已就绪（含 LLM 边界用例）")
     logger.info("Completed background test gen for problem %d", problem_id)
 
@@ -380,7 +438,7 @@ def run_fast_path(sid: str, body: dict, graph, config):
         except Exception:
             pass
         try:
-            await _generate_complex_tests(problem_id, sid)
+            await asyncio.to_thread(_generate_complex_tests, problem_id, sid)
         except Exception:
             logger.warning("Background test generation failed for problem %d", problem_id)
 

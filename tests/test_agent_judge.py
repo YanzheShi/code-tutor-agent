@@ -16,6 +16,7 @@ from code_tutor_agent.agents.agent_judge import (
     JudgeAnalysis,
     analyze_judge_results,
     format_results_for_prompt,
+    _deterministic_verdict,
 )
 from code_tutor_agent.sandbox.runner import RunnerResult
 
@@ -177,3 +178,126 @@ class TestAnalyzeJudgeResults:
             assert analysis.verdict == "WA"
             assert analysis.should_retry is True
             assert "双指针" in analysis.repair_suggestion
+
+
+class TestForcedVerdict:
+    """verdict 永远以执行引擎客观结果为准，不被 LLM 主观判断覆盖（修复误判 WA）。
+
+    复现场景：用户提交了正确代码（全部 Passed），但 LLM 读不懂实现，
+    臆造「实际输出」并错误判 WA。强制 verdict 后，最终 verdict 必须为 AC。
+    """
+
+    CORRECT_CODE = """class Solution:
+    def maxSubArray(self, nums: List[int]) -> int:
+        cs = 0
+        res = min(nums)
+        for i, x in enumerate(nums):
+            cs = max(x, x + (cs if i > 0 else 0))
+            res = max(cs, (res := x if i == 0 else res))
+        return res
+"""
+
+    def _passed_results(self):
+        return [
+            RunnerResult(0, "Passed", "698", runtime_ms=5.0,
+                         expected_output="698", actual_output="698"),
+            RunnerResult(1, "Passed", "6", runtime_ms=3.0,
+                         expected_output="6", actual_output="6"),
+        ]
+
+    def test_forced_ac_overrides_llm_wa(self):
+        """LLM 即便判 WA，forced_verdict=AC 也必须让最终 verdict=AC。"""
+        mock_structured = MagicMock()
+        # LLM 错误地判了 WA（正是本次 bug 的表现）
+        mock_structured.invoke.return_value = JudgeAnalysis(
+            verdict="WA",
+            warm_feedback="这段代码 WA，初始化有陷阱…",
+            repair_suggestion="把 cs 改成标准 Kadane 形式",
+            should_retry=True,
+        )
+        mock_llm = MagicMock()
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        with patch("code_tutor_agent.agents.agent_judge.get_llm", return_value=mock_llm):
+            analysis = analyze_judge_results(
+                code=self.CORRECT_CODE,
+                title="最大子数组和",
+                difficulty="medium",
+                topic="数组",
+                description="返回最大子数组和",
+                results=self._passed_results(),
+                forced_verdict="AC",
+            )
+
+        assert analysis.verdict == "AC"
+        assert analysis.should_retry is False
+
+    def test_forced_wa_overrides_llm_ac(self):
+        """反之，客观结果 WA 时，LLM 若判 AC 也必须被纠正为 WA。"""
+        mock_structured = MagicMock()
+        mock_structured.invoke.return_value = JudgeAnalysis(
+            verdict="AC", warm_feedback="全过", repair_suggestion="", should_retry=False,
+        )
+        mock_llm = MagicMock()
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        results = [
+            RunnerResult(0, "Passed", "698", expected_output="698", actual_output="698"),
+            RunnerResult(1, "Wrong Answer", "expected=6 got=5",
+                         expected_output="6", actual_output="5"),
+        ]
+        with patch("code_tutor_agent.agents.agent_judge.get_llm", return_value=mock_llm):
+            analysis = analyze_judge_results(
+                code=self.CORRECT_CODE, title="t", difficulty="easy", topic="数组",
+                description="", results=results, forced_verdict="WA",
+            )
+
+        assert analysis.verdict == "WA"
+        assert analysis.should_retry is True
+
+
+class TestDeterministicVerdict:
+    """_deterministic_verdict 直接归约执行引擎客观结果。"""
+
+    def test_all_passed(self):
+        res = [RunnerResult(0, "Passed", ""), RunnerResult(1, "Passed", "")]
+        assert _deterministic_verdict(res) == "AC"
+
+    def test_wrong_answer(self):
+        res = [RunnerResult(0, "Passed", ""), RunnerResult(1, "Wrong Answer", "")]
+        assert _deterministic_verdict(res) == "WA"
+
+    def test_runtime_error(self):
+        res = [RunnerResult(0, "Runtime Error", "")]
+        assert _deterministic_verdict(res) == "RE"
+
+    def test_tle(self):
+        res = [RunnerResult(0, "TLE", "")]
+        assert _deterministic_verdict(res) == "TLE"
+
+    def test_skipped_excluded(self):
+        # 全部 Skipped（无参考答案）→ 视为通过，绝不误判 WA
+        res = [RunnerResult(0, "Skipped", ""), RunnerResult(1, "Skipped", "")]
+        assert _deterministic_verdict(res) == "AC"
+
+    def test_passed_with_skipped_is_ac(self):
+        res = [RunnerResult(0, "Passed", ""), RunnerResult(1, "Skipped", "")]
+        assert _deterministic_verdict(res) == "AC"
+
+
+class TestFormatShowsActual:
+    """format_results_for_prompt 必须透出每个用例的期望/实际输出，避免 LLM 臆造。"""
+
+    def test_passed_case_shows_expected_and_actual(self):
+        results = [RunnerResult(0, "Passed", "698",
+                                expected_output="698", actual_output="698")]
+        text = format_results_for_prompt(results)
+        assert "期望输出='698'" in text
+        assert "实际输出='698'" in text
+
+    def test_failed_case_shows_expected_and_actual(self):
+        results = [RunnerResult(0, "Wrong Answer", "expected=698 got=37",
+                                expected_output="698", actual_output="37")]
+        text = format_results_for_prompt(results)
+        assert "期望输出='698'" in text
+        assert "实际输出='37'" in text

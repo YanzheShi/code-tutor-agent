@@ -4,7 +4,6 @@
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import sys
@@ -96,13 +95,16 @@ def test_generate_complex_tests_sanitizes_boundary_end_to_end():
     def fake_get_problem(pid):
         return full
 
-    def fake_update(pid, suite):
+    def fake_update(pid, suite, visible_final=None):
         captured["suite"] = suite
+        captured["visible_final"] = visible_final
 
     with patch.object(db_mod, "get_problem_by_id", fake_get_problem), \
          patch.object(db_mod, "update_problem_test_cases", fake_update), \
          patch("code_tutor_agent.config.get_llm", return_value=_LLM()):
-        asyncio.run(_generate_complex_tests(999003, "sid-test"))
+        # _generate_complex_tests 是同步函数，线上用 asyncio.to_thread 调用；
+        # 单测直接同步调用即可（不要 asyncio.run，否则会报 None 非协程）。
+        _generate_complex_tests(999003, "sid-test")
 
     suite = captured.get("suite", [])
     bc = next((t for t in suite if t.get("explanation") == "bad boundary from llm"), None)
@@ -136,3 +138,57 @@ def test_malformed_returns_none():
     assert sanitize_test_case(sig, {"input_args": ["[1,2,3]", "3"]}) is None
     # 某 input_args 无法解析
     assert sanitize_test_case(sig, {"input_args": ["[1,2,3", "3", "[2]", "1"]}) is None
+
+
+# ── LeetCode 示例变量名前缀剥离（修复「Sample/visible case input malformed,
+#    dropping」导致示例用例被整条丢弃的 bug）──
+
+
+def test_kw_prefix_equals_single_list():
+    """Input 写成 ``nums = [-7,-3,2,3,11]`` 这类带 = 前缀的示例应被正确解析。"""
+    sig = "nums: List[int] -> List[int]"
+    out = sanitize_test_case(sig, {"input_args": ["nums = [-7,-3,2,3,11]"]})
+    assert out is not None, "带 = 前缀的示例用例不应被丢弃"
+    assert out["input_args"] == ["[-7, -3, 2, 3, 11]"], out["input_args"]
+
+
+def test_kw_prefix_colon_single_list():
+    """``nums: [-7,-3,2,3,11]`` 这种 : 前缀也应被剥离。"""
+    sig = "nums: List[int] -> List[int]"
+    out = sanitize_test_case(sig, {"input_args": ["nums: [-7,-3,2,3,11]"]})
+    assert out is not None
+    assert out["input_args"] == ["[-7, -3, 2, 3, 11]"], out["input_args"]
+
+
+def test_kw_prefix_multi_param_merge():
+    """多参数示例每个元素都带前缀，应逐个剥离并保留 m/n 校正逻辑。"""
+    sig = "nums1: List[int], m: int, nums2: List[int], n: int -> None"
+    out = sanitize_test_case(
+        sig,
+        {"input_args": ["nums1 = [1,2,3]", "m = 3", "nums2 = [4,5,6]", "n = 3"]},
+    )
+    assert out is not None, "多参数前缀示例不应被丢弃"
+    args = out["input_args"]
+    assert args[0] == "[1, 2, 3, 0, 0, 0]", args  # nums1 补零到 m+n=6
+    assert args[1] == "3"                          # m 重算
+    assert args[2] == "[4, 5, 6]"
+    assert args[3] == "3"                          # n 重算
+
+
+def test_kw_prefix_survives_and_runs():
+    """端到端：带 = 前缀的示例剥离后，参考解能正常跑出正确结果（不被丢）。"""
+    sig = "nums: List[int] -> List[int]"
+    code = (
+        "from typing import List\n"
+        "class Solution:\n"
+        "    def sortedSquares(self, nums):\n"
+        "        return sorted(x * x for x in nums)\n"
+    )
+    tc = {"input_args": ["nums = [-7,-3,2,3,11]"], "expected_output": ""}
+    out = sanitize_test_case(sig, tc)
+    assert out is not None
+    results = run_solution(code, [out], timeout=10.0, function_signature=sig)
+    assert results[0].status != "Runtime Error", results[0].detail
+    # 参考解真实输出应覆盖 LLM 可能编错的期望（题目 15 曾编成 [4,9,16,49,121]）
+    assert results[0].detail.replace(" ", "") == "[4,9,9,49,121]", results[0].detail
+

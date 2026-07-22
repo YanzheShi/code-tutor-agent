@@ -212,7 +212,7 @@ class AdminUpdateProblemRequest(BaseModel):
 
 class NextProblemReq(BaseModel):
     """Request body for POST /session/{sid}/next-problem."""
-    preference: Optional[Literal["same_topic", "next_in_plan", "random"]] = "next_in_plan"
+    preference: Optional[Literal["same_topic", "next_in_plan", "random", "continue_dialog"]] = "next_in_plan"
 
 
 class NextProblemResp(BaseModel):

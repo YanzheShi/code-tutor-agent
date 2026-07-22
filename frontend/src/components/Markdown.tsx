@@ -9,7 +9,17 @@ import 'katex/dist/katex.min.css';
  * 用于 tutor / AI 导师的消息气泡，统一处理加粗、列表、行内与块级代码、链接，
  * 以及 $...$ / $$...$$ LaTeX 数学公式（KaTeX 渲染）。
  */
+/**
+ * 容错预处理：把 ` ```python Solution: ` 这类「语言标识后紧跟说明文字」的畸形
+ * 围栏规范化为标准写法 ` ```python ` + 换行，避免 LLM 偶发格式错误时整个代码块
+ * 无法渲染。只处理同一行内紧跟的非换行文字（正常的 ` ```python\n代码 ` 不受影响）。
+ */
+function normalizeFences(src: string): string {
+  return src.replace(/```([a-zA-Z0-9_+\-]+)[ \t]+([^\n`]+)/g, '```$1\n$2');
+}
+
 export default function Markdown({ content }: { content: string }) {
+  const normalized = normalizeFences(content || '');
   return (
     <ReactMarkdown
       remarkPlugins={[remarkMath]}
@@ -44,7 +54,7 @@ export default function Markdown({ content }: { content: string }) {
         ),
       }}
     >
-      {content}
+      {normalized}
     </ReactMarkdown>
   );
 }

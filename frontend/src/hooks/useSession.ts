@@ -4,6 +4,7 @@ import { createSession, getState, runCode, submitCode, getReferenceCode } from '
 import type { Message, ProblemMeta, RunResult, SessionStateResp, Submission } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
+import { useProgressSSE } from './useProgressSSE';
 
 const BASE = 'http://localhost:8765';
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin';
@@ -38,16 +39,12 @@ export function useSession() {
   const [phase, setPhase] = useState<string>('solving');
   const [status, setStatus] = useState('');
   const [nextProblemLoading, setNextProblemLoading] = useState(false);
-  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  const screenRef = useRef(screen);
-  const modeRef = useRef(mode);
-  useEffect(() => { screenRef.current = screen; }, [screen]);
-  useEffect(() => { modeRef.current = mode; }, [mode]);
+  const { readStream } = useSSE();
+  const { subscribe: subscribeProgress, close: closeProgress } = useProgressSSE();
   const dragging = useRef(false);
   const dragTab = useRef<TabId | null>(null);
   const editorInitialized = useRef(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
-  const { readStream } = useSSE();
 
   // ── 状态同步 ──
   function applySessionState(resp: SessionStateResp, fillEditor = false) {
@@ -65,69 +62,53 @@ export function useSession() {
     }
   }
 
-  // ── 轮询 ──
-  const startPolling = useCallback((sid: string) => {
-    pollTimer.current = setInterval(async () => {
-      try {
-        // For agent mode, keep polling to fetch tutor_messages even when on main screen
-        if (screenRef.current === 'main' && modeRef.current !== 'agent') {
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          return;
-        }
-        const st = await getState(sid);
-        if (st.progress_messages) setProgressMsgs(st.progress_messages);
-        if (st.mode) setMode(st.mode);
-        if (st.status) setStatus(st.status);
-        if (st.status === 'dialog' && st.tutor_messages?.length) {
-          setTutorMessages(st.tutor_messages as Message[]);
-        }
-        if (st.status !== 'generating' && st.status !== 'dialog' && st.problem && screenRef.current === 'loading') {
-          applySessionState(st, true);
-          setProgressMsgs([]);
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          setScreen('main');
-        }
-        if (st.mode === 'agent' && st.problem && st.status !== 'dialog') {
-          applySessionState(st, true);
-          if (!st.problem?.starter_code && !editorInitialized.current) {
-            setEditorCode('class Solution:\n    def solution(self, nums, val):\n        pass\n');
+  // ── SSE 实时进度（替代 setInterval 轮询 /state） ──
+  // 后端 /session/{sid}/progress/stream 在题目就绪（或 agent 对话就绪）时会推送
+  // 最终的 serialize_state，收到即进入对应界面，无需反复轮询。
+  const startProgress = useCallback((sid: string) => {
+    subscribeProgress(sid, {
+      onProgress: (msg) => setProgressMsgs(prev => (prev.includes(msg) ? prev : [...prev, msg])),
+      onDone: (state: any) => {
+        applySessionState(state, true);
+        if (state.problem) {
+          // 题目就绪：补全默认模板、切到题面/编辑器
+          if (!state.problem.starter_code && !editorInitialized.current) {
+            setEditorCode('class Solution:\n    def solution(self):\n        pass\n');
             editorInitialized.current = true;
           }
-          setActiveTabs(prev => ({ ...prev, left: 'desc' }));
-          setActiveTabs(prev => ({ ...prev, right: 'code' }));
+          setActiveTabs({ left: 'desc', right: 'code' });
         }
-        const msgs = st.progress_messages || [];
-        const bgDone = msgs.some(m => m.includes('✅') || m.includes('已就绪') || m.includes('已导入'));
-        // 只有在「完全没有题目」且出现致命标记（❌）时才判定生成失败。
-        // 注意：skill-engine 兜底路径会写 "⚠️ ..." 这类提示性进度，绝非致命，
-        // 不能据此把已成功生成的题目误判为失败（否则会覆盖主界面 → 黑屏/报错屏）。
-        const bgFailed = !st.problem && msgs.some(m => m.includes('❌'));
-        if (bgDone && !st.problem) {
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          setProgressMsgs([]);
-        }
-        if (bgFailed && screenRef.current === 'loading') {
-          if (pollTimer.current) clearInterval(pollTimer.current);
-          setErrorMsg('生成失败，请重试'); setScreen('error');
-        }
-      } catch {}
-    }, 1500);
-  }, []);
+        setProgressMsgs([]);
+        setScreen('main');
+      },
+      onError: (msg) => {
+        setErrorMsg(msg);
+        setScreen('error');
+      },
+    });
+  }, [subscribeProgress, applySessionState]);
 
-  useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current); }, []);
+  useEffect(() => () => { closeProgress(); }, [closeProgress]);
 
   // ── 创建会话 ──
+  // Agent 模式的对话就绪与出题就绪都通过 SSE 的 done 事件推送（见 session.py
+  // stream_progress），无需前端轮询 getState。
   const handleStart = useCallback(async (topic: string, difficulty: string, m: string) => {
-    setScreen('loading'); setProgressMsgs([]);
     setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
-    if (m === 'agent') { setScreen('main'); setMode('agent'); }
     setStatus('');
+    setProgressMsgs([]);
+    // Agent 模式直接进入对话界面（不开 loading），避免“出题中”闪屏；其余模式走 SSE 进度
+    if (m !== 'agent') setScreen('loading');
     try {
       const resp = await createSession({ topic, difficulty, mode: m });
-      setSessionId(resp.session_id); startPolling(resp.session_id);
+      setSessionId(resp.session_id);
+      if (m === 'agent') {
+        setScreen('main'); setMode('agent');
+      }
+      startProgress(resp.session_id);
     } catch (e) { setScreen('error'); setErrorMsg(String(e)); }
-  }, [startPolling]);
+  }, [startProgress]);
 
   const handleStartExisting = useCallback(async (problemId: number) => {
     setScreen('loading'); setProgressMsgs([]);
@@ -150,9 +131,9 @@ export function useSession() {
       const parsed = await r1.json();
       const r2 = await fetch(BASE + '/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: parsed.title || 'leetcode', difficulty: parsed.difficulty || 'medium', mode: 'practice', leetcode: parsed }) });
       if (!r2.ok) throw new Error('创建会话失败 (' + r2.status + ')');
-      const resp = await r2.json(); setSessionId(resp.session_id); startPolling(resp.session_id);
+      const resp = await r2.json(); setSessionId(resp.session_id); startProgress(resp.session_id);
     } catch (e) { setScreen('error'); setErrorMsg(e instanceof Error ? e.message : String(e)); }
-  }, [startPolling]);
+  }, [startProgress]);
 
   // ── 提交 ──
   const handleSubmit = useCallback(async () => {
@@ -161,7 +142,7 @@ export function useSession() {
     setSubmittingFlag(true); setRunResults(null);
     try {
       const resp = await submitCode(sid, code);
-      if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code.slice(0, 200) }, { role: 'tutor' as const, content: resp.tutor_message }]);
+      if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code.slice(0, 200) }, { role: 'tutor' as const, content: resp.tutor_message ?? '' }]);
       setHintLevel(resp.hint_level); setLatestVerdict(resp.verdict);
       const full = await getState(sid);
       setSubmissions((full.submissions || []) as Submission[]);
@@ -207,18 +188,11 @@ export function useSession() {
       await readStream(sessionId, text, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
       });
-      for (let i = 0; i < 60; i++) {
-        const s = await getState(sessionId);
-        if (s.problem) {
-          applySessionState(s, true);
-          if (!s.problem?.starter_code && !editorInitialized.current) { setEditorCode('class Solution:\n    def solution(self):\n        pass\n'); editorInitialized.current = true; }
-          setActiveTabs(prev => ({ ...prev, left: 'desc' })); setActiveTabs(prev => ({ ...prev, right: 'code' }));
-          return;
-        }
-        await new Promise(r => setTimeout(r, 1500));
-      }
-    } catch (e) { console.error('Agent chat error:', e); }
-  }, [sessionId, readStream]);
+    } catch (e) { console.error('Agent chat error:', e); return; }
+    // 对话若触发出下一题，题目就绪时后端会经 SSE 推送 done 事件自动进入主界面，
+    // 无需轮询 getState。纯对话（无题）时 SSE 也会推 dialog-ready 的 done，无副作用。
+    startProgress(sessionId);
+  }, [sessionId, readStream, startProgress]);
 
   // ── 普通聊天 ──
   const handleChat = useCallback(async () => {
@@ -254,22 +228,19 @@ export function useSession() {
       setActiveTabs({ left: 'agent-history', right: 'code' });
     };
 
-    const callNextProblem = async () => {
+    const callNextProblem = async (preference: string = 'next_in_plan') => {
       setNextProblemLoading(true);
       setProgressMsgs(['正在准备下一题…']);
-      const pollInterval = setInterval(async () => {
-        try {
-          const st = await getState(sessionId!);
-          if (st.progress_messages?.length) setProgressMsgs(st.progress_messages);
-        } catch {}
-      }, 1000);
+      // 用 SSE 实时收进度（替代 setInterval 轮询）；POST 返回的 data 才是权威结果
+      subscribeProgress(sessionId!, {
+        onProgress: (msg) => setProgressMsgs(prev => (prev.includes(msg) ? prev : [...prev, msg])),
+      });
       try {
         const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ preference: 'next_in_plan' }),
+          body: JSON.stringify({ preference }),
         });
-        clearInterval(pollInterval);
         if (!resp.ok) { setNextProblemLoading(false); return; }
         const data = await resp.json();
 
@@ -288,23 +259,30 @@ export function useSession() {
           setProgressMsgs([]);
           editorInitialized.current = false;
           setNextProblemLoading(false);
+          closeProgress();
           return;
         }
 
-        // Agent 模式重入对话：后端返回 problem=null + 历史（Bug 5/8/9）
-        if (mode === 'agent') {
+        // Agent 模式 / 继续出题 重入对话：后端返回 problem=null + 历史（Bug 5/8/9）
+        if (!data.problem && data.phase === 'dialog') {
           applyAgentReenter(data);
           setNextProblemLoading(false);
+          closeProgress();
           return;
         }
       } catch { /* fall through to welcome */ }
-      clearInterval(pollInterval);
+      closeProgress();
       setNextProblemLoading(false);
     };
 
-    // reviewing + AC → 同 session 续题
-    if (phase === 'reviewing' && latestVerdict === 'AC' && sessionId) {
-      await callNextProblem();
+    // AC → 已完成：agent 模式重入出题对话，其余模式直接出下一题（不再显示"放弃这题"）
+    if (latestVerdict === 'AC' && sessionId) {
+      if (mode === 'agent') {
+        setMode('agent');
+        await callNextProblem('continue_dialog');
+      } else {
+        await callNextProblem('next_in_plan');
+      }
       return;
     }
 
@@ -342,7 +320,7 @@ export function useSession() {
     running, submittingFlag, activeTabs, tabPanel, splitRatio, chatInput,
     sessionId, status, isDialogPhase: mode === 'agent' && !problem && !nextProblemLoading,
     isGenerating: mode === 'agent' && status === 'awaiting_problem',
-    isAC: latestVerdict === 'AC', isDone: phase === 'reviewing' && latestVerdict === 'AC',
+    isAC: latestVerdict === 'AC', isDone: latestVerdict === 'AC',
     dragging, dragTab, chatEndRef, editorInitialized,
     setEditorCode, setActiveTabs, setTabPanel, setSplitRatio, setChatInput,
     setTutorMessages, setRunResults, setProgressMsgs,

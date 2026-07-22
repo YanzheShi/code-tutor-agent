@@ -65,4 +65,12 @@ def update_profile_node(
         save_user_profile_v2(updated)
     except Exception:
         logger.warning("Failed to persist profile to SQLite (non-fatal)", exc_info=True)
+
+    # ── 路由 ──
+    # 常规模式：graph.py 已有静态边 update_profile_node → critic_node，直接 return {} 即可，
+    #   切勿 return Command(goto="critic_node")，否则会与静态边冲突。
+    # agent 模式：静态边会误导向 critic_node，必须显式 Command(goto=agent_tutor_node) 覆盖。
+    if state.mode == "agent":
+        from langgraph.types import Command
+        return Command(update={}, goto="agent_tutor_node")
     return {}

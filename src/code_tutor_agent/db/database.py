@@ -295,17 +295,32 @@ def get_problems_by_ids(problem_ids: list[int]) -> list[DBProblem]:
 # ── update ──
 
 
-def update_problem_test_cases(problem_id: int, test_cases: list[dict]) -> None:
+def update_problem_test_cases(
+    problem_id: int,
+    test_cases: list[dict],
+    visible_test_cases: "list[dict] | None" = None,
+) -> None:
     """Update test cases for an existing problem (Day2 background generation).
 
-    Only updates test_cases_json — visible_test_cases_json is left untouched
-    to preserve the original sample/visible test cases set during import.
+    若传入 ``visible_test_cases``，则同步回写 ``visible_test_cases_json``；
+    否则保持原行为只更新 ``test_cases_json``。
+
+    注意：后台生成时会用参考解重新验证示例/可见用例并覆盖 original 的
+    LLM 编造期望，因此这里必须允许回写 visible，否则前端 "运行" 仍用
+    LLM 编错的可见用例（见 generation._generate_complex_tests）。
     """
     try:
-        _with_conn(lambda cursor: cursor.execute(
-            "UPDATE problems SET test_cases_json = ? WHERE id = ?",
-            (json.dumps(test_cases, ensure_ascii=False), problem_id),
-        ))
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE problems SET test_cases_json = ? WHERE id = ?",
+                (json.dumps(test_cases, ensure_ascii=False), problem_id),
+            )
+            if visible_test_cases is not None:
+                cursor.execute(
+                    "UPDATE problems SET visible_test_cases_json = ? WHERE id = ?",
+                    (json.dumps(visible_test_cases, ensure_ascii=False), problem_id),
+                )
+        _with_conn(_do)
         logger.info("update_problem_test_cases() — id=%d, %d test cases", problem_id, len(test_cases))
     except Exception as exc:
         logger.error("update_problem_test_cases(%d) failed: %s", problem_id, exc)
