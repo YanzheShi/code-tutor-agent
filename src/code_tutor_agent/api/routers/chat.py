@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.state import Message
 
 logger = logging.getLogger(__name__)
@@ -120,9 +121,9 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     )
 
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    _base = build_run_config(sid, run_name="chat_stream")
     try:
-        state = graph.get_state(config)
+        state = graph.get_state(_base)
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
@@ -140,6 +141,15 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     values = state.values
     status = values.get("status", "")
     mode = values.get("mode", "")
+    # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
+    config = build_run_config(
+        sid,
+        mode=mode,
+        topic=values.get("topic"),
+        difficulty=values.get("difficulty"),
+        problem_id=values.get("problem_id"),
+        run_name="chat_stream",
+    )
     agent_done = values.get("agent_dialog_complete", False)
 
     # Agent 对话模式：仅当对话未完成时
@@ -418,6 +428,15 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
     mode = values.get("mode", "")
 
     # ── Agent dialog mode (non-streaming fallback) ──
+    # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
+    config = build_run_config(
+        sid,
+        mode=mode,
+        topic=values.get("topic"),
+        difficulty=values.get("difficulty"),
+        problem_id=values.get("problem_id"),
+        run_name="chat",
+    )
     if status == "dialog" and mode == "agent" and not values.get("agent_dialog_complete", False):
         from code_tutor_agent.agents.agent_dialog import analyze_user_intent, build_ready_message
 

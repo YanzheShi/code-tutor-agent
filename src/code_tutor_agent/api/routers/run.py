@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.api import RunCodeRequest, RunCodeResponse
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ router = APIRouter()
 async def run_code(sid: str, body: RunCodeRequest):
     """Run the user's code against visible test cases."""
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="run_code")
 
     try:
         state = graph.get_state(config)

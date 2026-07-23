@@ -8,6 +8,7 @@ import os
 import re
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg, SessionState
 
@@ -90,7 +91,12 @@ async def run_generation(sid: str, initial_dict: dict):
     前端通过 progress_messages 看到完整过程。
     """
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(
+        sid,
+        topic=initial_dict.get("topic"),
+        difficulty=initial_dict.get("difficulty"),
+        run_name="generate_problem",
+    )
 
     try:
         initial = SessionState(**initial_dict)

@@ -13,8 +13,10 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
+from langchain_core.tracers.context import collect_runs
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.observability import build_run_config, record_verdict_feedback
 from code_tutor_agent.api.serializers import serialize_state, empty_state
 from code_tutor_agent.api.services.generation import run_generation, run_fast_path, GENERATION_TIMEOUT
 from code_tutor_agent.config import get_checkpoint_db_path
@@ -62,7 +64,13 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
     """Create a new tutoring session (background generation)."""
     graph = get_graph()
     sid = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(
+        sid,
+        mode=body.mode if body else None,
+        topic=body.topic if body else None,
+        difficulty=body.difficulty if body else None,
+        run_name="create_session",
+    )
 
     initial_dict = {"session_id": sid}
     if body:
@@ -253,12 +261,21 @@ async def cleanup_sessions(
 async def submit_code(sid: str, body: SubmitRequest):
     """Resume a paused session with user-submitted code."""
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="submit_code")
 
     try:
         state = graph.get_state(config)
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
+    # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
+    config = build_run_config(
+        sid,
+        mode=state.values.get("mode"),
+        topic=state.values.get("topic"),
+        difficulty=state.values.get("difficulty"),
+        problem_id=state.values.get("problem_id"),
+        run_name="submit_code",
+    )
 
     # AC 后 critic_node 会让 graph 重新暂停在 wait_for_submit_node（interrupt），
     # 此时 status 仍为 "done"，但存在待执行的 wait_for_submit_node，
@@ -277,9 +294,26 @@ async def submit_code(sid: str, body: SubmitRequest):
 
     logger.info("POST /session/%s/submit → code=%d chars", sid, len(body.code))
 
-    graph.invoke(Command(resume={"code": body.code, "language": body.language}), config)
+    with collect_runs() as runs:
+        graph.invoke(
+            Command(resume={"code": body.code, "language": body.language}),
+            config,
+        )
+        # collect_runs() 返回 RunCollectorCallbackHandler，需用 .traced_runs 取 run 列表
+        traced = runs.traced_runs if runs else []
+        run_id = traced[-1].id if traced else None
     state = graph.get_state(config)
     values = state.values
+
+    # 判题 verdict 作为 feedback 回传 LangSmith（record_verdict_feedback 内部非致命）
+    if run_id and values.get("last_verdict"):
+        record_verdict_feedback(
+            run_id,
+            values["last_verdict"],
+            session_id=sid,
+            hint_level=values.get("hint_level", 0),
+            judge_cycle=len(values.get("submissions", []) or []),
+        )
 
     # 持久化提交记录
     try:
@@ -323,7 +357,7 @@ async def get_session_state(sid: str):
     如果 session 不存在则返回 404，前端可据此区分"生成中"和"无效会话"。
     """
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="get_session_state")
 
     if not _session_exists(sid):
         raise HTTPException(404, f"Session {sid} not found")
@@ -354,7 +388,7 @@ async def stream_progress(sid: str):
       - 生成失败（无题目且出现终态错误标记，或超时），推送 `event: error` 并关闭。
     """
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="stream_progress")
     loop = asyncio.get_running_loop()
     deadline = loop.time() + GENERATION_TIMEOUT + 30
 
@@ -426,7 +460,7 @@ async def stream_progress(sid: str):
 async def get_reference_code(sid: str):
     """Get the reference solution (only after AC)."""
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="get_reference_code")
     try:
         state = graph.get_state(config)
     except Exception:
@@ -458,7 +492,14 @@ async def create_session_with_existing(problem_id: int):
         raise HTTPException(404, f"Problem {problem_id} not found")
 
     sid = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(
+        sid,
+        mode=full.get("mode"),
+        topic=full.get("topic"),
+        difficulty=full.get("difficulty"),
+        problem_id=full.get("id"),
+        run_name="by_problem",
+    )
 
     visible_tcs = full.get("visible_test_cases", [])
     if not visible_tcs:
@@ -503,7 +544,7 @@ async def next_problem(sid: str, body: NextProblemReq):
     - Other modes: route through critic → planner → generator (existing).
     """
     graph = get_graph()
-    config = {"configurable": {"thread_id": sid}}
+    config = build_run_config(sid, run_name="next_problem")
 
     try:
         state = graph.get_state(config)
@@ -519,6 +560,16 @@ async def next_problem(sid: str, body: NextProblemReq):
 
     vals = state.values
     mode = vals.get("mode", "practice")
+
+    # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
+    config = build_run_config(
+        sid,
+        mode=vals.get("mode"),
+        topic=vals.get("topic"),
+        difficulty=vals.get("difficulty"),
+        problem_id=vals.get("problem_id"),
+        run_name="next_problem",
+    )
 
     # ── Agent mode (or "continue generating" after AC): re-enter the tutor dialog ──
     #

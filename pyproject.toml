@@ -12,6 +12,8 @@ dependencies = [
     "langchain-openai>=1.3.0,<2.0.0",
     "langgraph>=1.2.0,<2.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    # LangSmith 可观测（显式钉版本；当前仅为 langchain 传递依赖）
+    "langsmith>=0.3.0",
     # 数据建模
     "mcp>=1.0.0",
     "pydantic>=2.9.0",
