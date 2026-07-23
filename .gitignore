@@ -59,3 +59,23 @@ notebooks/.ipynb_checkpoints/
 # === OS ===
 .DS_Store
 Thumbs.db
+
+# === Agent / 工具本地数据（不进 git）===
+# agent 运行时安装的 skills 等（含大量 .agents/skills/*）
+.agents/
+.agent/
+# codebuddy 计划 / 本地数据
+.codebuddy/
+
+# === 运行时日志 / 测试 dump（优化清理）===
+clear_log.txt
+*_output.txt
+*_tests.txt
+*_summary.txt
+*_full.log
+
+# === 数据库时间戳备份（code_tutor.db.bak_YYYYMMDD_HHMMSS）===
+*.bak_*
+
+# === 临时源码 ===
+src/code_tutor_agent/agents/_tmp_*.py
