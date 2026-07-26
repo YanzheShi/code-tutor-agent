@@ -381,6 +381,40 @@ def extract_function_signature(starter_code: str) -> str:
     return ",".join(result) + f" -> {return_type}"
 
 
+def extract_signature_from_solution(code: str) -> str:
+    """从 Solution 类的完整代码中提取函数签名。
+
+    背景：LLM 使用 with_structured_output(Problem) 出题时，经常把
+    ListNode.__init__(self, val=0, next=None) 的参数当成 function_signature
+    输出，导致签名变成 val=0,next=None -> None。这个错误签名落库后，
+    runner 收到测试用例的数组 [1,2,3] 不知道要转成 ListNode 对象，
+    直接当成 list 传入用户代码，报 'list' object has no attribute 'next'。
+
+    解法：不从 LLM 的 function_signature 字段取值，改为从 optimal_solution
+    的 Solution 类方法中提取。optimal_solution 有 P0-1 自验证兜底（必须能
+    跑过示例用例），方法签名可靠性远高于 LLM 单独填的 function_signature 字段。
+
+    被 judge_node、run.py、verify_problem 三方调用，确保判题/运行/出题
+    都使用正确的签名。
+    """
+    import re
+    m = re.search(
+        r'class Solution:\s+def (\w+)\(self([^)]*)\)\s*(?:->\s*(\w+(?:\[.*?\])?))?',
+        code,
+    )
+    if not m:
+        return ""
+    method_name = m.group(1)
+    sig_parts = code.split("def " + method_name, 1)
+    if len(sig_parts) < 2:
+        return ""
+    sig_line = sig_parts[1].split("\n")[0].strip()
+    sig_line = re.sub(r'^\(self,\s*', '(', sig_line)
+    sig_line = re.sub(r'^\(self\)', '()', sig_line)
+    sig_line = sig_line.rstrip(":")
+    return sig_line
+
+
 def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
     """Convert to the dict shape expected by the API response."""
     return {

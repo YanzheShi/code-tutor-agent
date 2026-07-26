@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Literal
 
 from langgraph.types import Command
 
@@ -76,21 +77,22 @@ def _r10_scan(text: str) -> bool:
     return False
 
 
-def constitutional_guard_node(state: SessionState) -> Command:
-    """Scan the latest tutor message, sanitize if needed, then route to END.
+def constitutional_guard_node(state: SessionState) -> Command[Literal["wait_for_submit_node"]]:
+    """Scan the latest tutor message, sanitize if needed, then route to wait_for_submit_node.
 
     Runs after tutor_node (WA path). The tutor_node already set turn_in_level,
     hint_level, and appended the tutor message. This node only checks and
-    potentially replaces the last message.
+    potentially replaces the last message, then re-enters wait_for_submit_node
+    so the next submission can resume from the interrupt.
     """
     logger.info("▶ constitutional_guard_node() — hint_level=%d", state.hint_level)
 
     if not state.tutor_messages:
-        return Command(goto="__end__")
+        return Command(goto="wait_for_submit_node")
 
     last_msg = state.tutor_messages[-1]
     if last_msg.role != "tutor":
-        return Command(goto="__end__")
+        return Command(goto="wait_for_submit_node")
 
     text = last_msg.content
     hint_level = state.hint_level
@@ -116,6 +118,6 @@ def constitutional_guard_node(state: SessionState) -> Command:
         new_msg = type(last_msg)(role=last_msg.role, content=sanitized, metadata=last_msg.metadata)
         new_msgs = list(state.tutor_messages)
         new_msgs[-1] = new_msg
-        return Command(goto="__end__", update={"tutor_messages": new_msgs})
+        return Command(goto="wait_for_submit_node", update={"tutor_messages": new_msgs})
 
-    return Command(goto="__end__")
+    return Command(goto="wait_for_submit_node")

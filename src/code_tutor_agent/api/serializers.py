@@ -40,7 +40,7 @@ def serialize_state(state: Any) -> dict:
         "submissions": [
             {
                 "index": s.get("index") if isinstance(s, dict) else s.index,
-                "code": (s.get("code", "")[:200] if isinstance(s, dict) else s.code[:200]),
+                "code": (s.get("code", "") if isinstance(s, dict) else s.code),
                 "language": s.get("language", "python") if isinstance(s, dict) else s.language,
                 "verdict": s.get("verdict", "") if isinstance(s, dict) else getattr(s, "verdict", ""),
                 "timestamp": s.get("timestamp", "") if isinstance(s, dict) else getattr(s, "timestamp", ""),

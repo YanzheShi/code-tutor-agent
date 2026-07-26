@@ -92,9 +92,10 @@ def _build_graph() -> StateGraph:
     # tutor_router → tutor_node (CONTINUE/ESCALATE) 或 wait_for_submit (RESOLVED)
     # 由 tutor_router_node 的 Command(goto=...) 动态路由
 
-    # tutor_node (WA 路径) → constitutional_guard_node → END（checkpoint，等 /chat 或 /submit）
+    # tutor_node (WA 路径) → constitutional_guard_node → wait_for_submit_node（重新暂停等提交）
     # tutor_node (AC 路径) → update_profile_node（由 tutor_node 的 Command 动态路由）
-    builder.add_edge("constitutional_guard_node", END)
+    # 注意：constitutional_guard_node 通过 Command(goto="wait_for_submit_node") 动态路由，
+    # 不需要静态边（否则会与静态边冲突，导致两个节点都执行）。
     builder.add_edge("update_profile_node", "critic_node")
     # critic_node 动态路由：AC/ABANDON → planner, WA → wait_for_submit
 

@@ -1,6 +1,6 @@
 # CodeTutor Agent — 系统架构与完整流程梳理
 
-> 适用分支：`feat/agent-toolcall`（出题能力已在本分支之后由 `feat/problem-agent` 收敛为独立 **Problem Agent**，见下文 §0 / §10）
+> 适用分支：`master`（`problem_agent` 与 LangSmith 已合入；出题能力已收敛为独立 **Problem Agent**，见 `agents/agent_problem.py` 与 `docs/problem-agent-flow.md`）
 > 目标：从「节点 → 条件路由 → 流转逻辑 → 循环机制 → 分层架构」五个层次，完整、可复盘地描述本系统如何运转。
 > 配套设计文档：
 > - `agent-leetcode-toolcall-design.md`（仅覆盖 tool-calling 增强部分）
@@ -26,7 +26,7 @@
                 │ get_graph() 单例                            │ update_state / get_state
 ┌───────────────▼───────────────────────────────────────────▼──────────────┐
 │                   LangGraph StateGraph (graph/graph.py)                   │
-│  节点 (12 个) + 条件路由 (start/planner/wait_for_submit/tutor_router)      │
+│  节点 (13 个) + 条件路由 (start/planner/wait_for_submit/tutor_router)      │
 │  状态机由 checkpointer (SqliteSaver) 托管 —— 暂停 / 恢复 / 跨请求持久      │
 └───────────────┬───────────────────────────────────────────┬──────────────┘
                 │                                            │
@@ -70,12 +70,12 @@
 
 ---
 
-## 2. LangGraph 节点清单（12 个）
+## 2. LangGraph 节点清单（13 个）
 
 | 节点 | 性质 | 职责 | 主要输出 / 路由 |
 |------|------|------|----------------|
 | `planner_node` | 规则引擎 | 按画像/偏好选 topic+difficulty，或复用 dialog 结果 | `problem?` → wait : generator |
-| `generator_node` | LLM+本地 | 经 `ProblemAgent` 出题（LLM→adapter→cli→static 降级）→ 本地跑 2 个样例 I/O → 落库；LeetCode 导入走 path A | 固定 → `wait_for_submit_node` |
+| `generator_node` | LLM+本地 | **内联降级**（LLM→adapter→static，**无 cli 通道**）→ 本地跑 2 个样例 I/O → 落库；LeetCode 导入走 path A。**注意：未调用 `ProblemAgent.generate()`**（见 §10） | 固定 → `wait_for_submit_node` |
 | `wait_for_submit_node` | **唯一 interrupt** | 暂停等用户代码；resume 时收代码入 `submissions` | → judge(普通) / agent_judge(agent) |
 | `judge_node` | 三阶段判题 | 基础→对抗→评审，确定性流水线 | 永远 → `tutor_router_node` |
 | `tutor_router_node` | LLM/规则 | 读末条用户消息+情绪，决定 CONTINUE/ESCALATE/RESOLVED | RESOLVED→wait；其余→`tutor_node` |
@@ -320,8 +320,11 @@ agent_dialog_node:
 
 `api/services/generation.py`：
 - `run_generation`：`graph.invoke` 带超时（默认 120s），超时/失败自动降级**静态题库**（`store/static_pool.py`）。
-- **出题统一入口（`agents/agent_problem.py`，见 `problem-agent-flow.md`）**：`generator_node` / `run_generation` 最终都走 `ProblemAgent.generate()`，按 **`LLM → adapter → cli → static`** 顺序降级，返回 `GenerationOutcome(problem, channel, error)`；`problem_generator.py` 已退化为只 re-export `agent_problem` 的向后兼容 shim，旧调用方（generator 节点、benchmark、旧测试）无需改动。出题内部还有 `verify_problem` 自校验（去围栏 / 防思维链泄漏 / `compile` 最优解 / 推导 `starter_code`）与 `max_tokens=4096` 限流（修复 Bug7 截断）。
-- `_generate_complex_tests`：用参考解跑 12 组随机输入 + LLM 生成边界用例 → 合并更新 DB 测试套件（用户写代码期间异步完成）。
+- **出题入口的两套实现（务必分清，见交接文档 §5.1）**：
+  - **(A) `ProblemAgent`（`agents/agent_problem.py`，详见 `problem-agent-flow.md`）**：可复用的四通道降级能力 `LLM → adapter → cli → static`，返回 `GenerationOutcome(problem, channel, error)`；`problem_generator.py` 已退化为只 re-export `agent_problem` 的向后兼容 shim。`verify_problem` 自校验（去围栏 / 防思维链泄漏 / `compile` 最优解 / 推导 `starter_code`）与 `max_tokens=4096` 限流（修复 Bug7 截断）都在这一层。
+  - **(B) `generator_node`（`nodes/generator.py`，当前 graph 实际出题路径）**：**自己内联**了一套 `LLM → adapter（engine_adapter.generate_problem）→ static` 降级，**没有 cli 通道、也不调用 (A) 的 `ProblemAgent.generate()`**。`generator_node` 与 `run_generation` 走的是 (B)，不是 (A)。
+  - **⚠️ 已知技术债**：两套降级逻辑并存且 (B) 未复用 (A) 的 cli 逃生舱；若未来要统一，建议让 `generator_node` 改调 `ProblemAgent.generate()`（或反之），避免出题契约在两条路径上漂移。
+- `_generate_complex_tests`：用参考解跑 12 组随机输入 + LLM 生成边界用例 → 合并更新 DB 测试套件（用户写代码期间异步完成）。**注意：运行时后台造用例走这里 + 对抗用例生成，并不走 `skills/defs/cta-generate-test-cases` 这个独立 skill（该 skill 当前未接入运行时，见交接文档 §6.3）。**
 - LeetCode 快速路径 `run_fast_path`：跳过 graph 出题，直接落库 + 后台补最优解/用例。
 
 ---
@@ -335,7 +338,7 @@ agent_dialog_node:
 5. **多题模式 bug 历史**（已修）：`tutor_messages` dict/Message 混用导致 `AttributeError`；`SessionPhase` 缺 `dialog` 值。现已统一在 API 层转 `Message`。
 6. **`run_tool_loop` 动态 `getattr` 解析工具**：使单测能用 `patch` 模块属性替换工具函数，离线全绿。
 7. **agent-dialog 与 chat 双入口**：流式（`/chat/stream`）与 `BackgroundTasks` 触发生成，避免 SSE 连接关闭导致题目永不写入。
-8. **出题收敛为 Problem Agent**（`feat/problem-agent`）：`problem_generator.py` 退化为 re-export 兼容 shim；真实逻辑在 `agents/agent_problem.py`，统一入口 `ProblemAgent.generate()` 按 `LLM→adapter→cli→static` 降级，skill 通道（adapter/cli/static）产物经 `_flat_to_problem` 归一为 `Problem`。配套流程图见 `problem-agent-flow.md`。
+8. **出题收敛为 Problem Agent**（已合入 `master`）：`problem_generator.py` 退化为 re-export 兼容 shim；`ProblemAgent.generate()`（`agents/agent_problem.py`）按 `LLM→adapter→cli→static` 降级，skill 通道产物经 `_flat_to_problem` 归一为 `Problem`。**注意 `generator_node` 当前并未调用它**（见 §10）。配套流程图见 `problem-agent-flow.md`。
 
 ---
 

@@ -73,62 +73,38 @@ class GraphNode:
 
 
 def get_struct_prologue(topic: str, description: str = "", starter_code: str = "") -> str:
-    """根据题目 topic / 描述 / starter_code 返回应前置的结构体定义。
+    """根据 starter_code 中引用的数据结构类型，注入对应的结构体定义。
 
     检测策略：
-    - 链表类关键词 → ListNode
-    - 二叉树类关键词 → TreeNode
-    - N 叉树 / 前缀树类关键词 → Node
-    - 图类关键词 → GraphNode
-
-    去重原则：**以出题 starter_code 自带的定义为主**。
-    若 starter_code 中已经定义了同名类（如 LLM 已写出 ``class ListNode``），
-    则不再重复前置注入，仅补充缺失的类型，避免出现多个无用/重复的类定义。
+    - 扫描 starter_code 中出现的 ListNode、TreeNode、Node、GraphNode 类型引用
+      （如类型注解 ``: ListNode``、``-> TreeNode`` 等）
+    - 如果 starter_code 中已经定义了同名类，则不再重复注入
+    - 不再使用 keyword 匹配（避免 ``bst`` 误匹配 ``substring`` 等问题）
 
     返回空字符串表示不需要额外定义。
     """
-    combined = f"{topic} {description} {starter_code}".lower()
+    if not starter_code:
+        return ""
 
-    # 每个结构体常量 → 其定义的类名（用于去重）
-    _STRUCT_CLASS = {
-        "list": ("ListNode", STRUCT_LINKED_LIST),
-        "nary": ("Node", STRUCT_NARY_TREE),
-        "tree": ("TreeNode", STRUCT_BINARY_TREE),
-        "graph": ("GraphNode", STRUCT_GRAPH),
+    # 结构体常量映射：类型名 → 定义文本
+    _STRUCT_MAP = {
+        "ListNode": STRUCT_LINKED_LIST,
+        "TreeNode": STRUCT_BINARY_TREE,
+        "Node": STRUCT_NARY_TREE,
+        "GraphNode": STRUCT_GRAPH,
     }
 
-    candidates: list[tuple[str, str]] = []
+    # 扫描 starter_code 中引用了哪些结构体类型（类型注解、参数名等中的引用）
+    # 使用 \b 确保单词边界，避免 "bst" 误匹配 "substring" 这类问题
+    type_refs = set(re.findall(r"\b(ListNode|TreeNode|Node|GraphNode)\b", starter_code))
 
-    # 链表检测
-    _list_keywords = ["链表", "linkedlist", "listnode", "singly-linked", "单链表", "双链表"]
-    if any(k in combined for k in _list_keywords):
-        candidates.append(_STRUCT_CLASS["list"])
+    # 去重：starter_code 已自带同名类定义时，不再重复前置注入。
+    # 注意：只检测非注释行中的 class 定义，跳过 # class ListNode 这类注释。
+    defined = set(re.findall(r"^[ \t]*class\s+(\w+)", starter_code or "", re.MULTILINE))
 
-    # N 叉树检测：只用强信号词。
-    # 注意：不能放过于宽泛的 "node" —— 链表/二叉树的 starter 注释里常出现
-    # "# Definition for a Node."，会误触发并注入一个根本用不上的 Node 类。
-    _nary_keywords = ["n叉树", "n 叉树", "n-ary", "nary", "多叉树", "trie", "前缀树"]
-    if any(k in combined for k in _nary_keywords):
-        candidates.append(_STRUCT_CLASS["nary"])
-
-    # 二叉树检测
-    _tree_keywords = ["二叉树", "二叉搜索树", "bst", "treenode", "binary tree", "binary search tree",
-                      "平衡二叉树", "完全二叉树", "线段树", "二叉树节点", "树的", "树节点",
-                      "前序遍历", "中序遍历", "后序遍历", "层序遍历", "树的遍历"]
-    if any(k in combined for k in _tree_keywords):
-        candidates.append(_STRUCT_CLASS["tree"])
-
-    # 图检测
-    _graph_keywords = ["图", "graph", "graphnode", "邻接表", "邻接矩阵", "拓扑排序",
-                       "bfs", "dfs", "dijkstra", "floyd", "最短路径"]
-    if any(k in combined for k in _graph_keywords):
-        candidates.append(_STRUCT_CLASS["graph"])
-
-    # 去重：starter_code 已自带同名类定义时，不再重复前置注入
-    defined = set(re.findall(r"class\s+(\w+)", starter_code or ""))
     result = []
-    for cls_name, text in candidates:
-        if cls_name in defined:
-            continue
-        result.append(text)
+    for cls_name in ("ListNode", "TreeNode", "Node", "GraphNode"):
+        if cls_name in type_refs and cls_name not in defined:
+            result.append(_STRUCT_MAP[cls_name])
+
     return "".join(result)

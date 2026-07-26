@@ -25,7 +25,7 @@ export default function App() {
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'welcome') return (
     <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-      onStartLeetcode={s.onStartLeetcode} onOpenAdmin={s.onOpenAdmin} /></>
+      onOpenAdmin={s.onOpenAdmin} /></>
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') return <AdminPanel onClose={() => s.setScreen('welcome')} />;

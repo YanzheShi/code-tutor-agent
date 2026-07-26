@@ -162,8 +162,20 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.warning("optimal_solution is a stub (no real logic) — rejecting")
         return False
 
+    # P0-3: 同时验证 brute_solution 可编译
+    brute = _extract_code(problem_dict.get("brute_solution", ""))
+    problem_dict["brute_solution"] = brute
+    if not brute:
+        logger.warning("No brute_solution — rejecting")
+        return False
+    if _is_stub_solution(brute):
+        logger.warning("brute_solution is a stub (no real logic) — rejecting")
+        return False
+
     # 检查描述中是否有思考过程泄漏（desc 已在上方取过）
-    cot_keywords = ["让我们", "再试一个", "试一个", "选择", "这道题", "其实", "但是", "再试", "经典的", "标准题"]
+    # 注意：只拦截真正的思维链泄露，不要误伤正常描述用语。
+    # "这道题"、"其实"、"但是"、"经典的" 等是正常描述常见词，不应拦截。
+    cot_keywords = ["让我们", "再试一个", "再试", "一步一步", "我们先", "我们来试试"]
     if any(kw in desc for kw in cot_keywords):
         logger.warning("Description contains chain-of-thought — rejecting")
         return False
@@ -173,6 +185,14 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.info("✓ optimal_solution compiles OK")
     except SyntaxError as exc:
         logger.warning("optimal_solution syntax error: %s", exc)
+        return False
+
+    # P0-3: 验证 brute_solution 也能编译
+    try:
+        compile(brute, "<brute_solution>", "exec")
+        logger.info("✓ brute_solution compiles OK")
+    except SyntaxError as exc:
+        logger.warning("brute_solution syntax error: %s", exc)
         return False
 
     # 先去掉 LLM 结构化输出里可能夹带的 ```python 代码围栏
@@ -196,15 +216,28 @@ def verify_problem(problem_dict: dict) -> bool:
             # 生成正确的 starter_code：class + 方法签名 + pass
             sc_generated = f"class Solution:\n    def {method_name}(self, {params}){ret_anno}:\n        pass\n"
             problem_dict["starter_code"] = sc_generated
-            # 同时从方法生成 function_signature
-            sig_parts = optimal.split("def " + method_name, 1)
-            if len(sig_parts) > 1:
-                sig_line = sig_parts[1].split("\n")[0].strip()
-                # 去掉 'self, ' 前缀
-                sig_line = re.sub(r'^\(self,\s*', '(', sig_line)
-                sig_line = re.sub(r'^\(self\)', '()', sig_line)
-                problem_dict["function_signature"] = sig_line
             logger.info("Generated starter_code from optimal_solution: %s(...)", method_name)
+
+    # 始终从 optimal_solution 提取 function_signature，覆盖 LLM 生成的值。
+    # LLM 经常把 ListNode.__init__(val=0, next=None) 当成函数签名提取出来，
+    # 导致 function_signature 错误（如 val=0,next=None -> None），进而让 runner
+    # 无法正确把数组参数转换为 ListNode/TreeNode 对象。
+    _method_match = re.search(
+        r'class Solution:\s+def (\w+)\(self([^)]*)\)\s*(?:->\s*(\w+(?:\[.*?\])?))?',
+        optimal,
+    )
+    if _method_match:
+        _method_name = _method_match.group(1)
+        sig_parts = optimal.split("def " + _method_name, 1)
+        if len(sig_parts) > 1:
+            sig_line = sig_parts[1].split("\n")[0].strip()
+            # 去掉 'self, ' 前缀
+            sig_line = re.sub(r'^\(self,\s*', '(', sig_line)
+            sig_line = re.sub(r'^\(self\)', '()', sig_line)
+            # 去掉末尾的 :（函数定义行结尾）
+            sig_line = sig_line.rstrip(":")
+            problem_dict["function_signature"] = sig_line
+            logger.info("Overrode function_signature from optimal_solution: %s", sig_line[:100])
         else:
             logger.warning("Could not parse method from optimal_solution — keeping as-is")
 
@@ -255,9 +288,23 @@ def generate_problem(
         problem_dict = problem.model_dump()
 
         if verify_problem(problem_dict):
-            return problem
+            # 日志：打印 LLM 出题完整内容，方便调试
+            logger.info(
+                "LLM generate_problem OK — title=%s | topic=%s | diff=%s | "
+                "starter_code=%s | func_sig=%s",
+                problem_dict.get("title", "")[:80],
+                problem_dict.get("topic", "")[:20],
+                problem_dict.get("difficulty", ""),
+                repr(problem_dict.get("starter_code", "")[:150]),
+                problem_dict.get("function_signature", "")[:80],
+            )
+            logger.debug("Full problem dict: %s", problem_dict)
+            # verify_problem 修改了 problem_dict（如从 optimal_solution 推导 starter_code），
+            # 返回修改后的 Problem 对象，确保调用方拿到的是修正后的数据
+            return Problem.model_validate(problem_dict)
 
         logger.warning("Self-verification failed on attempt %d — retrying", attempt + 1)
+        logger.debug("Rejected problem dict: %s", problem_dict)
 
     if problem is None:
         raise RuntimeError("all generation attempts failed (LLM output unusable)")

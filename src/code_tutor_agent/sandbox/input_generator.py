@@ -24,6 +24,66 @@ logger = logging.getLogger(__name__)
 _SIG_RE = re.compile(r"^(.*?)\s*->\s*(.+)$")
 _PARAM_RE = re.compile(r"(\w+)\s*:\s*([^,]+)")
 
+# ── P2: 从 constraints 中提取数值范围的 regex ──
+# 匹配 "0 <= ... <= 10^4" 或 "-10^9 <= ... <= 10^9" 或 "1 <= n <= 10^5"
+_RANGE_RE = re.compile(
+    r"(?P<low>-?\d+(?:\^\d+)?)\s*<=\s*(?:\w+(?:\[[^\]]*\])?)\s*<=\s*(?P<high>-?\d+(?:\^\d+)?)"
+)
+# 也匹配 "length == 0" 或 "n > 0" 等简单约束
+_SINGLE_BOUND_RE = re.compile(r"(?P<op>>=|<=|>|<|=)\s*(?P<val>-?\d+(?:\^\d+)?)")
+
+
+def _eval_power(s: str) -> int:
+    """处理 10^4 这样的幂记法为整数 10000。"""
+    if '^' in s:
+        base, exp = s.split('^', 1)
+        return int(base) ** int(exp)
+    return int(s)
+
+
+def _parse_constraint_ranges(constraints: list[str] | None) -> tuple[int, int, int, int]:
+    """从 constraints 中提取数值范围。
+
+    Returns:
+        (min_val, max_val, min_len, max_len) — 值范围与数组长度范围。
+        解析失败时返回默认值 (-100, 100, 2, 8)。
+    """
+    if not constraints:
+        return -100, 100, 2, 8
+
+    min_val, max_val = -100, 100
+    min_len, max_len = 2, 8
+
+    for text in constraints:
+        # 尝试匹配 "低 <= 某变量 <= 高"
+        for m in _RANGE_RE.finditer(text):
+            low = _eval_power(m.group("low"))
+            high = _eval_power(m.group("high"))
+            # 判断是数组长度约束还是元素值约束
+            lhs = m.group(0)  # 整个匹配文本
+            if "length" in lhs or "len" in lhs or "size" in lhs:
+                if low > min_len:
+                    min_len = low
+                if high < max_len:
+                    max_len = high
+            else:
+                if low < min_val:
+                    min_val = low
+                if high > max_val:
+                    max_val = high
+                    # 保证数组长度至少能容纳更多元素
+                    max_len = max(max_len, 8)
+
+    # 保证合理性
+    min_len = max(1, min_len)
+    max_len = max(max_len, min_len + 1)
+    min_val = min(min_val, -1)  # 至少包含负数，否则设为 0
+    max_val = max(max_val, 1)
+
+    logger.debug("Parsed constraint ranges: val=[%d, %d] len=[%d, %d]",
+                 min_val, max_val, min_len, max_len)
+    return min_val, max_val, min_len, max_len
+
 
 def parse_signature(sig: str) -> tuple[list[tuple[str, str]], str]:
     """Parse a function signature into parameter types and return type.
@@ -67,7 +127,7 @@ def _random_str(max_len=8) -> str:
     return '"' + "".join(random.choice(chars) for _ in range(n)) + '"'
 
 
-def _random_struct_array(type_str: str) -> str:
+def _random_struct_array(type_str: str, min_val=-100, max_val=100) -> str:
     """为链表/树类型生成数组形式的随机输入（字符串）。
 
     链表（ListNode）：``[v1, v2, ...]``
@@ -77,13 +137,13 @@ def _random_struct_array(type_str: str) -> str:
         n = random.randint(1, 7)
         vals = []
         for _ in range(n):
-            vals.append("null" if random.random() < 0.2 else str(random.randint(-100, 100)))
+            vals.append("null" if random.random() < 0.2 else str(random.randint(min_val, max_val)))
         if vals[0] == "null":
-            vals[0] = str(random.randint(-100, 100))
+            vals[0] = str(random.randint(min_val, max_val))
         return "[" + ",".join(vals) + "]"
     # 默认按链表处理（ListNode / GraphNode 等）
     n = random.randint(1, 6)
-    arr = [random.randint(-100, 100) for _ in range(n)]
+    arr = [random.randint(min_val, max_val) for _ in range(n)]
     return "[" + ",".join(str(v) for v in arr) + "]"
 
 
@@ -106,12 +166,20 @@ def _gen_cell(inner: str) -> str:
     return _generate_param_value(inner)
 
 
-def _generate_param_value(type_str: str) -> str:
+def _generate_param_value(
+    type_str: str,
+    min_val: int | None = None,
+    max_val: int | None = None,
+    min_len: int | None = None,
+    max_len: int | None = None,
+) -> str:
     """Generate a random Python literal string for a given type.
 
     Args:
         type_str: e.g. "int", "List[int]", "List[str]", "List[List[int]]",
             "ListNode", "Optional[ListNode]", "TreeNode"
+        min_val, max_val: P2: value range for int/list elements (from constraints).
+        min_len, max_len: P2: length range for lists (from constraints).
 
     Returns:
         String representation of a random value, e.g. "42", "[1,2,3]"
@@ -125,7 +193,7 @@ def _generate_param_value(type_str: str) -> str:
 
     # 链表 / 树结构：以数组形式生成（runner 会按类型还原成对应对象）
     if type_str in ("ListNode", "TreeNode", "Node", "GraphNode"):
-        return _random_struct_array(type_str)
+        return _random_struct_array(type_str, min_val or -100, max_val or 100)
 
     # Handle 2D List[List[...]] FIRST — more specific than the 1D pattern.
     # (A greedy 1D regex would otherwise swallow "List[List[str]]" whole,
@@ -145,18 +213,20 @@ def _generate_param_value(type_str: str) -> str:
     m1 = re.match(r"^List\[(.+)\]$", type_str)
     if m1:
         inner = m1.group(1).strip()
-        n = random.randint(1, 6)
-        items = [_generate_param_value(inner) for _ in range(n)]
+        n = random.randint(min_len or 1, max_len or 6)
+        items = [_generate_param_value(inner, min_val, max_val, min_len, max_len) for _ in range(n)]
         return "[" + ",".join(items) + "]"
 
     # Handle basic types
+    if type_str == "int":
+        return _random_int(min_val or -1000, max_val or 1000)
     gen = _TYPE_GENERATORS.get(type_str)
     if gen:
         return gen()
 
     # Fallback: return a default
     logger.warning("Unknown type '%s', defaulting to int", type_str)
-    return _random_int()
+    return _random_int(min_val or -1000, max_val or 1000)
 
 
 def generate_random_inputs(
@@ -165,6 +235,11 @@ def generate_random_inputs(
     constraints: list[str] | None = None,
     description: str | None = None,
     seed: int | None = 42,
+    # P2: 从 constraints 解析出的数值范围，None 表示使用默认值
+    _parsed_min_val: int | None = None,
+    _parsed_max_val: int | None = None,
+    _parsed_min_len: int | None = None,
+    _parsed_max_len: int | None = None,
 ) -> list[list[str]]:
     """Generate random input argument lists for a function signature.
 
@@ -176,14 +251,21 @@ def generate_random_inputs(
         count: Number of random inputs to generate.
         constraints: Optional constraint strings；若含「有序/sorted/非递减」等
             关键词，会对 List[int] 输入做升序排序（方案 B）。
+            P2: 也会从中解析数值范围，约束随机输入的取值范围。
         description: Optional problem description，同样参与「有序」判定。
         seed: Random seed for reproducibility.
+        _parsed_*: Internal use — pre-parsed ranges from constraints.
 
     Returns:
         List of input_args lists, e.g. [["[1,2,3]", "5"], ["[4,5]", "9"]]
     """
     if seed is not None:
         random.seed(seed)
+
+    # P2: 解析 constraints 中的数值范围
+    if _parsed_min_val is None:
+        _parsed_min_val, _parsed_max_val, _parsed_min_len, _parsed_max_len = \
+            _parse_constraint_ranges(constraints)
 
     params, _ = parse_signature(function_sig)
     if not params:
@@ -194,8 +276,10 @@ def generate_random_inputs(
     sort_inputs = _needs_sorted_inputs(*(constraints or []), description or "")
 
     logger.info(
-        "▶ generate_random_inputs() — sig=%s, count=%d, sort_inputs=%s, params=%s",
+        "▶ generate_random_inputs() — sig=%s, count=%d, sort_inputs=%s, params=%s, "
+        "val=[%d,%d] len=[%d,%d]",
         function_sig, count, sort_inputs, [p[0] for p in params],
+        _parsed_min_val, _parsed_max_val, _parsed_min_len, _parsed_max_len,
     )
 
     results = []
@@ -224,7 +308,10 @@ def generate_random_inputs(
                     _n = 5
                 val = str(_n)
             else:
-                val = _generate_param_value(type_str)
+                # P2: 传入解析后的范围
+                _rmin = _parsed_min_val if t == "int" else None
+                _rmax = _parsed_max_val if t == "int" else None
+                val = _generate_param_value(type_str, _rmin, _rmax, _parsed_min_len, _parsed_max_len)
             args.append(val)
             prev_type = t
             prev_val = val

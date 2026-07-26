@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 const BASE = 'http://localhost:8765';
 
-type Tab = 'existing' | 'leetcode' | 'agent' | 'profile' | 'admin';
+type Tab = 'existing' | 'agent' | 'profile' | 'admin';
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string; verdict?: string };
 
 /* ── ProfileView 子组件 ── */
@@ -132,18 +132,15 @@ function ProfileView() {
 export default function WelcomeScreen({
   onStart,
   onStartExisting,
-  onStartLeetcode,
   onOpenAdmin,
 }: {
   onStart: (topic: string, difficulty: string, mode: string) => void;
   onStartExisting?: (problemId: number) => void;
-  onStartLeetcode?: (url: string) => void;
   onOpenAdmin?: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('agent');
   const [problems, setProblems] = useState<ProblemBrief[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
-  const [leetcodeUrl, setLeetcodeUrl] = useState('');
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
 
   useEffect(() => {
@@ -171,7 +168,6 @@ export default function WelcomeScreen({
             { id: 'agent' as Tab, label: '🤖 Agent 导师' },
             { id: 'existing' as Tab, label: '从题库选' },
             { id: 'profile' as Tab, label: '📊 我的画像' },
-            { id: 'leetcode' as Tab, label: 'LeetCode 链接' },
             ...(onOpenAdmin ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
           ].map(t => (
             t.id === 'admin' ? (
@@ -216,21 +212,6 @@ export default function WelcomeScreen({
             <button onClick={() => selectedPid && onStartExisting?.(selectedPid)} disabled={!selectedPid}
               className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
               开始练习
-            </button>
-          </section>
-        )}
-
-        {/* ── LeetCode 链接 ── */}
-        {tab === 'leetcode' && (
-          <section>
-            <h2 className="mb-3 text-sm font-semibold text-ct-text">粘贴 LeetCode 题目链接</h2>
-            <input type="text" value={leetcodeUrl} onChange={e => setLeetcodeUrl(e.target.value)}
-              placeholder="https://leetcode.com/problems/two-sum/"
-              className="w-full rounded-lg border border-ct-border bg-ct-input px-4 py-3 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent" />
-            <p className="mt-2 text-xs text-ct-muted">支持 leetcode.com 和 leetcode.cn 的题目链接</p>
-            <button onClick={() => leetcodeUrl.trim() && onStartLeetcode?.(leetcodeUrl.trim())} disabled={!leetcodeUrl.trim()}
-              className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
-              解析并开始
             </button>
           </section>
         )}

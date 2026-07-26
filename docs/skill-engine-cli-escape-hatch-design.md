@@ -1,8 +1,15 @@
 # 设计文档：skill-engine CLI 逃生舱接入
 
-> 分支：`feat/agent-toolcall`
-> 关联文档：`docs/agent-leetcode-toolcall-design.md` §2.3（工具边界）、`docs/system-architecture-and-flow.md`
+> 分支：`master`（CLI 逃生舱功能已并入主干；本文件为**历史设计文档**）
+> 架构定位已被 `docs/skill-engine-adapter-design.md` 取代：CLI 不再是"备选/扩展通道"，
+> 而是**显式 opt-in 的逃生舱**；主通道为进程内 `engine_adapter` import 通道。
+> 关联文档：`docs/skill-engine-adapter-design.md`（主架构）、`docs/system-architecture-and-flow.md`
 > 配套项目：`D:/Code/PycharmProjects/skill-engine`（独立 typer CLI，核心命令 `skill-engine run <skill> -a "<args>" --llm`）
+
+> ⚠️ **历史文档**：本文档写于"subprocess CLI 当备选通道"的旧定位阶段，现已**被适配器设计文档取代**，
+> 仅保留 §2（工具底座约束）、§7（失败降级语义）、§10（测试 mock 套路）作为可参考的落地细节。
+> CLI 逃生舱当前**默认不启用**，仅当用户显式 `mode="cli"` / 调试实验 skill / 复现 CI 时才走
+> （白名单仅 `cta-generate-problem` + `cta-generate-solution`）。
 
 ---
 
@@ -26,7 +33,9 @@ tool-calling 落地后，`src/code_tutor_agent/agents/tools.py` 里已沉淀出�
 | ② | **CLI 逃生舱（本次接）** | `subprocess` spawn `skill-engine run cta-generate-problem -a ... --llm` | 备选 / 扩展通道 |
 | ③ | 静态题库 | `store/static_pool.get_static_problem` | 最后兜底 |
 
-**"逃生舱"含义**：当主通道不可用，或想复用 skill-engine 里维护的那套出题资产（`cta-generate-problem` 及多题型 skill `cta-generate-math` / `cta-generate-sci-comp` / `cta-generate-engineering` / `cta-generate-ai`）时，绕开进程内逻辑，改走独立 CLI 进程执行（进程隔离、可独立迭代）。
+**"逃生舱"含义**：当主通道（进程内 `engine_adapter` import 通道，见 `docs/skill-engine-adapter-design.md`）不可用，或想绕开进程内逻辑、改走独立 CLI 进程执行（`cta-generate-problem` / `cta-generate-solution` 两个白名单内 skill）时使用，带来进程隔离、可独立迭代的好处。
+
+> 注：旧方案曾规划多题型 domain skill（`cta-generate-math` / `cta-generate-sci-comp` / `cta-generate-engineering` / `cta-generate-ai`），但**当前 `master` 分支的 `skills/defs/` 下并不存在这些 def**，白名单与运行期仅含 `cta-generate-problem` + `cta-generate-solution`；`cta-generate-test-cases` 为独立新资产、未接入 CLI 白名单。请勿据此文档假设多题型 skill 已落地。
 
 > **待拍板点（影响 §5 接入方式）**：CLI 通道默认当**降级/备选**还是**主通道**？
 > - 本文档默认按"备选 + 多题型场景由对话 LLM 自主选"设计（更稳）。
@@ -269,6 +278,11 @@ SKILL_TOOLS = [
 ---
 
 ## 6. 改动四：`generator_node` 接降级链（确定性出题路径）
+
+> ⚠️ **本节的 `generator_node` 接线方案未被采纳（历史设计）**：实际主干里的 `nodes/generator.py::generator_node`
+> 走的是**内联降级** `LLM → adapter（engine_adapter.generate_problem）→ static`，**没有 cli 通道、也不调用 `ProblemAgent`**
+> （详见 `docs/system-architecture-and-flow.md` §10 与 `docs/problem-agent-flow.md`）。即 CLI 逃生舱在主干中仅为**显式 opt-in**
+> （用户 `mode="cli"` / 调试 / 复现 CI 时走），并未按本节接进 `generator_node` 的默认降级链。
 
 `nodes/generator.py` 现有结构：
 

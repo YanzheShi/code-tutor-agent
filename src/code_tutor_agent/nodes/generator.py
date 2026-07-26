@@ -403,15 +403,18 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
             continue
 
         # ── Step 3: Run optimal_solution on examples → get expected outputs ──
+        # P0-1/P1: 不信任 LLM 提供的 expected，一律用参考解重新计算并自验证
         all_ok = True
         for tc in sample_tcs:
             input_args = tc.get("input_args", [])
-            expected = tc.get("expected_output", "")
-            if expected and expected not in ("", "..."):
-                continue
-            results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig)
+            results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
             if results:
                 r = results[0]
+                # P0-1: 参考解自验证 — 检查是否崩溃或空输出
+                if r.status in ("Runtime Error", "TLE", "Judge Error"):
+                    logger.warning("Reference solution self-verify failed: %s on %s", r.status, input_args)
+                    all_ok = False
+                    break
                 actual = r.detail or ""
                 if actual:
                     tc["expected_output"] = actual

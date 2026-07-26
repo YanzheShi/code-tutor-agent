@@ -69,6 +69,6 @@ def wait_for_submit_node(state: SessionState) -> dict:
     )
 
     return {
-        "submissions": state.submissions + [new_sub],
+        "submissions": [new_sub],
         "status": "judging",
     }

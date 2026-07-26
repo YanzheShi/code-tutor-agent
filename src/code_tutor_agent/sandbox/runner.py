@@ -93,11 +93,16 @@ def run_solution(
     test_cases: list[dict],
     timeout: float = TIMEOUT_SECONDS,
     function_signature: str | None = None,
+    force_local: bool = False,
 ) -> list[RunnerResult]:
     """Execute a reference solution against a batch of test cases.
 
     Uses Judge0 backend when the ``JUDGE0_URL`` env var is set and the
     service is reachable; falls back to local subprocess otherwise.
+
+    When ``force_local=True``, always uses local subprocess (skips Judge0).
+    This is intended for test-case generation where the code is a trusted
+    reference solution, not user-submitted code.
 
     Args:
         code: Python source (may be markdown-fenced).
@@ -106,17 +111,18 @@ def run_solution(
         function_signature: e.g. ``"head: ListNode, k: int -> ListNode"``.
             用于把数组形式的入参还原成 ListNode/TreeNode 对象、并把结构化
             返回值序列化回数组（LeetCode 约定）。
+        force_local: If True, skip Judge0 and always run locally.
 
     Returns:
         List of ``RunnerResult``, one per test case.
     """
     code = _extract_python_code(code)
     n = len(test_cases) or 1
-    logger.info("▶ run_solution() — %d test cases, timeout=%.1fs", n, timeout)
+    logger.info("▶ run_solution() — %d test cases, timeout=%.1fs, force_local=%s", n, timeout, force_local)
 
-    # ── Try Judge0 backend when JUDGE0_URL is configured ──
+    # ── Try Judge0 backend when JUDGE0_URL is configured (skip if force_local) ──
     judge0_url = os.getenv("JUDGE0_URL")
-    if judge0_url:
+    if judge0_url and not force_local:
         logger.info("  router → Judge0 (%s)", judge0_url)
         try:
             from code_tutor_agent.sandbox.judge0_client import submit_test_cases

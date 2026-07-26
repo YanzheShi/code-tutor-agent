@@ -1,7 +1,7 @@
 # Agent 工具调用能力 + LeetCode 对话出题 · 设计方案
 
-> 状态：Phase 1-2 已实现（待评审 Phase 3）
-> 分支：`feat/agent-toolcall`
+> 状态：Phase 1-2 已实现（Phase 3 为可选/未来，见 §8）；工具调用能力已合入 `master`
+> 分支：`master`（`feat/agent-toolcall` 为原开发分支，特性已并入主干；`agents/tools.py` 等改动均已落地）
 > 目标：让 AI 导师在 agent 对话模式中，能够**自己决定**调用工具（尤其是“从 LeetCode 解析题目”与“现场判题验证”），把当前“只做结构化文本输出”的伪 agent 升级为“LLM 驱动工具调用”的真 agent。
 
 ---

@@ -6,6 +6,14 @@
 降级链顺序：**LLM → adapter → cli → static**
 任一通道成功立即返回对应 `ProblemChannel`，全部失败返回 `(None, STATIC, error)`。
 
+> ⚠️ **与 `generator_node` 的关系（易踩坑）**：`ProblemAgent` 是一个**独立的统合出题 Agent**，
+> 拥有完整四通道降级链；但**图里的 `nodes/generator.py::generator_node` 当前并未调用 `ProblemAgent.generate()`**。
+> `generator_node` 走的是**内联降级**：路径 B 进程内 LLM（`problem_generator.generate_problem`）
+> → 路径 C 进程内 import 通道（`engine_adapter.generate_problem`）
+> → 路径 D 静态池（`get_static_problem`），**不含 cli 通道、也不经过 `ProblemAgent`**。
+> 即"四通道 `ProblemAgent`"与"三档内联 `generator_node`"是两份独立实现，存在已知技术债
+> （详见 `docs/system-architecture-and-flow.md` §10）。
+
 ```mermaid
 flowchart TD
     Start([ProblemAgent.generate\ntopic + difficulty]) --> LLM

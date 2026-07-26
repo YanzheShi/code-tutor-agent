@@ -30,6 +30,7 @@ import logging
 from langgraph.types import Command
 
 from code_tutor_agent.db.database import get_problem_by_id
+from code_tutor_agent.leetcode.leetcode_fetcher import extract_signature_from_solution
 from code_tutor_agent.sandbox.adversarial import (
     AdversarialSuite,
     run_adversarial_suite,
@@ -82,6 +83,21 @@ def judge_node(state: SessionState) -> Command:
     # ════════════════════════════════════════════
     logger.info("Phase 1 — base judging (%d test cases)", len(test_cases))
     _func_sig = getattr(problem_dict, "function_signature", "") or ""
+    # ── 兜底：从 optimal_solution 提取签名覆盖 DB 值 ──
+    #
+    # 背景：LLM 出题时经常把 ListNode.__init__(val=0, next=None) 的参数
+    # 当成 function_signature 输出，导致 DB 中存了 val=0,next=None -> None。
+    # 这个错误签名会让 runner 不知道把数组 [1,2,3] 转成 ListNode 对象，
+    # 用户代码访问 .val / .next 时报错。
+    #
+    # 解法：从 optimal_solution 的 Solution 方法提取签名（有 P0-1 自验证兜底），
+    # 覆盖 DB 中可能错误的值。见 leetcode_fetcher.extract_signature_from_solution。
+    _optimal_code = getattr(problem_dict, "optimal_solution", "") or ""
+    if _optimal_code:
+        _extracted = extract_signature_from_solution(_optimal_code)
+        if _extracted and _extracted != _func_sig:
+            logger.info("Overriding function_signature from optimal_solution: %s", _extracted[:80])
+            _func_sig = _extracted
     base_results = run_solution(
         last_sub.code, test_cases, timeout=BASE_TIMEOUT, function_signature=_func_sig,
     )
@@ -277,7 +293,6 @@ def _route_to_tutor(
     }
 
     update = {
-        "submissions": state.submissions,
         "last_verdict": verdict,
         "adversarial_triggered": adversarial_run,
         "profile_delta": profile_delta,

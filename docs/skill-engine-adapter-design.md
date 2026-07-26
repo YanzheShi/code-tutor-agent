@@ -1,7 +1,7 @@
 # 设计文档：skill-engine 接入（主通道 = 进程内 import）
 
-> 分支：`feat/skill-engine-cli`（本文档为该分支的**目标架构**设计，取代旧文档
-> `docs/skill-engine-cli-escape-hatch-design.md` 中"仅 subprocess 逃生舱"的定位判断）
+> 分支：`master`（原 `feat/skill-engine-cli` 已合入主干；本文档记录的是主干当前的**实际架构**）
+> 本文档取代旧文档 `docs/skill-engine-cli-escape-hatch-design.md` 中"仅 subprocess 逃生舱"的定位判断
 > 配套项目：`D:/Code/PycharmProjects/skill-engine`（独立 typer CLI / 可 import 的 Python 包）
 > 参考：`docs/skill-engine-integration-design.md`（`feat/cli` 分支的设计，本文档 §4/§6/§10 复用其结构）
 

@@ -398,18 +398,18 @@ async def stream_progress(sid: str):
     TERMINAL_ERROR_MARKERS = ("请稍后重试", "请联系老师")
 
     async def event_gen():
-        last_idx = 0
-        # 先推送已存在的进度快照（避免错过创建前已写入的消息）
-        try:
-            initial = list(_generation_progress.get(sid, []))
-            for m in initial:
-                yield f"event: progress\ndata: {json.dumps({'message': m}, ensure_ascii=False)}\n\n"
-            last_idx = len(initial)
-        except Exception:
-            pass
+        # 初始时记录已有消息数量，不推送初始快照，只靠轮询收新消息。
+        # 初始出题时 _generation_progress 为空，last_idx=0 正常收新消息；
+        # 继续出题时 _generation_progress 有旧消息，last_idx 跳过旧消息。
+        # 如果进度被重置（如 /next-problem 清空后写入更短的列表），
+        # len(msgs) < last_idx 会触发 last_idx=0 重新开始收。
+        last_idx = len(_generation_progress.get(sid, []))
 
         while True:
             msgs = list(_generation_progress.get(sid, []))
+            # 检测进度被重置（/next-problem 清空后写入更短列表）
+            if len(msgs) < last_idx:
+                last_idx = 0
             if len(msgs) > last_idx:
                 for m in msgs[last_idx:]:
                     yield f"event: progress\ndata: {json.dumps({'message': m}, ensure_ascii=False)}\n\n"
@@ -429,6 +429,8 @@ async def stream_progress(sid: str):
             problem = (state or {}).get("problem")
             tutor_msgs = (state or {}).get("tutor_messages") or (state or {}).get("agent_dialog_history")
             if problem and status != "dialog":
+                # 微小延迟，让 React 先处理完 progress 事件的 re-render，再收 done
+                await asyncio.sleep(0.05)
                 yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
                 return
             # Agent 模式：对话阶段（status=dialog 且已有对话内容）即视为“就绪”，
@@ -446,6 +448,7 @@ async def stream_progress(sid: str):
 
             if loop.time() > deadline:
                 if problem:
+                    await asyncio.sleep(0.05)
                     yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
                 else:
                     yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"

@@ -18,6 +18,7 @@ from langgraph.types import Command
 
 from code_tutor_agent.agents.agent_judge import analyze_judge_results, _deterministic_verdict
 from code_tutor_agent.db.database import get_problem_by_id
+from code_tutor_agent.leetcode.leetcode_fetcher import extract_signature_from_solution
 from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.schemas.state import JudgeResult, SessionState
 
@@ -91,6 +92,13 @@ def agent_judge_node(state: SessionState) -> Command:
 
     # ── Run test cases via Judge0 (or local fallback) ──
     _func_sig = getattr(problem_dict, "function_signature", "") or ""
+    # 兜底：从 optimal_solution 提取签名覆盖 DB 值（同 judge.py 和 run.py）
+    _optimal_code = getattr(problem_dict, "optimal_solution", "") or ""
+    if _optimal_code:
+        _extracted = extract_signature_from_solution(_optimal_code)
+        if _extracted and _extracted != _func_sig:
+            logger.info("Overriding function_signature from optimal_solution: %s", _extracted[:80])
+            _func_sig = _extracted
     raw_results = run_solution(code, test_cases, timeout=AGENT_JUDGE_TIMEOUT, function_signature=_func_sig)
     logger.info("Judge0 returned %d results", len(raw_results))
 

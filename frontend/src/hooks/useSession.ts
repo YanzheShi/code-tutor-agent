@@ -121,20 +121,6 @@ export function useSession() {
     } catch (e) { setScreen('error'); setErrorMsg(String(e)); }
   }, []);
 
-  const handleStartLeetcode = useCallback(async (url: string) => {
-    setScreen('loading'); setProgressMsgs(['正在解析 LeetCode 题目...']);
-    setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
-    editorInitialized.current = false;
-    try {
-      const r1 = await fetch(BASE + '/leetcode/parse', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url }) });
-      if (!r1.ok) throw new Error('解析失败 (' + r1.status + ')');
-      const parsed = await r1.json();
-      const r2 = await fetch(BASE + '/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: parsed.title || 'leetcode', difficulty: parsed.difficulty || 'medium', mode: 'practice', leetcode: parsed }) });
-      if (!r2.ok) throw new Error('创建会话失败 (' + r2.status + ')');
-      const resp = await r2.json(); setSessionId(resp.session_id); startProgress(resp.session_id);
-    } catch (e) { setScreen('error'); setErrorMsg(e instanceof Error ? e.message : String(e)); }
-  }, [startProgress]);
-
   // ── 提交 ──
   const handleSubmit = useCallback(async () => {
     if (!sessionId || submittingFlag) return;
@@ -142,7 +128,7 @@ export function useSession() {
     setSubmittingFlag(true); setRunResults(null);
     try {
       const resp = await submitCode(sid, code);
-      if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code.slice(0, 200) }, { role: 'tutor' as const, content: resp.tutor_message ?? '' }]);
+      if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code }, { role: 'tutor' as const, content: resp.tutor_message ?? '' }]);
       setHintLevel(resp.hint_level); setLatestVerdict(resp.verdict);
       const full = await getState(sid);
       setSubmissions((full.submissions || []) as Submission[]);
@@ -325,7 +311,7 @@ export function useSession() {
     setEditorCode, setActiveTabs, setTabPanel, setSplitRatio, setChatInput,
     setTutorMessages, setRunResults, setProgressMsgs,
     onStart: handleStart, onStartExisting: handleStartExisting,
-    onStartLeetcode: handleStartLeetcode, onSubmit: handleSubmit,
+    onSubmit: handleSubmit,
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
     onBackToWelcome: handleBackToWelcome,
     onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,
