@@ -247,7 +247,7 @@ def verify_problem(problem_dict: dict) -> bool:
 def generate_problem(
     topic: str,
     difficulty: str,
-    model_alias: str = "agnes",
+    purpose: str = "problem",
     max_retries: int = 1,
 ) -> Problem:
     """（主通道）调用 LLM 结构化生成一道题，返回 ``Problem`` 对象。
@@ -265,7 +265,7 @@ def generate_problem(
     # （避免 Bug7 截断）；原 4096 对非平凡题过小，会触发「length limit reached」→ 降级到
     # 慢速 skill-engine 通道（实测单次 60s+），导致题目迟迟不显示。
     # temperature 调至 0.7 增加多样性，减少 AC 题目重复出题
-    llm = get_llm(model_alias, temperature=0.7, max_tokens=8192)
+    llm = get_llm(purpose=purpose)
     structured_llm = llm.with_structured_output(Problem)
 
     prompt = ChatPromptTemplate.from_messages([

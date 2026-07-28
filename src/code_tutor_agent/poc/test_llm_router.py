@@ -124,7 +124,7 @@ def main():
     # 2. 获取真实 LLM
     print("\n[Step 2] 初始化真实 LLM...")
     try:
-        llm = get_llm("agnes", temperature=0.3)
+        llm = get_llm(purpose="generator")
         # 发一条简单的测试消息验证连通性
         test_resp = llm.invoke([("human", "回复 OK 表示连通")])
         test_text = test_resp.content if hasattr(test_resp, "content") else str(test_resp)

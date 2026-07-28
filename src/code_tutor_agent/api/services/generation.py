@@ -70,7 +70,7 @@ async def _generate_optimal_for_leetcode_async(problem_id: int, sid: str):
     )
 
     try:
-        llm = get_llm("agnes", temperature=0.3)
+        llm = get_llm(purpose="api-generation")
         resp = llm.invoke([("human", prompt)])
         code = resp.content if hasattr(resp, "content") else str(resp)
         code = _extract_code_from_llm_response(code)
@@ -356,7 +356,7 @@ def _generate_complex_tests(problem_id: int, sid: str):
             count=8,
         )
 
-        llm = get_llm("agnes", temperature=0.5)
+        llm = get_llm(purpose="api-generation-high")
         resp = llm.invoke([
             ("system", GENERATE_BOUNDARY_SYSTEM),
             ("human", prompt_user),

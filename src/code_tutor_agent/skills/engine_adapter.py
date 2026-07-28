@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from code_tutor_agent.config import (
     get_llm,
-    get_skill_engine_llm_alias,
+    get_skill_engine_purpose,
     get_skill_engine_skills_root,
 )
 from code_tutor_agent.skills.parser import parse_problem_markdown
@@ -56,7 +56,7 @@ DEFAULT_DETAILED_SOLUTION_SKILL = "cta-generate-solution"
 def _bootstrap(
     skill_name: str,
     arguments: dict | None,
-    llm_alias: str | None,
+    purpose: str | None,
 ) -> str:
     """确定性 bootstrap：discover → Registry → MatchResult → Runner.run(llm=)。
 
@@ -82,11 +82,11 @@ def _bootstrap(
     if skill is None:
         raise SkillConfigError(f"skill 加载失败: {skill_name}")
 
-    alias = llm_alias or get_skill_engine_llm_alias()
+    p = purpose or get_skill_engine_purpose()
     try:
-        llm = get_llm(alias, temperature=0.7)          # 本系统 LLM 单一真源
-    except Exception as exc:  # 缺 key / 别名错 → 配置类错误
-        raise SkillConfigError(f"LLM 初始化失败（alias={alias}）: {exc}") from exc
+        llm = get_llm(purpose=p)          # 本系统 LLM 单一真源
+    except Exception as exc:  # 缺 key / 用途错 → 配置类错误
+        raise SkillConfigError(f"LLM 初始化失败（purpose={p}）: {exc}") from exc
 
     mr = MatchResult(
         skill=skill,
@@ -112,7 +112,7 @@ def run_skill(
     skill_name: str,
     *,
     arguments: dict[str, str] | None = None,
-    llm_alias: str | None = None,
+    purpose: str | None = None,
 ) -> SkillResult:
     """通用 skill 运行入口（import 通道，确定性）。
 
@@ -122,7 +122,7 @@ def run_skill(
     started = time.perf_counter()
     arg_keys = sorted((arguments or {}).keys())
     try:
-        output = _bootstrap(skill_name, arguments, llm_alias)
+        output = _bootstrap(skill_name, arguments, purpose)
     except SkillError as exc:
         logger.warning(
             "run_skill 失败 skill=%s keys=%s err=%s", skill_name, arg_keys, exc
@@ -152,7 +152,7 @@ def generate_problem(
     difficulty: str,
     *,
     skill_name: str = DEFAULT_PROBLEM_SKILL,
-    llm_alias: str | None = None,
+    purpose: str | None = None,
     max_retries: int = 1,
 ) -> dict:
     """出题：跑 skill → 共享 parser 解析 → 返回扁平 problem dict。
@@ -171,7 +171,7 @@ def generate_problem(
         res = run_skill(
             skill_name,
             arguments={"topic": topic, "difficulty": difficulty},
-            llm_alias=llm_alias,
+            purpose=purpose,
         )
         if not res.ok:
             last_err = res.error
@@ -199,7 +199,7 @@ def generate_detailed_solution(
     problem_description: str,
     *,
     skill_name: str = DEFAULT_DETAILED_SOLUTION_SKILL,
-    llm_alias: str | None = None,
+    purpose: str | None = None,
 ) -> str:
     """详细题解：给定整题 description，返回 markdown 文本（不解析进结构）。
 
@@ -209,7 +209,7 @@ def generate_detailed_solution(
     res = run_skill(
         skill_name,
         arguments={"$ARGUMENTS": problem_description},
-        llm_alias=llm_alias,
+        purpose=purpose,
     )
     if not res.ok:
         raise SkillExecutionError(f"生成详细题解失败: {res.error}")

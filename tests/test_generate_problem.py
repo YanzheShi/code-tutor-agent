@@ -44,12 +44,12 @@ def validate_problem_quality(problem: Problem) -> list[str]:
 
 
 if __name__ == "__main__":
-    # 👈 在这里选择你要测试的模型名！
-    MODEL_ALIAS = "agnes"
+    # 👈 在这里选择你要测试的用途！
+    PURPOSE = "problem"
 
     # 拿到模型实例
-    llm = get_llm(MODEL_ALIAS, temperature=0.7)
-    print(f"当前测试模型: {MODEL_ALIAS}")
+    llm = get_llm(purpose=PURPOSE)
+    print(f"当前测试用途: {PURPOSE}")
 
     print("=" * 60)
     print("  可行性验证 1：大模型结构化输出稳定性测试")

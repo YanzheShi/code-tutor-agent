@@ -175,7 +175,7 @@ def _measure_phase2(problem: Problem, difficulty: str) -> float:
             existing_cases="",
             count=8,
         )
-        llm = get_llm("sensenova", temperature=0.5)
+        llm = get_llm(purpose="benchmark")
         llm.invoke([
             ("system", GENERATE_BOUNDARY_SYSTEM),
             ("human", prompt_user),

@@ -94,8 +94,8 @@ class ContextConfig:
     response_reserve: int = 16_000
     # 单条摘要的最大 token 数（防止摘要自身过长）
     summary_max_tokens: int = 800
-    # 用于生成摘要的模型别名
-    summary_model: str = "agnes"
+    # 用于生成摘要的模型用途（模型选择由 config.PURPOSE_CONFIGS 决定）
+    summary_purpose: str = "context-summary"
     # 触发摘要的阈值比例：当总 token 超过 available_budget × ratio 时压缩旧消息
     summary_trigger_ratio: float = 0.5
     # 强制触发滑动窗口的轮数上限（即使 token 未超预算，超过此轮数也裁剪）
@@ -364,7 +364,7 @@ def _messages_to_transcript(messages: list[Message]) -> str:
 def generate_summary(
     messages: list[Message],
     problem_record: ProblemAttemptRecord | None = None,
-    model_alias: str | None = None,
+    purpose: str | None = None,
     config: ContextConfig | None = None,
 ) -> str:
     """使用 LLM 生成对话摘要（同步调用）。
@@ -372,14 +372,14 @@ def generate_summary(
     Args:
         messages: 需要压缩的对话消息。
         problem_record: 关联的题目记录，用于在摘要中标注题目信息。
-        model_alias: LLM 模型别名，默认使用 config.summary_model。
+        purpose: LLM 模型用途，默认使用 config.summary_purpose。
         config: 上下文配置。
 
     Returns:
         摘要文本。如果 LLM 调用失败，降级为基于规则的简单摘要。
     """
     cfg = config or DEFAULT_CONFIG
-    model = model_alias or cfg.summary_model
+    llm_purpose = purpose or cfg.summary_purpose
 
     transcript = _messages_to_transcript(messages)
 
@@ -401,7 +401,7 @@ def generate_summary(
     try:
         from code_tutor_agent.config import get_llm
 
-        llm = get_llm(model, temperature=0.3, max_tokens=cfg.summary_max_tokens)
+        llm = get_llm(purpose=llm_purpose, max_tokens=cfg.summary_max_tokens)
         resp = llm.invoke([
             ("system", _SUMMARY_SYSTEM_PROMPT),
             ("human", user_text),
@@ -420,7 +420,7 @@ def generate_summary(
 async def generate_summary_async(
     messages: list[Message],
     problem_record: ProblemAttemptRecord | None = None,
-    model_alias: str | None = None,
+    purpose: str | None = None,
     config: ContextConfig | None = None,
 ) -> str:
     """使用 LLM 异步生成对话摘要。
@@ -428,7 +428,7 @@ async def generate_summary_async(
     Args 同 :func:`generate_summary`。
     """
     cfg = config or DEFAULT_CONFIG
-    model = model_alias or cfg.summary_model
+    llm_purpose = purpose or cfg.summary_purpose
 
     transcript = _messages_to_transcript(messages)
 
@@ -448,7 +448,7 @@ async def generate_summary_async(
     try:
         from code_tutor_agent.config import get_llm
 
-        llm = get_llm(model, temperature=0.3, max_tokens=cfg.summary_max_tokens)
+        llm = get_llm(purpose=llm_purpose, max_tokens=cfg.summary_max_tokens)
         resp = await llm.ainvoke([
             ("system", _SUMMARY_SYSTEM_PROMPT),
             ("human", user_text),

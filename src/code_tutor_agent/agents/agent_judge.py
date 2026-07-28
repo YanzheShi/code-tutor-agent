@@ -191,7 +191,7 @@ def analyze_judge_results(
     topic: str,
     description: str,
     results: list[RunnerResult],
-    model_alias: str = "agnes",
+    purpose: str = "judge",
     forced_verdict: str | None = None,
 ) -> JudgeAnalysis:
     """Ask the LLM to analyze raw judge results and produce warm feedback.
@@ -203,7 +203,7 @@ def analyze_judge_results(
         topic: Problem knowledge point.
         description: Problem description text.
         results: Raw RunnerResult list from run_solution().
-        model_alias: LLM model alias.
+        purpose: LLM model purpose.
         forced_verdict: 权威 verdict（来自执行引擎客观结果）。若提供，则最终
             返回的 ``verdict`` 与 ``should_retry`` 一律以它为准，LLM 只负责
             生成反馈文案，不得自行改判或臆造失败输出。
@@ -237,7 +237,7 @@ def analyze_judge_results(
     )
 
     try:
-        llm = get_llm(model_alias, temperature=0.7)
+        llm = get_llm(purpose=purpose, temperature=0.7)
         structured_llm = llm.with_structured_output(JudgeAnalysis)
 
         analysis: JudgeAnalysis = structured_llm.invoke([

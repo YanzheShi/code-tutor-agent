@@ -433,7 +433,7 @@ def generate_scale_adversarial(
         logger.info("Scale adversarial: single-arg problem, skipping")
         return None
 
-    llm = get_llm("agnes", temperature=0.3)
+    llm = get_llm(purpose="adversarial-eval")
 
     constraints_text = "\n".join(problem_dict.constraints)
     response = _SCALE_ADV_PROMPT | llm
@@ -536,7 +536,7 @@ def generate_review(problem_dict, user_code: str) -> dict | None:
         — 评审结果影响下一题的难度（如果代码风格差，规划 Agent 可能会在同考点出加强题）。
     """
     logger.info("▶ generate_review()")
-    llm = get_llm("agnes", temperature=0.2)
+    llm = get_llm(purpose="adversarial-eval-low")
     try:
         result = _REVIEW_PROMPT | llm
         response = result.invoke({

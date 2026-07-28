@@ -67,7 +67,7 @@ def chat_node(state: SessionState, writer: StreamWriter) -> dict:
     user_text = last.content if hasattr(last, "content") else (last.get("content", "") if isinstance(last, dict) else "")
 
     # ── Build LLM prompt from message history ──
-    llm = get_llm("agnes-stream", temperature=0.7)
+    llm = get_llm(purpose="chat")
 
     # Format history for prompt, inject context_summary if available
     history_lines = []

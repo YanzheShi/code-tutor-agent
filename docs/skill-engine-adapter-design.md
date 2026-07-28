@@ -207,7 +207,7 @@ def run_skill(
     skill_name: str,
     *,
     arguments: dict[str, str] | None = None,   # 注入 skill 模板的键值
-    llm_alias: str | None = None,              # 默认取 get_skill_engine_llm_alias()
+    llm_alias: str | None = None,              # 默认取 get_skill_engine_purpose()
 ) -> SkillResult:
     """通用 skill 运行入口（import 通道，确定性）；成功返回 ok=True 与 markdown，
     任何错误归一为 ok=False（error 字段），不向外抛。"""
@@ -254,8 +254,8 @@ def _bootstrap(skill_name: str, arguments: dict, llm_alias: str | None) -> str:
     if not skill:
         raise SkillConfigError(f"skill 加载失败: {skill_name}")
 
-    alias = llm_alias or get_skill_engine_llm_alias()
-    llm = get_llm(alias, temperature=0.7)                  # 本系统 LLM 单一真源
+    purpose = llm_alias or get_skill_engine_purpose()
+    llm = get_llm(purpose=purpose)                  # 本系统 LLM 单一真源
 
     mr = MatchResult(
         skill=skill, score=1.0, method="exact",
@@ -328,7 +328,7 @@ adapter 解析规则（调用 `skills/parser.py::parse_problem_markdown`，确�
 `generate_detailed_solution` 直接返回 `output` 文本（与旧 `generate_detailed_solution_via_skill_sync` 行为一致）。
 
 ### 6.5 LLM 注入与单一真源
-- adapter 通道统一 `get_llm(get_skill_engine_llm_alias())`，确保 import / CLI / CI 三通道解析到
+- adapter 通道统一 `get_llm(purpose=get_skill_engine_purpose())`，确保 import / CLI / CI 三通道解析到
   同一 model/base_url/key，杜绝"CLI 读另一套 env"的分裂。
 - CLI 逃生舱若带 `--llm`，沿用 skill-engine 自身 LLM 配置（AGNES_*），作为调试/兜底通道可接受。
 
@@ -373,9 +373,9 @@ adapter 解析规则（调用 `skills/parser.py::parse_problem_markdown`，确�
 ```python
 from pathlib import Path as _Path
 
-def get_skill_engine_llm_alias() -> str:
-    """adapter 通道使用的 LLM 别名（单一真源），默认 'agnes'。"""
-    return os.getenv("SKILL_ENGINE_LLM_ALIAS", "agnes")
+def get_skill_engine_purpose() -> str:
+    """adapter 通道使用的 LLM 用途（单一真源），默认 'skill-engine'。"""
+    return os.getenv("SKILL_ENGINE_PURPOSE", "skill-engine")
 
 def get_skill_engine_skills_root() -> str:
     """本系统内置 skill 目录（随仓发布）；adapter 与 cli_runner 共用。
@@ -490,7 +490,7 @@ else:
   - 实现 `skills/result.py`（`SkillResult` 双通道共用结构）+ `skills/engine_adapter.py`（`_bootstrap` / `run_skill` / `generate_problem` / `generate_detailed_solution` / 错误类型；`SkillResult` 从 `result.py` re-export 保持兼容）。
   - **抽 `skills/parser.py` 共享解析模块**：从 `skill_cli.parse_problem_markdown` 迁出
     （`parse_problem_markdown` / `_strip_fences` / `_parse_examples_to_test_cases`），adapter 与 cli 共用（DP-5）。
-  - `config.py` 新增 `get_skill_engine_llm_alias` / `get_skill_engine_skills_root`；**白名单按 DP-4 精简为两个**。
+  - `config.py` 新增 `get_skill_engine_purpose` / `get_skill_engine_skills_root`；**白名单按 DP-4 精简为两个**。
   - adapter 单测（mock `Runner.run`）+ 契约测试初版（验证 `parser.py` 行为）。
 - **Phase 2 — 工具路由**
   - `tools.py`：`generate_problem_via_skill` / `generate_detailed_solution_via_skill` 增加 `mode` 参数，默认 `adapter`。

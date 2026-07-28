@@ -84,7 +84,7 @@ class _FakeLLM:
         return _StructuredOutput(self._ret)
 
 
-def _boom(topic, difficulty, model_alias="agnes", max_retries=1):
+def _boom(topic, difficulty, purpose="problem", max_retries=1):
     raise RuntimeError("boom")
 
 
@@ -142,7 +142,7 @@ def test_generate_problem_llm_success(monkeypatch):
     assert out.title == "Two Sum"
 
 
-def test_generate_problem_passes_max_tokens_cap(monkeypatch):
+def test_generate_problem_passes_correct_purpose(monkeypatch):
     captured: dict = {}
 
     def _get_llm(*_a, **kw):
@@ -154,7 +154,7 @@ def test_generate_problem_passes_max_tokens_cap(monkeypatch):
     monkeypatch.setattr(agent_problem, "get_llm", _get_llm)
     with pytest.raises(RuntimeError):
         generate_problem("数组", "easy", max_retries=0)
-    assert captured.get("max_tokens") == 8192
+    assert captured.get("purpose") == "problem"
 
 
 def test_generate_problem_all_llm_failures_raises_runtimeerror(monkeypatch):

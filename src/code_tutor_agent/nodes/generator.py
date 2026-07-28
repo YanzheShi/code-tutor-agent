@@ -51,7 +51,7 @@ from code_tutor_agent.store.static_pool import get_static_problem
 logger = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 1
-MODEL_ALIAS = "agnes"
+# MODEL_ALIAS constant removed — model selection now via config.PURPOSE_CONFIGS
 
 # ── Topic → Tag enum 映射 ──
 _TOPIC_TAG_MAP: dict[str, str] = {
@@ -192,7 +192,7 @@ def _generate_optimal_for_leetcode_sync(
     )
 
     try:
-        llm = get_llm("agnes", temperature=0.3)
+        llm = get_llm(purpose="generator")
         resp = llm.invoke(
             [("human", prompt)],
             config={"metadata": {"node": "generator", "step": "generate_problem"}},

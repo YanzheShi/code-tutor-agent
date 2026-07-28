@@ -1,9 +1,12 @@
-"""LLM configuration: model alias -> provider, temperature, base URL.
+"""LLM configuration: purpose → model registry.
 
 Reads from .env:
-- AGNES_API_KEY, AGNES_BASE_URL
-- LLM_MODEL_AGNES, LLM_MODEL_AGNES_STREAM
-- OPENAI_API_KEY etc.
+- SENSENOVA_API_KEY, SENSENOVA_BASE_URL
+- SENSENOVA_MODEL, SENSENOVA_MODEL1
+- etc.
+
+业务代码只通过 get_llm(purpose="xxx") 获取模型实例，不关心具体用哪个模型。
+模型选择由下方的 PURPOSE_CONFIGS 统一控制，改模型只需改这一个文件。
 """
 
 import os
@@ -13,75 +16,103 @@ from langchain.chat_models import init_chat_model
 # 在模块加载时加载 .env，使 LLM_CONFIGS 能读取环境变量
 load_dotenv()
 
-# 模型别名 -> 具体配置的映射表
-# 你可以在这里随时增加或修改你的模型
+# ── 模型注册表（alias → provider 配置） ──
+# 这里只定义"有哪些模型可用"，不决定业务用哪个。
+# PURPOSE_CONFIGS 引用这里的 alias。
 LLM_CONFIGS = {
-    "sensenova": {
-        "model": os.getenv("SENSENOVA_MODEL1"),
-        "model_provider": "openai",
-        "base_url": os.getenv("SENSENOVA_BASE_URL"),
-        "api_key": os.getenv("SENSENOVA_API_KEY"),
-    },
     "sensenova-deepseek": {
         "model": os.getenv("SENSENOVA_MODEL"),
         "model_provider": "openai",
         "base_url": os.getenv("SENSENOVA_BASE_URL"),
         "api_key": os.getenv("SENSENOVA_API_KEY"),
     },
-    "gpt-4o": {
-        "model": "gpt-4o-mini",
+    "sensenova": {
+        "model": os.getenv("SENSENOVA_MODEL1"),
         "model_provider": "openai",
-        "api_key": os.getenv("OPENAI_API_KEY"),
+        "base_url": os.getenv("SENSENOVA_BASE_URL"),
+        "api_key": os.getenv("SENSENOVA_API_KEY"),
     },
-    "deepseek": {
-        # 假设你装了 langchain-deepseek
-        "model": "deepseek-coder",
-        "model_provider": "deepseek",
-        "api_key": os.getenv("DEEPSEEK_API_KEY"),
-    },
-    "qwen": {
-        # 通义千问兼容 openai 接口
-        "model": "qwen-plus",
-        "model_provider": "openai",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "api_key": os.getenv("DASHSCOPE_API_KEY"),
-    },
-    "agnes": {
-        "model": os.getenv("AGNES_MODEL"),
-        "model_provider": "openai",
-        "base_url": os.getenv("AGNES_BASE_URL"),
-        "api_key": os.getenv("AGNES_API_KEY"),
-    },
-    "agnes-stream": {
-        "model": os.getenv("AGNES_MODEL"),
-        "model_provider": "openai",
-        "base_url": os.getenv("AGNES_BASE_URL"),
-        "api_key": os.getenv("AGNES_API_KEY"),
-        "streaming": True
-    }
+}
+
+# ── 业务用途 → 模型配置映射 ──
+# 业务代码只表达"用途"，不感知具体模型。
+# 改模型只需改这里，业务代码一行不动。
+PURPOSE_CONFIGS = {
+    # === 节点 ===
+    "chat":                 {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
+    "tutor-eval":           {"alias": "sensenova-deepseek", "temperature": 0.1},
+    "tutor-generate":       {"alias": "sensenova-deepseek", "temperature": 0.4},
+    "tutor-router":         {"alias": "sensenova-deepseek", "temperature": 0.2},
+    "generator":            {"alias": "sensenova-deepseek", "temperature": 0.3},
+
+    # === Agent 模块 ===
+    "dialog":               {"alias": "sensenova-deepseek", "temperature": 0.3, "max_tokens": 512},
+    "dialog-stream":        {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
+    "judge":                {"alias": "sensenova-deepseek", "temperature": 0.7},
+    "problem":              {"alias": "sensenova-deepseek", "temperature": 0.7, "max_tokens": 8192},
+
+    # === 上下文管理 ===
+    "context-summary":      {"alias": "sensenova-deepseek", "temperature": 0.3},
+
+    # === API 路由 ===
+    "api-generation":       {"alias": "sensenova-deepseek", "temperature": 0.3},
+    "api-generation-high":  {"alias": "sensenova-deepseek", "temperature": 0.5},
+    "api-chat":             {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
+    "api-chat-query":       {"alias": "sensenova-deepseek", "temperature": 0.7},
+
+    # === 沙箱 ===
+    "adversarial-eval":     {"alias": "sensenova-deepseek", "temperature": 0.3},
+    "adversarial-eval-low": {"alias": "sensenova-deepseek", "temperature": 0.2},
+
+    # === Skill 引擎 ===
+    "skill-engine":         {"alias": "sensenova-deepseek", "temperature": 0.7},
+
+    # === 基准测试 ===
+    "benchmark":            {"alias": "sensenova", "temperature": 0.5},
 }
 
 
-def get_llm(alias: str = "sensenova", **kwargs):
-    """
-    根据别名获取大模型实例
+def get_llm(purpose: str, **kwargs):
+    """根据业务用途获取大模型实例。
 
-    参数:
-        alias: 模型别名，如 "sensenova", "gpt-4o"
-        **kwargs: 额外的模型参数，如 temperature=0.7, streaming=True
+    业务代码只表达"用途"（如 ``purpose="tutor-eval"``），
+    具体用哪个模型由 ``PURPOSE_CONFIGS`` 统一控制。
+
+    Args:
+        purpose: 业务用途，对应 PURPOSE_CONFIGS 中的 key。
+        **kwargs: 额外的模型参数，会覆盖用途配置中的默认值。
+
+    Returns:
+        LangChain chat model 实例。
+
+    Raises:
+        ValueError: 用途名不存在，或模型配置不完整。
     """
+    if purpose not in PURPOSE_CONFIGS:
+        raise ValueError(
+            f"未知的用途: '{purpose}'，可选: {list(PURPOSE_CONFIGS.keys())}"
+        )
+
+    purpose_cfg = PURPOSE_CONFIGS[purpose].copy()
+    alias = purpose_cfg.pop("alias")
+
     if alias not in LLM_CONFIGS:
-        raise ValueError(f"未找到模型别名: '{alias}'，可选: {list(LLM_CONFIGS.keys())}")
+        raise ValueError(
+            f"用途 '{purpose}' 引用了未知的模型别名: '{alias}'，"
+            f"可选: {list(LLM_CONFIGS.keys())}"
+        )
 
-    # 复制配置，避免修改原字典
+    # 合并：模型注册表配置 + 用途默认参数 + 调用方覆盖参数
     config = LLM_CONFIGS[alias].copy()
-
-    # 允许覆盖参数（如 temperature, streaming 等）
-    config.update(kwargs)
+    config.update(purpose_cfg)   # 用途默认参数（temperature, streaming 等）
+    config.update(kwargs)        # 调用方显式覆盖
 
     # 确保必填项不为空
     if not config.get("model") or not config.get("api_key"):
-        raise ValueError(f"模型 '{alias}' 的配置不完整，请检查 .env 文件中的环境变量")
+        raise ValueError(
+            f"模型 '{alias}'（用途 '{purpose}'）的配置不完整，"
+            f"请检查 .env 文件中的环境变量"
+        )
 
     return init_chat_model(**config)
 
@@ -136,13 +167,13 @@ def get_skill_engine_cli_timeout() -> int:
 
 
 # ── skill-engine import 主通道（engine_adapter）──
-def get_skill_engine_llm_alias() -> str:
-    """adapter 通道使用的 LLM 别名（单一真源），默认 'agnes'。
+def get_skill_engine_purpose() -> str:
+    """adapter 通道使用的 LLM 用途（单一真源），默认 'skill-engine'。
 
-    三通道（adapter import / cli_runner --llm / CI --llm）都解析到同一别名，
+    三通道（adapter import / cli_runner --purpose / CI --purpose）都解析到同一用途，
     杜绝 "CLI 读另一套 env" 的分裂。
     """
-    return os.getenv("SKILL_ENGINE_LLM_ALIAS", "agnes")
+    return os.getenv("SKILL_ENGINE_PURPOSE", "skill-engine")
 
 
 def get_skill_engine_skills_root() -> str:

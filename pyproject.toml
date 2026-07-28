@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-skill-engine = { path = "../skill-engine" }
+skill-engine = { path = "D:/Code/PycharmProjects/skill-engine", editable = true }
 
 [project.optional-dependencies]
 dev = [

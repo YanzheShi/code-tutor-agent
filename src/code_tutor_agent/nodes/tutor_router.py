@@ -128,7 +128,7 @@ def _llm_router(inp: TutorRouterInput) -> TutorRouterDecision | None:
     from langchain_core.prompts import ChatPromptTemplate
 
     try:
-        llm = get_llm("agnes", temperature=0.2)
+        llm = get_llm(purpose="tutor-router")
         prompt = ChatPromptTemplate.from_messages([("human", _ROUTER_LLM_PROMPT)])
         result = (prompt | llm).invoke({
             "hint_level": inp.hint_level,

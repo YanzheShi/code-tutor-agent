@@ -38,7 +38,7 @@ class Skill:
         self.prompt_template = prompt_template
         self.schema = schema or {}
         self.examples = examples
-        self.model = metadata.get("model", "agnes")
+        self.model = metadata.get("model", "sensenova-deepseek")
         self.temperature = metadata.get("temperature", 0.7)
 
     def render_prompt(self, **kwargs) -> str:

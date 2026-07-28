@@ -3,7 +3,7 @@ name: generate-array
 description: 生成数组/哈希表/双指针类编程题，适合 easy~medium 难度
 version: 1.0.0
 author: poc
-model: agnes
+model: sensenova-deepseek
 temperature: 0.7
 
 output_schema:

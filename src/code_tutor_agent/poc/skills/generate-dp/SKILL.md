@@ -3,7 +3,7 @@ name: generate-dp
 description: 生成动态规划类编程题，适合 medium 难度
 version: 1.0.0
 author: poc
-model: agnes
+model: sensenova-deepseek
 temperature: 0.7
 
 output_schema:

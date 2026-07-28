@@ -282,7 +282,7 @@ def _run_direction_analysis(state: SessionState) -> str:
     prev = state.submissions[-2]
     curr = state.submissions[-1]
 
-    llm = get_llm("agnes", temperature=0.1)
+    llm = get_llm(purpose="tutor-eval")
     prompt = ChatPromptTemplate.from_messages([
         ("system", DIRECTION_ANALYSIS_SYSTEM),
         ("human", DIRECTION_ANALYSIS_USER),
@@ -330,7 +330,7 @@ def _generate_hint(
     problem = state.problem
     last_sub = state.submissions[-1] if state.submissions else None
 
-    llm = get_llm("agnes", temperature=0.4)
+    llm = get_llm(purpose="tutor-generate")
     prompt = ChatPromptTemplate.from_messages([
         ("system", TUTOR_SYSTEM_PROMPT),
     ])

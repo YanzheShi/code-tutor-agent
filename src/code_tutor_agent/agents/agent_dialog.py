@@ -271,7 +271,7 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
 
     # 先用 LLM 非结构化请求提取意图
     try:
-        llm = get_llm("agnes", temperature=0.3, max_tokens=512)
+        llm = get_llm(purpose="dialog")
         prompt = (
             "你是 AI 编程导师。根据以下对话，提取用户的选题意图。\n\n"
             f"## 对话历史\n{transcript}\n\n"
@@ -370,7 +370,7 @@ def _extract_leetcode_url(history: list[Message]) -> str | None:
 
 async def analyze_user_intent(
     history: list[Message],
-    model_alias: str = "agnes",
+    purpose: str = "dialog",
     context_summary: str | None = None,
 ) -> DialogIntent:
     """Structured analysis with an optional tool-calling loop.
@@ -385,7 +385,7 @@ async def analyze_user_intent(
 
     Args:
         history: Conversation history.
-        model_alias: LLM alias.
+        purpose: 模型用途（由 config.PURPOSE_CONFIGS 决定具体模型）。
         context_summary: 压缩后的旧消息摘要（来自 SessionState.context_summary）。
 
     Returns:
@@ -429,7 +429,7 @@ async def analyze_user_intent(
     )
 
     try:
-        llm = get_llm(model_alias, temperature=0.7)
+        llm = get_llm(purpose=purpose, temperature=0.7)
     except Exception as exc:
         # get_llm 失败（配置/网络）→ 直接走兜底，避免工具循环也崩
         logger.warning("get_llm failed, using fallback: %s", exc)
@@ -542,7 +542,7 @@ async def analyze_user_intent(
 
 async def stream_dialog_response(
     history: list[Message],
-    model_alias: str = "agnes-stream",
+    purpose: str = "dialog-stream",
     context_summary: str | None = None,
 ) -> AsyncGenerator[str, None]:
     """Stream the AI's dialog response to the user.
@@ -552,7 +552,7 @@ async def stream_dialog_response(
 
     Args:
         history: Conversation history.
-        model_alias: Streaming LLM alias.
+        purpose: 模型用途（由 config.PURPOSE_CONFIGS 决定具体模型，默认流式）。
         context_summary: 压缩后的旧消息摘要（来自 SessionState.context_summary）。
 
     Yields:
@@ -570,7 +570,7 @@ async def stream_dialog_response(
     )
 
     try:
-        llm = get_llm(model_alias, temperature=0.7)
+        llm = get_llm(purpose=purpose, temperature=0.7)
         async for chunk in llm.astream([
             ("system", system),
             ("human", user_prompt),

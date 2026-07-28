@@ -40,8 +40,8 @@ def test_generate_problem_all_llm_failures_raises_runtimeerror():
             generate_problem("数组", "easy", max_retries=0)
 
 
-def test_generate_problem_passes_max_tokens_cap():
-    """Bug7: 应限制输出长度 (max_tokens=4096)，避免膨胀触硬上限被截断。"""
+def test_generate_problem_passes_correct_purpose():
+    """generate_problem 应传递正确的 purpose 给 get_llm。"""
     captured: dict = {}
     failing_llm = MagicMock()
     failing_llm.with_structured_output.return_value = _FailingStructured()
@@ -55,7 +55,7 @@ def test_generate_problem_passes_max_tokens_cap():
     ):
         with pytest.raises(RuntimeError):
             generate_problem("数组", "easy", max_retries=0)
-    assert captured.get("max_tokens") == 4096
+    assert captured.get("purpose") == "problem"
 
 
 def test_next_problem_resp_allows_null_problem_with_history():

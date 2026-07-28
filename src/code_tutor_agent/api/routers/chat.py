@@ -271,7 +271,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     #       graph.stream(None, config) 从 END 不会重启，返回空。
     # 统一走直接 LLM 是最可靠的做法。
     from code_tutor_agent.config import get_llm
-    llm = get_llm("agnes-stream", temperature=0.7)
+    llm = get_llm(purpose="api-chat")
 
     problem = values.get("problem")
     title = problem.title if hasattr(problem, "title") else (problem.get("title", "") if problem else "")
@@ -526,7 +526,7 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
 
     # ── Normal tutoring chat (non-streaming): 统一走直接 LLM ──
     # 原因同流式路径：graph 可能在 interrupt 或 END，无法可靠地通过 graph.invoke 走 chat_node
-    llm = get_llm("agnes", temperature=0.7)
+    llm = get_llm(purpose="api-chat-query")
 
     _phase = values.get("phase", "")
     _verdict = values.get("last_verdict", "")
