@@ -2,9 +2,10 @@
 
 设计见 docs/skill-engine-adapter-design.md §6。核心：
 - ``run_skill``：通用入口；任何错误归一为 ``SkillResult(ok=False)``，**不向外抛**。
-- ``generate_problem``：出题 → 复用共享 parser → 返回**扁平 problem dict**
-  （可直接喂 ``db.save_problem`` / generator.py 路径 C，与 CLI 逃生舱产物同形）。
 - ``generate_detailed_solution``：详细题解 → 直接返回 markdown 文本（不结构化）。
+
+注：出题（generate_problem）已收口到 ``ProblemAgent``（原生 LLM + 静态兜底），
+不再经由本适配层；本模块现仅服务「详细题解」这一仍走 skill-engine 的能力。
 
 真实 skill_engine API（Phase 0 已核对 2026-07-18）：
 - ``skill_engine.routing.discovery.discover(roots=[...])`` → ``{name: SkillMeta}``
@@ -25,7 +26,6 @@ from code_tutor_agent.config import (
     get_skill_engine_purpose,
     get_skill_engine_skills_root,
 )
-from code_tutor_agent.skills.parser import parse_problem_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +47,7 @@ class SkillExecutionError(SkillError):
 from code_tutor_agent.skills.result import SkillResult  # noqa: F401
 
 
-DEFAULT_PROBLEM_SKILL = "cta-generate-problem"
 DEFAULT_DETAILED_SOLUTION_SKILL = "cta-generate-solution"
-# DP-2：本次仅实现 problem + detailed-solution；generate_problem 预留 skill_name 形参，
-# 为多题型（math/sci/eng/ai）留口子，本次不接。
 
 
 def _bootstrap(
@@ -144,54 +141,6 @@ def run_skill(
         ok=True,
         output=output,
         meta={"duration_s": round(dur, 3), "channel": "adapter"},
-    )
-
-
-def generate_problem(
-    topic: str,
-    difficulty: str,
-    *,
-    skill_name: str = DEFAULT_PROBLEM_SKILL,
-    purpose: str | None = None,
-    max_retries: int = 1,
-) -> dict:
-    """出题：跑 skill → 共享 parser 解析 → 返回扁平 problem dict。
-
-    返回的 dict 字段（title / topic / difficulty / description / starter_code /
-    optimal_solution / test_cases）与 CLI 逃生舱产物同形，可直接喂 db.save_problem。
-
-    失败时带原因重跑（最多 max_retries 次额外重试），耗尽抛 SkillExecutionError。
-
-    注：设计文档 §6.2 早期草案写 ``-> ProblemMeta``，但 ProblemMeta 需 DB 分配的
-    problem_id 且字段为 visible_test_cases；save_problem 实际吃扁平 dict，故此处
-    返回扁平 dict，与 generator.py 路径 C 现状一致。
-    """
-    last_err: str | None = None
-    for attempt in range(max_retries + 1):
-        res = run_skill(
-            skill_name,
-            arguments={"topic": topic, "difficulty": difficulty},
-            purpose=purpose,
-        )
-        if not res.ok:
-            last_err = res.error
-            logger.warning(
-                "generate_problem 第 %d 次失败: %s", attempt + 1, res.error
-            )
-            continue
-        parsed = parse_problem_markdown(res.output)
-        if parsed is None:
-            last_err = "契约解析失败（缺少 ## 分节）"
-            logger.warning("generate_problem 第 %d 次解析失败", attempt + 1)
-            continue
-        if not parsed.get("title") or parsed.get("title") == "Untitled":
-            last_err = "解析结果缺少有效 title"
-            logger.warning("generate_problem 第 %d 次缺 title", attempt + 1)
-            continue
-        return parsed
-
-    raise SkillExecutionError(
-        f"出题失败（重试 {max_retries} 次耗尽）: {last_err or '未知原因'}"
     )
 
 

@@ -107,20 +107,6 @@ def run_skill_cli(
     )
 
 
-def generate_problem_via_skill_sync(topic: str, difficulty: str) -> str:
-    """Synchronous core: 通过 CLI 逃生舱出题，返回 JSON 字符串。
-
-    复用共享 parser（DP-5）；消费 SkillResult 统一接口（.ok/.output/.error）。
-    """
-    r = run_skill_cli("cta-generate-problem", {"topic": topic, "difficulty": difficulty})
-    if not r.ok:
-        return json.dumps({"error": f"CLI 出题失败: {r.error}"}, ensure_ascii=False)
-    parsed = parse_problem_markdown(r.output)
-    if parsed is None:
-        return json.dumps({"error": "CLI 出题成功但契约解析失败"}, ensure_ascii=False)
-    return json.dumps(parsed, ensure_ascii=False)
-
-
 def generate_detailed_solution_via_skill_sync(topic_description: str) -> str:
     """Synchronous core: 通过 CLI 逃生舱生成详细题解，返回 Markdown 文本字符串。
 

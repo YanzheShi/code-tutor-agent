@@ -427,89 +427,10 @@ async def test_run_tool_loop_invokes_detailed_solution_via_tutor_tools():
 
 
 def test_skill_tools_registry():
-    """SKILL_TOOLS 只含 generate_problem_via_skill，且默认不进 AGENT_TOOLS。"""
+    """出题统一走 ProblemAgent，不再有独立的 skill-engine 出题工具集；SKILL_TOOLS 为空。"""
     from code_tutor_agent.agents.tools import SKILL_TOOLS
 
-    assert {t.name for t in SKILL_TOOLS} == {"generate_problem_via_skill"}
-    assert "generate_problem_via_skill" not in {t.name for t in AGENT_TOOLS}
-
-
-_CONTRACT_MD = """\
-==== result ====
-## Title
-Move Zeroes
-## Topic
-数组
-## Difficulty
-easy
-## Description
-将数组中所有 0 移动到末尾。
-## Examples
-Example 1:
-Input: nums = [0,1,0,3,2]
-Output: [1,3,2,0,0]
-## StarterCode
-```python
-class Solution:
-    def moveZeroes(self, nums): pass
-```
-## OptimalSolution
-```python
-class Solution:
-    def moveZeroes(self, nums): pass
-```
-"""
-
-
-@pytest.mark.asyncio
-async def test_generate_problem_via_skill_success():
-    """CLI 逃生舱出题成功 → 返回带 title 的 JSON，无 error。"""
-    from code_tutor_agent.agents.tools import generate_problem_via_skill
-
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-problem", ok=True, output=_CONTRACT_MD,
-        ),
-    ):
-        out = await generate_problem_via_skill("数组", "easy", mode="cli")
-    data = json.loads(out)
-    assert data["title"] == "Move Zeroes"
-    assert "error" not in data
-
-
-@pytest.mark.asyncio
-async def test_generate_problem_via_skill_cli_failure_returns_error_json():
-    """CLI 执行失败 → 转成 {"error": ...} JSON，不抛异常。"""
-    from code_tutor_agent.agents.tools import generate_problem_via_skill
-
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-problem", ok=False, error="boom",
-        ),
-    ):
-        out = await generate_problem_via_skill("数组", "easy", mode="cli")
-    data = json.loads(out)
-    assert "error" in data
-    assert "CLI 出题失败" in data["error"]
-
-
-@pytest.mark.asyncio
-async def test_generate_problem_via_skill_parse_failure_returns_error_json():
-    """CLI 成功但契约解析失败（stdout 无 ## 节）→ 转 error JSON。"""
-    from code_tutor_agent.agents.tools import generate_problem_via_skill
-
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-problem", ok=True, output="no contract here",
-        ),
-    ):
-        out = await generate_problem_via_skill("数组", "easy", mode="cli")
-    data = json.loads(out)
-    assert "error" in data
-    assert "契约解析失败" in data["error"]
+    assert len(SKILL_TOOLS) == 0
 
 
 @pytest.mark.asyncio
@@ -552,41 +473,6 @@ async def test_generate_detailed_solution_via_skill_cli_failure():
     data = json.loads(out)
     assert "error" in data
     assert "生成详细题解失败" in data["error"]
-
-
-@pytest.mark.asyncio
-async def test_generate_problem_via_skill_default_adapter():
-    """默认 mode=adapter → 调 engine_adapter.generate_problem，返回含 title 的 JSON。"""
-    from code_tutor_agent.agents.tools import generate_problem_via_skill
-
-    fake_prob = {
-        "title": "Move Zeroes", "topic": "数组", "difficulty": "easy",
-        "description": "将 0 移到末尾", "starter_code": "",
-        "optimal_solution": "", "test_cases": [],
-    }
-    with patch(
-        "code_tutor_agent.skills.engine_adapter.generate_problem",
-        return_value=fake_prob,
-    ):
-        out = await generate_problem_via_skill("数组", "easy")
-    data = json.loads(out)
-    assert data["title"] == "Move Zeroes"
-    assert "error" not in data
-
-
-@pytest.mark.asyncio
-async def test_generate_problem_via_skill_adapter_failure_returns_error_json():
-    """adapter 通道异常 → 归一为 {"error": ...} JSON，不冒泡。"""
-    from code_tutor_agent.agents.tools import generate_problem_via_skill
-
-    with patch(
-        "code_tutor_agent.skills.engine_adapter.generate_problem",
-        side_effect=RuntimeError("boom"),
-    ):
-        out = await generate_problem_via_skill("数组", "easy")
-    data = json.loads(out)
-    assert "error" in data
-    assert "adapter 出题失败" in data["error"]
 
 
 @pytest.mark.asyncio

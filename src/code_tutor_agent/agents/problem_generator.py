@@ -14,8 +14,6 @@ from code_tutor_agent.agents.agent_problem import (  # noqa: F401
     _flat_to_problem,
     generate_detailed_solution,
     generate_problem,
-    generate_problem_via_cli,
-    generate_problem_via_skill,
     verify_problem,
 )
 # 保留旧 import 目标，避免 ``from code_tutor_agent.agents.problem_generator import get_llm`` 断链。

@@ -37,9 +37,8 @@ from typing import Any, Literal
 from langgraph.types import Command
 from langgraph.config import get_stream_writer
 
-from code_tutor_agent.agents.problem_generator import generate_problem
+from code_tutor_agent.agents.agent_problem import ProblemAgent, ProblemChannel
 from code_tutor_agent.db.database import save_problem, update_problem_optimal_solution
-from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.sandbox.ds import get_struct_prologue
 from code_tutor_agent.sandbox.runner import run_solution
@@ -50,7 +49,6 @@ from code_tutor_agent.store.static_pool import get_static_problem
 
 logger = logging.getLogger(__name__)
 
-MAX_ATTEMPTS = 1
 # MODEL_ALIAS constant removed — model selection now via config.PURPOSE_CONFIGS
 
 # ── Topic → Tag enum 映射 ──
@@ -359,115 +357,81 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
             existing_tutor_messages=state.tutor_messages if state.mode == "agent" else None,
         )
 
-    # ── 路径 B：正常 LLM 生成（现有流程）──
+    # ── 出题：统一走 ProblemAgent（原生 LLM + 自校验 + 静态兜底，不依赖 skill-engine）──
     problem_dict: dict[str, Any] | None = None
-    problem_obj: Problem | None = None
+    sample_tcs: list[dict] = []
 
     _progress(sid, "正在调用大模型生成题目…")
     writer("正在调用大模型生成题目…")
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        logger.info("Attempt %d/%d — LLM generate problem + brute code", attempt, MAX_ATTEMPTS)
-        _progress(sid, f"第 {attempt}/{MAX_ATTEMPTS} 次尝试 — 生成中…")
-        writer(f"第 {attempt}/{MAX_ATTEMPTS} 次尝试 — 生成中…")
+    outcome = ProblemAgent(topic=gen_topic, difficulty=difficulty).generate()
 
-        try:
-            problem_obj = generate_problem(topic=gen_topic, difficulty=difficulty)
-            problem_dict = problem_obj.model_dump()
-        except Exception as exc:
-            logger.warning("LLM generation failed: %s", exc)
-            _progress(sid, f"⚠️ LLM 调用失败，重试中…")
-            writer(f"⚠️ LLM 调用失败，重试中…")
-            continue
-
+    if outcome.ok and outcome.channel == ProblemChannel.LLM:
+        # LLM 出题成功：解析示例 → 参考解自验证，产出可靠可见用例
+        problem_dict = outcome.problem.model_dump()
         brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
         if not brute_code:
-            logger.warning("No optimal_solution in output — retrying")
-            continue
-
-        # ── Step 2: Parse LLM examples into test cases ──
-        examples = problem_dict.get("examples", [])
-        func_sig = problem_dict.get("function_signature", "")
-        logger.info("Parsing %d examples, sig=%s", len(examples), func_sig)
-
-        _progress(sid, "🧪 正在解析示例测试用例…")
-        writer("🧪 正在解析示例测试用例…")
-
-        from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
-        sample_tcs = _parse_examples_to_test_cases(examples, func_sig)
-
-        if not sample_tcs:
-            logger.warning("Failed to parse examples into test cases — retrying")
-            _progress(sid, "⚠️ 示例解析失败，重新生成…")
-            writer("⚠️ 示例解析失败，重新生成…")
-            continue
-
-        # ── Step 3: Run optimal_solution on examples → get expected outputs ──
-        # P0-1/P1: 不信任 LLM 提供的 expected，一律用参考解重新计算并自验证
-        all_ok = True
-        for tc in sample_tcs:
-            input_args = tc.get("input_args", [])
-            results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            if results:
-                r = results[0]
-                # P0-1: 参考解自验证 — 检查是否崩溃或空输出
-                if r.status in ("Runtime Error", "TLE", "Judge Error"):
-                    logger.warning("Reference solution self-verify failed: %s on %s", r.status, input_args)
-                    all_ok = False
-                    break
-                actual = r.detail or ""
-                if actual:
-                    tc["expected_output"] = actual
-                    logger.debug("TC %s -> %s", input_args, actual)
-                else:
-                    logger.warning("TC %s: no actual output (%s)", input_args, r.status)
-                    all_ok = False
-            else:
-                logger.warning("TC %s: no results", input_args)
-                all_ok = False
-
-        if not all_ok or not sample_tcs:
-            logger.warning("Sample generation failed — retrying")
-            _progress(sid, "⚠️ 示例生成失败，重新生成题目…")
-            writer("⚠️ 示例生成失败，重新生成题目…")
-            continue
-
-        # ── All checks passed for the lightweight generation ──
-        logger.info("Lightweight generation OK — %d sample test cases", len(sample_tcs))
-        _progress(sid, "✅ 题目已就绪！")
-        writer("✅ 题目已就绪！")
-        break
-    else:
-        # ── 路径 C：进程内 import 通道（主通道失败后才走，进程内、结构化、直接可落库）──
-        # 复用 skill-engine 里维护的出题资产（cta-generate-problem），经 engine_adapter
-        # 确定性 bootstrap（discover → load_skill → Runner.run(llm=)），不走子进程。
-        logger.warning("LLM 出题 %d 次失败 — 尝试 skill-engine (import)", MAX_ATTEMPTS)
-        _progress(sid, "⚠️ 进程内出题失败，尝试 skill-engine 出题…")
-        writer("⚠️ 进程内出题失败，尝试 skill-engine 出题…")
-        problem_dict = None
-        try:
-            from code_tutor_agent.skills.engine_adapter import generate_problem as _adapter_gen
-            problem_dict = _adapter_gen(gen_topic, difficulty, max_retries=1)
-        except Exception as exc:  # 任何失败都降级，不冒泡
-            logger.warning("skill-engine 出题也失败 — 回退静态题库: %s", exc)
-            _progress(sid, "⚠️ skill-engine 失败，切换到静态题库…")
-            writer("⚠️ skill-engine 失败，切换到静态题库…")
-        if problem_dict:
-            logger.info("skill-engine 出题成功: %s", problem_dict.get("title"))
-            _progress(sid, "✅ skill-engine 出题成功！")
-            writer("✅ skill-engine 出题成功！")
-            sample_tcs = problem_dict.get("test_cases", [])[:2]
+            logger.warning("LLM 产出无 optimal_solution — 回退静态题库")
+            problem_dict = None
         else:
-            # ── 路径 D：静态池（import 通道也失败）──
-            logger.warning("skill-engine 也失败 — 回退静态题库")
-            _progress(sid, "⚠️ skill-engine 失败，切换到静态题库…")
-            writer("⚠️ skill-engine 失败，切换到静态题库…")
-            problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
-            if problem_dict is None:
-                problem_dict = get_static_problem()
-            logger.info("Fallback → %s", problem_dict.get("title", "unknown"))
-            sample_tcs = problem_dict.get("test_cases", [])[:2]
-            sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
+            examples = problem_dict.get("examples", [])
+            func_sig = problem_dict.get("function_signature", "")
+            logger.info("Parsing %d examples, sig=%s", len(examples), func_sig)
+            _progress(sid, "🧪 正在解析示例测试用例…")
+            writer("🧪 正在解析示例测试用例…")
+            from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
+            sample_tcs = _parse_examples_to_test_cases(examples, func_sig)
+            if not sample_tcs:
+                logger.warning("示例解析失败 — 回退静态题库")
+                problem_dict = None
+            else:
+                all_ok = True
+                for tc in sample_tcs:
+                    input_args = tc.get("input_args", [])
+                    results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
+                    if results:
+                        r = results[0]
+                        if r.status in ("Runtime Error", "TLE", "Judge Error"):
+                            logger.warning("参考解自验证失败: %s on %s", r.status, input_args)
+                            all_ok = False
+                            break
+                        actual = r.detail or ""
+                        if actual:
+                            tc["expected_output"] = actual
+                        else:
+                            logger.warning("TC %s: no actual output (%s)", input_args, r.status)
+                            all_ok = False
+                    else:
+                        logger.warning("TC %s: no results", input_args)
+                        all_ok = False
+                if not all_ok:
+                    logger.warning("示例自验证失败 — 回退静态题库")
+                    problem_dict = None
+                else:
+                    logger.info("Lightweight generation OK — %d sample test cases", len(sample_tcs))
+                    _progress(sid, "✅ 题目已就绪！")
+                    writer("✅ 题目已就绪！")
+
+    elif outcome.ok and outcome.channel == ProblemChannel.STATIC:
+        # LLM 全失败，ProblemAgent 已回退到静态题库：直接采用，不二次拉取
+        problem_dict = outcome.problem.model_dump()
+        sample_tcs = problem_dict.get("test_cases", [])[:2]
+        sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
+        logger.info("出题走静态兜底（ProblemAgent 返回）: %s", problem_dict.get("title"))
+        _progress(sid, "✅ 题目已就绪（静态兜底）！")
+        writer("✅ 题目已就绪（静态兜底）！")
+
+    # ── 极端兜底：LLM 与静态均不可用；强制再拉一次静态题库（不依赖 skill-engine）──
+    if problem_dict is None:
+        logger.warning("出题回退静态题库（不依赖 skill-engine）")
+        _progress(sid, "⚠️ 大模型出题失败，切换到静态题库…")
+        writer("⚠️ 大模型出题失败，切换到静态题库…")
+        problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
+        if problem_dict is None:
+            problem_dict = get_static_problem()
+        logger.info("Fallback → %s", problem_dict.get("title", "unknown"))
+        sample_tcs = problem_dict.get("test_cases", [])[:2]
+        sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
 
     # ── 持久化到 DB — 先保存示例用例，完整用例后续补充 ──
     # The full test_suite will be generated in the background (API layer)

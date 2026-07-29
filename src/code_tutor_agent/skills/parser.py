@@ -11,8 +11,9 @@ import re
 
 from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
 
-# cta-generate-problem 输出契约节（## Title / Topic / Difficulty / Description /
+# skill 输出契约节（## Title / Topic / Difficulty / Description /
 # Examples / Constraints / StarterCode / BruteSolution / OptimalSolution）
+# 注：出题已收口到 ProblemAgent，本解析现仅服务于「详细题解」等仍走 skill-engine 的能力。
 _SECTION_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
 
 

@@ -9,11 +9,14 @@ agents/agent_judge.py 保持一致：本仓把「用 LLM 结构化输出完成�
 * **主通道（LLM）** ``generate_problem``：沿用 agent_dialog / agent_judge 的
   ``with_structured_output(Problem)`` 范式，直接产出 ``Problem`` 对象，并自带
   ``verify_problem`` 自校验与 ``max_tokens`` 限流（修复 Bug7 超时截断）。
-* **备选出题通道（skill-engine）**：经 import 主通道（``engine_adapter``）或
-  CLI 逃生舱（``skill_cli``）出题，产物归一为 ``Problem`` 对象。
+* **兜底（静态题库）** ``store/static_pool``：LLM 多次重试仍失败时，回退到
+  本仓自带题库（自家数据，非外部依赖）。
 
-对外暴露统一入口 ``ProblemAgent.generate()``，按 「LLM → adapter → cli →
-静态兜底」顺序降级，命中通道随结果一并返回。
+出题**不依赖任何外部工具**（如 skill-engine）：核心能力的安全网必须是自身
+可控的代码。详见 docs/出题路径移除skill-engine改造方案.md。
+
+对外暴露统一入口 ``ProblemAgent.generate()``，按 「LLM → 静态兜底」降级，
+命中通道随结果一并返回。
 
 相关测试用例见 tests/test_problem_agent.py。
 """
@@ -34,8 +37,7 @@ from code_tutor_agent.prompts.generate_problem import (
     GENERATE_PROBLEM_SYSTEM,
     GENERATE_PROBLEM_USER,
 )
-from code_tutor_agent.skills import engine_adapter as _adapter
-from code_tutor_agent.skills.parser import parse_problem_markdown
+from code_tutor_agent.skills import engine_adapter as _adapter  # 仍用于「题解」(generate_detailed_solution)；出题路径已不再走这里
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,6 @@ class ProblemChannel(str, Enum):
     """出题通道标识。"""
 
     LLM = "llm"          # LLM 结构化出题（主通道）
-    ADAPTER = "adapter"  # skill-engine import 主通道（进程内）
-    CLI = "cli"          # skill-engine CLI 逃生舱
     STATIC = "static"    # 静态题库兜底
 
     def __str__(self) -> str:  # 让日志/测试打印出裸值而非 "ProblemChannel.LLM"
@@ -248,7 +248,7 @@ def generate_problem(
     topic: str,
     difficulty: str,
     purpose: str = "problem",
-    max_retries: int = 1,
+    max_retries: int = 3,
 ) -> Problem:
     """（主通道）调用 LLM 结构化生成一道题，返回 ``Problem`` 对象。
 
@@ -262,9 +262,9 @@ def generate_problem(
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
     # 限制输出长度：8192 足以容纳含完整题解的 Problem 结构化输出，同时远低于 16384 硬上限
-    # （避免 Bug7 截断）；原 4096 对非平凡题过小，会触发「length limit reached」→ 降级到
-    # 慢速 skill-engine 通道（实测单次 60s+），导致题目迟迟不显示。
-    # temperature 调至 0.7 增加多样性，减少 AC 题目重复出题
+    # （避免 Bug7 截断）；原 4096 对非平凡题过小，会触发「length limit reached」导致自校验失败。
+    # temperature 调至 0.7 增加多样性，减少 AC 题目重复出题。
+    # 全部尝试（含重试）均失败（problem 为 None）时抛 RuntimeError，交由 ProblemAgent 降级到静态库。
     llm = get_llm(purpose=purpose)
     structured_llm = llm.with_structured_output(Problem)
 
@@ -308,13 +308,13 @@ def generate_problem(
 
     if problem is None:
         raise RuntimeError("all generation attempts failed (LLM output unusable)")
-    # 所有尝试要么抛异常、要么校验失败 → 抛异常让上层降级到 adapter/cli/static，
+    # 所有尝试要么抛异常、要么校验失败 → 抛异常让上层（ProblemAgent）降级到静态库，
     # 而不是把一道不合格（如空题/桩解）的题目返回给用户。
     raise RuntimeError("all generation attempts failed self-verification")
 
 
 # ──────────────────────────────────────────────
-#  备选出题通道：skill-engine（import 主通道 / CLI 逃生舱）
+#  兜底归一：把扁平 dict 归一为 Problem（静态题库 / 外部产物共用）
 # ──────────────────────────────────────────────
 
 def _flat_to_problem(flat: dict) -> Problem:
@@ -337,31 +337,6 @@ def _flat_to_problem(flat: dict) -> Problem:
         else:
             data[name] = fld.default if fld.default is not None else None
     return Problem(**data)
-
-
-def generate_problem_via_skill(topic: str, difficulty: str) -> Optional[Problem]:
-    """（备用通道）经 skill-engine import 主通道出题，返回 ``Problem`` 或 ``None``。"""
-    try:
-        flat = _adapter.generate_problem(topic, difficulty, max_retries=1)
-    except Exception as exc:  # engine_adapter 内部已归一，这里兜底防漏网
-        logger.warning("adapter 出题失败: %s", exc)
-        return None
-    return _flat_to_problem(flat)
-
-
-def generate_problem_via_cli(topic: str, difficulty: str) -> Optional[Problem]:
-    """（逃生舱）经 skill-engine CLI 出题，返回 ``Problem`` 或 ``None``。"""
-    from code_tutor_agent.agents.skill_cli import run_skill_cli
-
-    r = run_skill_cli("cta-generate-problem", {"topic": topic, "difficulty": difficulty})
-    if not r.ok:
-        logger.warning("CLI 出题失败: %s", r.error)
-        return None
-    flat = parse_problem_markdown(r.output)
-    if flat is None:
-        logger.warning("CLI 出题成功但契约解析失败")
-        return None
-    return _flat_to_problem(flat)
 
 
 def generate_detailed_solution(problem_description: str) -> Optional[str]:
@@ -393,29 +368,24 @@ class ProblemAgent:
         self.topic = topic
         self.difficulty = difficulty
 
-    # 降级顺序：LLM → adapter → cli → 静态兜底
+    # 降级顺序：原生 LLM（自带重试 + 自校验）→ 静态题库兜底
     def generate(self) -> GenerationOutcome:
-        """出题并尝试逐级降级，返回 ``GenerationOutcome``。"""
-        # 1) 主通道：LLM
+        """出题并尝试逐级降级，返回 ``GenerationOutcome``。
+
+        出题是核心能力，安全网必须是自身可控代码：先走原生 LLM（``generate_problem``
+        内部含 max_retries 重试 + ``verify_problem`` 自校验），全部失败再回退本仓
+        静态题库（自家数据，非外部依赖）。不再依赖 skill-engine 等外部工具。
+        """
+        # 1) 主通道：原生 LLM 结构化出题
         try:
             return GenerationOutcome(
                 generate_problem(self.topic, self.difficulty),
                 ProblemChannel.LLM,
             )
         except Exception as exc:
-            logger.warning("LLM 出题失败，尝试 skill-engine(adapter): %s", exc)
+            logger.warning("LLM 出题全部尝试失败，回退静态题库: %s", exc)
 
-        # 2) 备选出题通道：skill-engine import 主通道
-        p = generate_problem_via_skill(self.topic, self.difficulty)
-        if p is not None:
-            return GenerationOutcome(p, ProblemChannel.ADAPTER)
-
-        # 3) 逃生舱：skill-engine CLI
-        p = generate_problem_via_cli(self.topic, self.difficulty)
-        if p is not None:
-            return GenerationOutcome(p, ProblemChannel.CLI)
-
-        # 4) 静态题库兜底
+        # 2) 静态题库兜底（自家数据，非外部依赖）
         try:
             from code_tutor_agent.store.static_pool import get_static_problem
 

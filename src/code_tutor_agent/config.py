@@ -189,10 +189,11 @@ def get_skill_engine_skills_root() -> str:
 
 
 #: 允许通过 CLI 执行的 skill 名白名单（防止任意 skill 名注进 subprocess）
-#: DP-4：精简为两个真实 def；移除幽灵名 cta-generate-detailed-solution（无对应 def）。
+#: 出题已收口到 ProblemAgent（原生 LLM + 静态兜底），不再经 skill-engine 出题，
+#: 故此处仅保留「详细题解」这类仍走 skill-engine 的能力。
 SKILL_ENGINE_CLI_ALLOWLIST: frozenset[str] = frozenset(
     os.getenv(
         "SKILL_ENGINE_CLI_ALLOWLIST",
-        "cta-generate-problem,cta-generate-solution",
+        "cta-generate-solution",
     ).split(",")
 )

@@ -18,7 +18,7 @@ from code_tutor_agent.agents import skill_cli
 from code_tutor_agent.agents.skill_cli import run_skill_cli, parse_problem_markdown
 from code_tutor_agent.skills.result import SkillResult
 
-# cta-generate-problem 真实风格的契约 Markdown（带 run 命令前缀日志 + ==== 分隔）
+# 契约 Markdown 样例（带 run 命令前缀日志 + ==== 分隔），用于 run_skill_cli / parse_problem_markdown 测试
 CONTRACT_MD = """\
 [skill-engine] loading skills from ./skills ...
 ==== result ====
@@ -94,7 +94,7 @@ def test_run_skill_cli_success_parses_stdout():
         "code_tutor_agent.agents.skill_cli.subprocess.run",
         return_value=_fake_proc(CONTRACT_MD, returncode=0),
     ):
-        r = run_skill_cli("cta-generate-problem", {"topic": "数组", "difficulty": "easy"})
+        r = run_skill_cli("cta-generate-solution", {"topic": "数组", "difficulty": "easy"})
     assert r.ok is True
     assert r.meta["exit_code"] == 0
     assert "Move Zeroes" in r.output
@@ -107,7 +107,7 @@ def test_run_skill_cli_empty_stdout_is_failure():
         "code_tutor_agent.agents.skill_cli.subprocess.run",
         return_value=_fake_proc("", returncode=1, stderr="boom"),
     ):
-        r = run_skill_cli("cta-generate-problem", {"topic": "数组"})
+        r = run_skill_cli("cta-generate-solution", {"topic": "数组"})
     assert r.ok is False
     assert r.error == "boom"
 
@@ -118,7 +118,7 @@ def test_run_skill_cli_command_not_found():
         "code_tutor_agent.agents.skill_cli.subprocess.run",
         side_effect=FileNotFoundError(),
     ):
-        r = run_skill_cli("cta-generate-problem", {"topic": "数组"})
+        r = run_skill_cli("cta-generate-solution", {"topic": "数组"})
     assert r.ok is False
     assert "未找到" in r.error
 
@@ -129,7 +129,7 @@ def test_run_skill_cli_timeout():
         "code_tutor_agent.agents.skill_cli.subprocess.run",
         side_effect=subprocess.TimeoutExpired("skill-engine", 60),
     ):
-        r = run_skill_cli("cta-generate-problem", {"topic": "数组"}, timeout=60)
+        r = run_skill_cli("cta-generate-solution", {"topic": "数组"}, timeout=60)
     assert r.ok is False
     assert "超时" in r.error
 
@@ -145,8 +145,8 @@ def test_run_skill_cli_builds_cmd_with_args_and_llm_flag():
         return _fake_proc(CONTRACT_MD)
 
     with patch("code_tutor_agent.agents.skill_cli.subprocess.run", side_effect=_fake_run):
-        run_skill_cli("cta-generate-problem", {"topic": "数组", "difficulty": "easy"})
-    assert captured["cmd"][:3] == ["skill-engine", "run", "cta-generate-problem"]
+        run_skill_cli("cta-generate-solution", {"topic": "数组", "difficulty": "easy"})
+    assert captured["cmd"][:3] == ["skill-engine", "run", "cta-generate-solution"]
     assert captured["cmd"][3] == "-a"
     assert "topic=数组,difficulty=easy" in captured["cmd"][4]
     assert "--llm" in captured["cmd"]
@@ -194,20 +194,6 @@ def test_parse_problem_markdown_handles_missing_separator():
     d = parse_problem_markdown(body)
     assert d["title"] == "Two Sum"
     assert d["difficulty"] == "medium"
-
-
-def test_generate_problem_via_skill_sync_end_to_end():
-    """sync 核心：run_skill_cli(SkillResult) + parse 串起来，成功返回 JSON。"""
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-problem", ok=True, output=CONTRACT_MD,
-        ),
-    ):
-        out = skill_cli.generate_problem_via_skill_sync("数组", "easy")
-    data = json.loads(out)
-    assert data["title"] == "Move Zeroes"
-    assert "error" not in data
 
 
 def test_run_skill_cli_arguments_mode_builds_cmd():

@@ -7,9 +7,9 @@
 * 主通道 ``generate_problem``（LLM 结构化输出、max_tokens 限流、重试、全失败抛 RuntimeError）
 * ``verify_problem`` 自校验（编译 / 思维链 / starter_code 推导）
 * ``_extract_code`` 围栏剥离
-* skill-engine 备选出题通道（import 主通道 / CLI 逃生舱）归一为 ``Problem``
-* ``generate_detailed_solution``
-* 统一入口 ``ProblemAgent.generate`` 的降级链（LLM → adapter → cli → 静态兜底）
+* 出题不依赖外部工具：``ProblemAgent.generate`` 降级链仅 LLM → 静态兜底
+* ``generate_detailed_solution``（题解，仍走 skill-engine，属另一功能）
+* 统一入口 ``ProblemAgent.generate`` 的降级链（LLM → 静态兜底）
 """
 
 from __future__ import annotations
@@ -25,12 +25,9 @@ from code_tutor_agent.agents.agent_problem import (
     _flat_to_problem,
     generate_detailed_solution,
     generate_problem,
-    generate_problem_via_cli,
-    generate_problem_via_skill,
     verify_problem,
 )
 from code_tutor_agent.models.problem import Problem
-from code_tutor_agent.skills.result import SkillResult
 
 
 # ───────────────────────── 公共 mock 工具 ─────────────────────────
@@ -109,6 +106,15 @@ def _valid_problem() -> Problem:
             "            if target - n in seen:\n"
             "                return [seen[target - n], i]\n"
             "            seen[n] = i\n"
+            "        return []\n"
+        ),
+        brute_solution=(
+            "class Solution:\n"
+            "    def twoSum(self, nums: List[int], target: int) -> List[int]:\n"
+            "        for i in range(len(nums)):\n"
+            "            for j in range(i + 1, len(nums)):\n"
+            "                if nums[i] + nums[j] == target:\n"
+            "                    return [i, j]\n"
             "        return []\n"
         ),
     )
@@ -196,6 +202,7 @@ def test_verify_problem_accepts_compilable_solution():
     d = {
         "title": "F",
         "optimal_solution": "class Solution:\n    def f(self, x: int) -> int:\n        return x\n",
+        "brute_solution": "class Solution:\n    def f(self, x: int) -> int:\n        return x\n",
         "description": "Given an integer x, return it unchanged.",
         "examples": ["Input: x=5 -> 5"],
         "constraints": ["-10^4 <= x <= 10^4"],
@@ -237,6 +244,7 @@ def test_verify_problem_derives_starter_code():
     d = {
         "title": "Container With Most Water",
         "optimal_solution": optimal,
+        "brute_solution": "class Solution:\n    def maxArea(self, height: List[int]) -> int:\n        return 0\n",
         "description": "Given n non-negative integers, find two lines that together with the x-axis forms a container containing the most water.",
         "examples": ["Input: height=[1,8,6,2,5,4,8,3,7] -> 49"],
         "constraints": ["n == height.length"],
@@ -306,87 +314,10 @@ def test_flat_to_problem_filters_to_model_fields():
     assert not hasattr(p, "source")
 
 
-# ───────────────────────── skill-engine 备选出题通道 ─────────────────────────
-
-def test_generate_problem_via_skill_success(monkeypatch):
-    flat = {
-        "title": "Move Zeroes",
-        "topic": "数组",
-        "difficulty": "easy",
-        "description": "Move all zeros to the end.",
-        "function_signature": "moveZeroes: List[int] -> None",
-        "starter_code": "class Solution:\n    def moveZeroes(self, nums: List[int]) -> None:\n        pass\n",
-        "optimal_solution": "class Solution:\n    def moveZeroes(self, nums: List[int]) -> None:\n        pass\n",
-        "test_cases": [],
-    }
-    monkeypatch.setattr(agent_problem._adapter, "generate_problem", lambda *a, **k: flat)
-    p = generate_problem_via_skill("数组", "easy")
-    assert isinstance(p, Problem)
-    assert p.title == "Move Zeroes"
-
-
-def test_generate_problem_via_skill_failure_returns_none(monkeypatch):
-    def _boom_adapter(*a, **k):
-        raise RuntimeError("skill down")
-
-    monkeypatch.setattr(agent_problem._adapter, "generate_problem", _boom_adapter)
-    assert generate_problem_via_skill("数组", "easy") is None
-
-
-_SAMPLE_MARKDOWN = """==== skill run ====
-## Title
-Best Time to Buy and Sell Stock
-
-## Topic
-数组
-
-## Difficulty
-easy
-
-## Description
-Say you have an array...
-
-## FunctionSignature
-maxProfit: List[int] -> int
-
-## StarterCode
-```python
-class Solution:
-    def maxProfit(self, prices: List[int]) -> int:
-        pass
-```
-
-## OptimalSolution
-```python
-class Solution:
-    def maxProfit(self, prices: List[int]) -> int:
-        return 0
-```
-
-## Examples
-Example 1:
-Input: prices = [7,1,5,3,6,4]
-Output: 5
-"""
-
-
-def test_generate_problem_via_cli_success(monkeypatch):
-    monkeypatch.setattr(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        lambda *a, **k: SkillResult(skill_name="cta-generate-problem", ok=True, output=_SAMPLE_MARKDOWN),
-    )
-    p = generate_problem_via_cli("数组", "easy")
-    assert isinstance(p, Problem)
-    assert p.title == "Best Time to Buy and Sell Stock"
-    assert p.function_signature.startswith("maxProfit")
-
-
-def test_generate_problem_via_cli_failure_returns_none(monkeypatch):
-    monkeypatch.setattr(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        lambda *a, **k: SkillResult(skill_name="cta-generate-problem", ok=False, error="cli down"),
-    )
-    assert generate_problem_via_cli("数组", "easy") is None
+# ───────────────────────── 出题不依赖外部工具 ─────────────────────────
+# 出题仅走原生 LLM + 静态兜底，不再经由 skill-engine（adapter/cli）出题通道；
+# 相关 skill-engine 出题测试已移除。题解功能（generate_detailed_solution）仍走
+# skill-engine，属另一功能，见下方独立用例。
 
 
 def test_generate_detailed_solution_success(monkeypatch):
@@ -415,29 +346,8 @@ def test_agent_generate_llm_channel(monkeypatch):
     assert isinstance(out.problem, Problem)
 
 
-def test_agent_generate_falls_back_to_adapter(monkeypatch):
-    monkeypatch.setattr(agent_problem, "generate_problem", _boom)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_skill",
-                        lambda *a, **k: _valid_problem())
-    out = ProblemAgent("数组", "easy").generate()
-    assert out.ok
-    assert out.channel == ProblemChannel.ADAPTER
-
-
-def test_agent_generate_falls_back_to_cli(monkeypatch):
-    monkeypatch.setattr(agent_problem, "generate_problem", _boom)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_skill", lambda *a, **k: None)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_cli",
-                        lambda *a, **k: _valid_problem())
-    out = ProblemAgent("数组", "easy").generate()
-    assert out.ok
-    assert out.channel == ProblemChannel.CLI
-
-
 def test_agent_generate_falls_back_to_static(monkeypatch):
     monkeypatch.setattr(agent_problem, "generate_problem", _boom)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_skill", lambda *a, **k: None)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_cli", lambda *a, **k: None)
 
     flat = {
         "title": "Static Problem",
@@ -459,8 +369,6 @@ def test_agent_generate_falls_back_to_static(monkeypatch):
 
 def test_agent_generate_all_fail_returns_none(monkeypatch):
     monkeypatch.setattr(agent_problem, "generate_problem", _boom)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_skill", lambda *a, **k: None)
-    monkeypatch.setattr(agent_problem, "generate_problem_via_cli", lambda *a, **k: None)
     monkeypatch.setattr("code_tutor_agent.store.static_pool.get_static_problem",
                         lambda *a, **k: None)
     out = ProblemAgent("数组", "easy").generate()

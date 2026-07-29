@@ -238,44 +238,8 @@ async def run_tool_loop(
 # ──────────────────────────────────────────────
 
 from code_tutor_agent.agents.skill_cli import (
-    generate_problem_via_skill_sync,
     generate_detailed_solution_via_skill_sync,
 )
-
-
-async def generate_problem_via_skill(
-    topic: str, difficulty: str, *, mode: str = "adapter"
-) -> str:
-    """通过 skill-engine 生成练习题（备选出题通道）。
-
-    默认走 import 主通道（``engine_adapter.generate_problem``，进程内、结构化、
-    直接喂 DB）；仅当用户在对话中显式要求 ``mode="cli"`` 时，才回退到
-    ``skill_cli`` 子进程逃生舱（1:1 复现 CI 行为 / 调试 skill）。
-
-    异步包装：同步核心经 ``asyncio.to_thread`` 防阻塞事件循环。函数名与
-    ``SKILL_TOOLS`` 里的工具名一致，便于 ``run_tool_loop`` 用 ``getattr`` 解析。
-
-    任何通道失败都归一为 ``{"error": ...}`` JSON，不向外抛。
-    """
-    _ctx = current_problem_ctx.get()
-    logger.info(
-        "▶ 出题（skill）topic=%s difficulty=%s mode=%s problem=%s title=%s",
-        topic, difficulty, mode, _ctx.get("problem_id"), _ctx.get("title"),
-    )
-    if mode == "cli":
-        return await asyncio.to_thread(
-            generate_problem_via_skill_sync, topic, difficulty
-        )
-    # 默认 adapter 主通道
-    try:
-        prob = await asyncio.to_thread(
-            _engine_adapter.generate_problem, topic, difficulty, max_retries=1
-        )
-        return json.dumps(prob, ensure_ascii=False)
-    except Exception as exc:  # adapter 任何异常都降级为 error JSON
-        return json.dumps(
-            {"error": f"adapter 出题失败: {exc}"}, ensure_ascii=False
-        )
 
 
 async def generate_detailed_solution_via_skill(
@@ -341,17 +305,6 @@ TUTOR_TOOLS = JUDGE_TOOLS + ([_detailed_solution_tool] if _detailed_solution_too
 TUTOR_CHAT_TOOLS = JUDGE_TOOLS
 
 
-# 仅在「对话/需求澄清阶段」由 LLM 自主选择题型时使用，
-# 默认不进 AGENT_TOOLS（避免辅导环节误暴露出题工具）。
-SKILL_TOOLS = [
-    StructuredTool.from_function(
-        func=generate_problem_via_skill,
-        name="generate_problem_via_skill",
-        description=(
-            "生成练习题（skill-engine 出题资产）。当用户在对话中明确要求"
-            "用 skill-engine 出题、或点名某类题型（数学推导/科学计算/工程场景/AI 启发式）时调用。"
-            "参数 topic 与 difficulty 由对话上下文决定。普通 LeetCode 风格出题不要用此工具。"
-            "默认走进程内 import 通道（adapter）；仅当用户显式要求 CLI / 调试 skill 时传 mode='cli'。"
-        ),
-    ),
-]
+# 出题统一走 ProblemAgent（原生 LLM + 自校验 + 静态兜底），不再经 skill-engine；
+# 故不再有独立的「出题工具」集合。详细题解工具见 generate_detailed_solution_via_skill。
+SKILL_TOOLS: list = []
