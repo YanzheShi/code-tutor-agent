@@ -1,8 +1,8 @@
 """LLM configuration: purpose → model registry.
 
 Reads from .env:
-- SENSENOVA_API_KEY, SENSENOVA_BASE_URL
-- SENSENOVA_MODEL, SENSENOVA_MODEL1
+- LLM_MODEL, LLM_BASE_URL, LLM_API_KEY
+- LLM_MODEL_ALT, LLM_BASE_URL_ALT, LLM_API_KEY_ALT
 - etc.
 
 业务代码只通过 get_llm(purpose="xxx") 获取模型实例，不关心具体用哪个模型。
@@ -20,17 +20,17 @@ load_dotenv()
 # 这里只定义"有哪些模型可用"，不决定业务用哪个。
 # PURPOSE_CONFIGS 引用这里的 alias。
 LLM_CONFIGS = {
-    "sensenova-deepseek": {
-        "model": os.getenv("SENSENOVA_MODEL"),
+    "default": {
+        "model": os.getenv("LLM_MODEL"),
         "model_provider": "openai",
-        "base_url": os.getenv("SENSENOVA_BASE_URL"),
-        "api_key": os.getenv("SENSENOVA_API_KEY"),
+        "base_url": os.getenv("LLM_BASE_URL"),
+        "api_key": os.getenv("LLM_API_KEY"),
     },
-    "sensenova": {
-        "model": os.getenv("SENSENOVA_MODEL1"),
+    "secondary": {
+        "model": os.getenv("LLM_MODEL_ALT"),
         "model_provider": "openai",
-        "base_url": os.getenv("SENSENOVA_BASE_URL"),
-        "api_key": os.getenv("SENSENOVA_API_KEY"),
+        "base_url": os.getenv("LLM_BASE_URL_ALT"),
+        "api_key": os.getenv("LLM_API_KEY_ALT"),
     },
 }
 
@@ -39,36 +39,36 @@ LLM_CONFIGS = {
 # 改模型只需改这里，业务代码一行不动。
 PURPOSE_CONFIGS = {
     # === 节点 ===
-    "chat":                 {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
-    "tutor-eval":           {"alias": "sensenova-deepseek", "temperature": 0.1},
-    "tutor-generate":       {"alias": "sensenova-deepseek", "temperature": 0.4},
-    "tutor-router":         {"alias": "sensenova-deepseek", "temperature": 0.2},
-    "generator":            {"alias": "sensenova-deepseek", "temperature": 0.3},
+    "chat":                 {"alias": "default", "temperature": 0.7, "streaming": True},
+    "tutor-eval":           {"alias": "default", "temperature": 0.1},
+    "tutor-generate":       {"alias": "default", "temperature": 0.4},
+    "tutor-router":         {"alias": "default", "temperature": 0.2},
+    "generator":            {"alias": "default", "temperature": 0.3},
 
     # === Agent 模块 ===
-    "dialog":               {"alias": "sensenova-deepseek", "temperature": 0.3, "max_tokens": 512},
-    "dialog-stream":        {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
-    "judge":                {"alias": "sensenova-deepseek", "temperature": 0.7},
-    "problem":              {"alias": "sensenova-deepseek", "temperature": 0.7, "max_tokens": 8192},
+    "dialog":               {"alias": "default", "temperature": 0.3, "max_tokens": 512},
+    "dialog-stream":        {"alias": "default", "temperature": 0.7, "streaming": True},
+    "judge":                {"alias": "default", "temperature": 0.7},
+    "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 8192},
 
     # === 上下文管理 ===
-    "context-summary":      {"alias": "sensenova-deepseek", "temperature": 0.3},
+    "context-summary":      {"alias": "default", "temperature": 0.3},
 
     # === API 路由 ===
-    "api-generation":       {"alias": "sensenova-deepseek", "temperature": 0.3},
-    "api-generation-high":  {"alias": "sensenova-deepseek", "temperature": 0.5},
-    "api-chat":             {"alias": "sensenova-deepseek", "temperature": 0.7, "streaming": True},
-    "api-chat-query":       {"alias": "sensenova-deepseek", "temperature": 0.7},
+    "api-generation":       {"alias": "default", "temperature": 0.3},
+    "api-generation-high":  {"alias": "default", "temperature": 0.5},
+    "api-chat":             {"alias": "default", "temperature": 0.7, "streaming": True},
+    "api-chat-query":       {"alias": "default", "temperature": 0.7},
 
     # === 沙箱 ===
-    "adversarial-eval":     {"alias": "sensenova-deepseek", "temperature": 0.3},
-    "adversarial-eval-low": {"alias": "sensenova-deepseek", "temperature": 0.2},
+    "adversarial-eval":     {"alias": "default", "temperature": 0.3},
+    "adversarial-eval-low": {"alias": "default", "temperature": 0.2},
 
     # === Skill 引擎 ===
-    "skill-engine":         {"alias": "sensenova-deepseek", "temperature": 0.7},
+    "skill-engine":         {"alias": "default", "temperature": 0.7},
 
     # === 基准测试 ===
-    "benchmark":            {"alias": "sensenova", "temperature": 0.5},
+    "benchmark":            {"alias": "secondary", "temperature": 0.5},
 }
 
 

@@ -94,7 +94,7 @@ flowchart TB
 code-tutor-agent/
 ├── pyproject.toml
 ├── Makefile
-├── .env.template
+├── .env.example
 ├── data/                   # 运行时数据
 │   ├── db/                 #   SQLite 数据文件
 │   └── checkpoints/        #   LangGraph checkpointer
@@ -141,9 +141,20 @@ cd ..
 ### 2. 环境变量
 
 ```bash
-cp .env.template .env
+cp .env.example .env
 # 编辑 .env 填入 API key
 ```
+
+最小配置只需要一个 LLM 提供商（OpenAI 兼容 API）：
+
+```ini
+LLM_MODEL=gpt-4o
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=sk-your-api-key
+```
+
+支持任何 OpenAI 兼容的 API 提供商（DeepSeek、通义千问、SenseNova、Ollama 等）。
+完整配置项见 [.env.example](.env.example)。
 
 ### 3. 启动服务
 
@@ -183,7 +194,7 @@ uv run code-tutor
 
 ```bash
 # 开发模式 (hot-reload)
-cp .env.template .env
+cp .env.example .env
 docker compose -f docker/docker-compose.yml up -d
 
 # 生产模式 (nginx + 多副本)

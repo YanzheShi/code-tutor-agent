@@ -11,6 +11,7 @@ build/
 .venv/
 .env
 .env.local
+!.env.example
 
 # === Node.js ===
 node_modules/

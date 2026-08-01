@@ -9,7 +9,7 @@
 运行方式（项目根目录）：
     uv run python -m src.code_tutor_agent.poc.test_llm_router
 
-依赖：项目已有的 .env 中的 AGNES_API_KEY / AGNES_BASE_URL / AGNES_MODEL
+依赖：项目已有的 .env 中的 LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
 """
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def main():
         print(f"  ✅ LLM 连通成功: {test_text.strip()[:50]}")
     except Exception as e:
         print(f"  ❌ LLM 初始化失败: {e}")
-        print(f"    请确认 .env 文件中配置了 AGNES_API_KEY / AGNES_BASE_URL / AGNES_MODEL")
+        print(f"    请确认 .env 文件中配置了 LLM_MODEL / LLM_BASE_URL / LLM_API_KEY")
         sys.exit(1)
 
     # 3. 测试多组路由场景
