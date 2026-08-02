@@ -114,6 +114,15 @@ def _build_test_case_harness(
     param_types_json = json.dumps(param_types)
     return_type_json = json.dumps(return_type)
 
+    # 在 Python 端（非 f-string 模板内）提前计算方法定义顺序
+    # 从 source_code 中提取方法名，按定义顺序排列（非字母序）
+    method_names = []
+    for line in source_code.split('\n'):
+        m = re.match(r'^\s+def\s+(\w+)', line)
+        if m:
+            method_names.append(m.group(1))
+    method_order_json = json.dumps(method_names)
+
     return f"""\
 {INJECT_PROLOGUE}
 {struct_src}
@@ -149,15 +158,17 @@ def _fmt(val):
         return json.dumps(sorted(val))
     return str(val)
 
-# Discover the first public method on Solution
+# 方法定义顺序（由 _build_test_case_harness 提前计算，按源代码定义顺序）
+_method_order = {method_order_json}
 sol = Solution()
-members = inspect.getmembers(sol, predicate=inspect.ismethod)
-public = [(n, fn) for n, fn in members if not n.startswith('_')]
+public = [(n, fn) for n, fn in inspect.getmembers(sol, predicate=inspect.ismethod) if not n.startswith('_')]
 if not public:
     print('RESULT: ' + json.dumps({{"test_case_id": -1, "status": "Runtime Error", "detail": "no public method"}}))
     sys.exit(0)
 
-method_name, method_fn = public[0]
+# 按 _method_order 中的定义顺序选择第一个公共方法（防止字母序打乱）
+method_name = next((n for n in _method_order if n in [p[0] for p in public]), public[0][0])
+method_fn = getattr(sol, method_name)
 
 for idx, tc in enumerate(test_cases):
     args = [
