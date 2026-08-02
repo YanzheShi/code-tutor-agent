@@ -262,10 +262,26 @@ if not public:
 method_name, method_fn = public[0]
 
 for idx, tc in enumerate(test_cases):
-    args = [
-        _cta_coerce_arg(_eval_arg(a), _param_types[i] if i < len(_param_types) else "")
-        for i, a in enumerate(tc['input_args'])
-    ]
+    args = []
+    _cta_first_tree = None
+    for i, a in enumerate(tc['input_args']):
+        _t = _param_types[i] if i < len(_param_types) else ""
+        _raw = _eval_arg(a)
+        # TreeNode 节点引用处理：如果参数是单值而非数组，说明是 p、q 这类
+        # 需要从第一个树中按值查找的节点引用。LeetCode 的树问题中，
+        # 第一个 TreeNode 参数是树根（数组输入），后续 TreeNode 是节点引用。
+        if "TreeNode" in _t.replace("Optional[", "").rstrip("]"):
+            if isinstance(_raw, list):
+                _val = _cta_tree_from_list(_raw)
+                if _cta_first_tree is None:
+                    _cta_first_tree = _val
+                args.append(_val)
+            else:
+                # 单值 → 从已建树中按值查找节点
+                _val = _cta_find_node_by_value(_cta_first_tree, _raw) if _cta_first_tree else None
+                args.append(_val)
+        else:
+            args.append(_cta_coerce_arg(_raw, _t))
     expected = tc['expected_output']
     start = time.perf_counter()
     try:

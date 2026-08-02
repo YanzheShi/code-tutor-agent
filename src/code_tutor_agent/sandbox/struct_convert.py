@@ -85,6 +85,22 @@ def tree_to_list(root):
 # ── 注入到 harness 的辅助函数源码 ──
 # 不依赖任何外部符号（仅用 INJECT_PROLOGUE 预置的 ListNode / TreeNode / Node）。
 HARNESS_STRUCT_SRC = r'''
+def _cta_find_node_by_value(root, val):
+    """在树中按值查找节点（DFS），用于 p、q 等节点引用参数。
+
+    LeetCode 的树问题（如 LCA）中，p 和 q 是主树中的节点引用，
+    不是独立的值。测试用例生成器把 p、q 当成单值传入，需要用
+    此函数在主树中查找对应节点。
+    """
+    if not root:
+        return None
+    if root.val == val:
+        return root
+    left = _cta_find_node_by_value(root.left, val)
+    if left:
+        return left
+    return _cta_find_node_by_value(root.right, val)
+
 def _cta_ll_from_list(vals):
     if vals is None:
         return None

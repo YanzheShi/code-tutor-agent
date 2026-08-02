@@ -298,15 +298,28 @@ def extract_function_signature(starter_code: str) -> str:
 
     Handles nested brackets (e.g. ``List[List[int]]``), default values
     (e.g. ``x: int = 100``), and methods with only ``self``.
+
+    注意：只在 Solution 类中找 def，跳过 ListNode/TreeNode 等辅助类的
+    def __init__，避免把 val=0,next=None -> None 当成函数签名。
     """
     if not starter_code:
         return ""
 
-    def_match = re.search(r"def\s+(\w+)\s*\(", starter_code)
+    # 找到 Solution 类中的第一个 def（跳过 ListNode/TreeNode 等辅助类的 __init__）
+    def_match = None
+    for m in re.finditer(r"class Solution:\s*\n(.*?)(?=\n\S|\Z)", starter_code, re.DOTALL):
+        solution_body = m.group(1)
+        def_match = re.search(r"def\s+(\w+)\s*\(", solution_body)
+        if def_match:
+            # 计算在原始代码中的偏移
+            offset = m.start(1)
+            break
     if not def_match:
         return ""
 
-    paren_start = def_match.end() - 1
+    # def_match 在 solution_body 中找到，偏移到原始代码
+    paren_start = offset + def_match.end() - 1
+    i = paren_start
 
     # Find matching closing paren (handles nested brackets like List[int])
     depth = 0

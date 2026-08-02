@@ -66,6 +66,18 @@ class Node:
 
 # ── 复刻 struct_convert.HARNESS_STRUCT_SRC（与判题器逐字一致） ──
 HARNESS_STRUCT_SRC = r'''
+def _cta_find_node_by_value(root, val):
+    """在树中按值查找节点（DFS），用于 p、q 等节点引用参数。"""
+    if not root:
+        return None
+    if root.val == val:
+        return root
+    left = _cta_find_node_by_value(root.left, val)
+    if left:
+        return left
+    return _cta_find_node_by_value(root.right, val)
+
+
 def _cta_ll_from_list(vals):
     if vals is None:
         return None
@@ -217,10 +229,22 @@ if not public:
 method_name, method_fn = public[0]
 
 for idx, tc in enumerate(test_cases):
-    args = [
-        _cta_coerce_arg(_eval_arg(a), _param_types[i] if i < len(_param_types) else "")
-        for i, a in enumerate(tc['input_args'])
-    ]
+    args = []
+    _cta_first_tree = None
+    for i, a in enumerate(tc['input_args']):
+        _t = _param_types[i] if i < len(_param_types) else ""
+        _raw = _eval_arg(a)
+        if "TreeNode" in _t.replace("Optional[", "").rstrip("]"):
+            if isinstance(_raw, list):
+                _val = _cta_tree_from_list(_raw)
+                if _cta_first_tree is None:
+                    _cta_first_tree = _val
+                args.append(_val)
+            else:
+                _val = _cta_find_node_by_value(_cta_first_tree, _raw) if _cta_first_tree else None
+                args.append(_val)
+        else:
+            args.append(_cta_coerce_arg(_raw, _t))
     expected = tc['expected_output']
     start = time.perf_counter()
     try:
