@@ -108,6 +108,8 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
             logger.info("R04: user frustration detected")
 
     # ── 4. 通用 update（换题清理） ──
+    # 注意：next_preference 不在此处清——ABANDON 分支 goto planner_node，
+    # planner 需要读取它选下一题（由 planner 消费后自行置 None）。
     updates = {
         "problem_history": new_history,
         "total_problems": state.total_problems + 1,
@@ -118,7 +120,6 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
         "turns_in_level": 0,
         "last_router_decision": None,
         "pending_abandon": False,
-        "next_preference": None,
         "phase": SessionPhase.done,
     }
 
@@ -143,7 +144,6 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
                 "turns_in_level": 0,
                 "last_router_decision": None,
                 "pending_abandon": False,
-                "next_preference": None,
                 "phase": SessionPhase.done,
             })
         return Command(goto="planner_node", update=updates)

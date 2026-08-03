@@ -199,8 +199,11 @@ export function useSession() {
   const handleNext = useCallback(async () => {
     if (nextProblemLoading) return;
 
-    // Agent 模式「放弃 / 下一题」：重入导师对话（保留历史、隐藏题目/代码栏，不出新题）
+    // 「放弃 / 下一题 / 继续出题」：重入导师对话（保留历史、隐藏题目/代码栏，不出新题）。
+    // 2026-08-04：题库（practice）入口也统一走对话式选题，切到 agent 模式，
+    // 否则 isDialogPhase（依赖 mode==='agent'）为 false，对话界面渲染不出来。
     const applyAgentReenter = (data: any) => {
+      setMode('agent');
       setProblem(null);
       setPhase('dialog');
       setEditorCode('');
@@ -214,7 +217,8 @@ export function useSession() {
       setActiveTabs({ left: 'agent-history', right: 'code' });
     };
 
-    const callNextProblem = async (preference: string = 'next_in_plan') => {
+    // 2026-08-04：换题统一走「对话式选题」——先与导师沟通再定题，不再直接出题。
+    const callNextProblem = async (preference: string = 'continue_dialog') => {
       setNextProblemLoading(true);
       setProgressMsgs(['正在准备下一题…']);
       // 用 SSE 实时收进度（替代 setInterval 轮询）；POST 返回的 data 才是权威结果
@@ -261,34 +265,24 @@ export function useSession() {
       setNextProblemLoading(false);
     };
 
-    // AC → 已完成：agent 模式重入出题对话，其余模式直接出下一题（不再显示"放弃这题"）
+    // AC → 已完成：统一重入出题对话（先沟通后出题），不再按模式直接出题
     if (latestVerdict === 'AC' && sessionId) {
-      if (mode === 'agent') {
-        setMode('agent');
-        await callNextProblem('continue_dialog');
-      } else {
-        await callNextProblem('next_in_plan');
-      }
+      await callNextProblem('continue_dialog');
       return;
     }
 
     // solving → 放弃确认
     if (phase === 'solving' && sessionId) {
       const ok = window.confirm('当前代码还没提交，确定放弃这题去下一题？');
-      if (ok) { await callNextProblem(); }
+      if (ok) { await callNextProblem('continue_dialog'); }
       return;
     }
 
-    // 非 AC 且已提交（如 WA 后后端置 phase=done）→ 放弃本题并出下一题，
+    // 非 AC 且已提交（如 WA 后后端置 phase=done）→ 放弃本题、重入对话选下一题，
     // 不要回主页。原默认分支会直接 setScreen('welcome')，导致「换一题」把用户踢回首页
     // 且全程无后端请求（日志无变化）。
     if (sessionId && phase !== 'dialog') {
-      if (mode === 'agent') {
-        setMode('agent');
-        await callNextProblem('continue_dialog');
-      } else {
-        await callNextProblem();
-      }
+      await callNextProblem('continue_dialog');
       return;
     }
 

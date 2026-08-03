@@ -694,34 +694,30 @@ async def next_problem(sid: str, body: NextProblemReq):
             tutor_messages=[_ser(m) for m in history],
         )
 
-    # ── Normal modes: critic flush → planner → generator (existing flow) ──
-    # 1. Check if current problem has a terminal verdict
-    has_terminal = (
-        vals.get("last_verdict") in ("AC", "WA")
-        and vals.get("judge_report") is not None
-    )
-    # 放弃并出下一题的判定：
-    #  - 未提交（phase=solving）或 WA 之后（last_verdict 为非 AC 终态，critic 会置 phase=done）
-    #    → 用户点「换一题 / 放弃这题」应生成新题；
-    #  - AC 后点「继续出题」走 re-submit（沿用同一题）路径，不在此分支（last_verdict=AC 被排除）。
-    need_abandon = (not has_terminal and vals.get("phase") in ("solving", "reviewing")) or (
-        vals.get("last_verdict") not in (None, "AC")
-    )
+    # ── Normal modes: critic flush → planner → generator ──
+    # 2026-08-04 修复：旧实现用 update_state(as_node="critic_node") + invoke(None)，
+    # 但 graph 此刻停在 wait_for_submit 的 interrupt 上——暂停期 update_state 会丢失
+    # 挂起的中断，且 critic_node 根本不会运行，导致永远不出新题（原样返回旧题）。
+    # 新实现：以 abandon 载荷 resume 该 interrupt，wait_for_submit_node 携带
+    # pending_abandon/next_preference，wait_for_submit_router 路由到 critic_node，
+    # 走 critic(ABANDON) → planner → generator → wait 完成换题。
 
-    # 2. Set up progress messages (frontend polls /state during generation)
+    # Set up progress messages (frontend polls /state during generation)
     from code_tutor_agent.progress import _generation_progress
     _generation_progress[sid] = ["正在准备下一题…"]
 
-    # 3. Patch trigger flags (as_node routes next invoke into critic_node)
-    graph.update_state(config, {
-        "pending_abandon": need_abandon,
-        "next_preference": body.preference,
-    }, as_node="critic_node")
+    if "wait_for_submit_node" not in (state.next or ()):
+        logger.warning("next-problem: session %s not paused at wait_for_submit (next=%s)",
+                       sid, state.next)
+        raise HTTPException(409, "当前会话不在等待提交状态，无法换题")
 
-    # 4. Invoke — generator self-verify is sync, run in threadpool
-    await asyncio.to_thread(graph.invoke, None, config)
+    await asyncio.to_thread(
+        graph.invoke,
+        Command(resume={"abandon": True, "preference": body.preference}),
+        config,
+    )
 
-    # 5. Read new state
+    # Read new state
     new_state = graph.get_state(config)
     new_vals = new_state.values
 

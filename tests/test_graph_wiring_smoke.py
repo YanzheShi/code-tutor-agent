@@ -14,6 +14,11 @@
 这些只有「编译整张图」或「直接跑节点看它返回什么路由」才拦得住。
 ``compile_graph()`` 只在服务启动跑一次，所以函数层改动不会触发——本文件补上这条防线。
 
+2026-08-04 更新：经 scripts/verify_command_edge_conflict.py 实测确认，langgraph 1.2.7
+中 Command(goto) **不会覆盖**静态边（两者同时生效）。据此移除了
+judge→tutor_router / agent_judge→agent_tutor / update_profile→critic 三条静态边，
+update_profile_node 改为统一返回 Command(goto="critic_node")，相应测试见下方。
+
 运行:  uv run pytest tests/test_graph_wiring_smoke.py -q
 """
 from __future__ import annotations
@@ -67,8 +72,8 @@ def test_graph_compiles():
 def test_all_nodes_importable():
     """逐一 import 每个 node / profile 模块，确保顶层 import 路径正确。
 
-    profile.node 在 agent 分支里用 *延迟* import Command，靠本测试覆盖不到，
-    因此单独用 test_update_profile_node_agent_returns_command_goto_agent_tutor 验证。
+    profile.node 的 Command 路由（两种模式都 goto critic_node）由
+    test_update_profile_node_routes_to_critic 验证。
     """
     import importlib
 
@@ -91,28 +96,29 @@ def test_all_nodes_importable():
         importlib.import_module(mod)
 
 
-def test_update_profile_node_normal_returns_empty_dict():
-    """常规模式：不应返回 Command，交 graph.py 静态边去 critic_node。
+def test_update_profile_node_routes_to_critic():
+    """两种模式统一返回 Command(goto="critic_node")。
 
-    回归点：曾误写 ``Command(goto="critic_node")``，与静态边冲突。
+    回归点（2026-08-04）：langgraph 1.2.7 中 Command(goto) 不会覆盖静态边，
+    原「静态边 → critic_node + agent 模式 Command(goto=agent_tutor_node)」组合
+    导致 critic 与 agent_tutor 并行双执行。静态边已移除，路由统一走 Command。
+    同时覆盖 ``from langgraph.types import Command`` 的正确导入路径。
     """
-    state = _make_state("practice")
+    for mode in ("practice", "agent"):
+        state = _make_state(mode)
+        result = _invoke_update_profile(state)
+        assert isinstance(result, Command), f"{mode} 模式应返回 Command，实际: {result!r}"
+        assert result.goto == "critic_node", (
+            f"{mode} 模式应路由到 critic_node，实际 goto={getattr(result, 'goto', None)!r}"
+        )
+
+
+def test_update_profile_node_routes_even_without_delta():
+    """profile_delta 为空时跳过写库，但仍必须路由到 critic_node（链路不断）。"""
+    state = SessionState(session_id="smoke-session", mode="practice")
     result = _invoke_update_profile(state)
-    assert result == {}, f"normal mode 应返回 {{}} 交给静态边，实际: {result!r}"
-
-
-def test_update_profile_node_agent_returns_command_goto_agent_tutor():
-    """agent 模式：必须显式 Command(goto="agent_tutor_node") 覆盖静态边。
-
-    本测试同时覆盖了 ``from langgraph.types import Command`` 的正确导入路径——
-    若改回 ``langgraph.graph``，这里会 ImportError 直接失败。
-    """
-    state = _make_state("agent")
-    result = _invoke_update_profile(state)
-    assert isinstance(result, Command), f"agent 模式应返回 Command，实际: {result!r}"
-    assert result.goto == "agent_tutor_node", (
-        f"agent 模式应路由到 agent_tutor_node，实际 goto={getattr(result, 'goto', None)!r}"
-    )
+    assert isinstance(result, Command)
+    assert result.goto == "critic_node"
 
 
 def test_session_phase_dialog_exists():

@@ -7,6 +7,11 @@ Routes:
     CONTINUE / ESCALATE → tutor_reply (LLM generate hint)
     RESOLVED           → wait_for_submit_node (back to coding)
     CLARIFY_REQ        → clarify_node (V0.2+)
+
+注意（2026-08-04）：图中当前**没有**指向本节点的入边。原静态边
+judge_node → tutor_router_node 与 judge_node 返回的 Command(goto="tutor_node")
+冲突（langgraph 1.2.7 二者同时生效），导致每次提交 tutor 双跑，已移除。
+D4 微循环（CONTINUE/ESCALATE/RESOLVED）保留本实现，待后续接线。
 """
 
 from __future__ import annotations

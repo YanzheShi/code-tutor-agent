@@ -43,6 +43,20 @@ def wait_for_submit_node(state: SessionState) -> dict:
     # ── Pause here — resume value comes from Command(resume=...) ──
     resume_data = interrupt(payload)
 
+    # ── 换题（abandon）路径：/next-problem 以 {"abandon": True, "preference": ...}
+    #    恢复本中断。不产生提交，只携带放弃标记与选题偏好，由
+    #    wait_for_submit_router 路由到 critic_node 完成换题。
+    #    （历史上 /next-problem 用 update_state(as_node="critic_node")+invoke(None)
+    #      在暂停期写状态，中断会丢失且 critic 不会真正运行 → 永远不出新题，
+    #      2026-08-04 改为经 resume 通道传递。）──
+    if isinstance(resume_data, dict) and resume_data.get("abandon"):
+        logger.info("Resumed with abandon flag → pending_abandon=True, preference=%s",
+                    resume_data.get("preference"))
+        return {
+            "pending_abandon": True,
+            "next_preference": resume_data.get("preference"),
+        }
+
     # ── Extract user code from resumed data ──
     code = ""
     language = "python"

@@ -387,12 +387,14 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         if not full:
             yield f"data: {reply}\n\n"
 
-        # 手动保存到 state
+        # 手动保存到 state（暂停安全写入：直接 update_state 会丢失
+        # wait_for_submit 的挂起中断，见 deps.pause_safe_update）
         tutor_msgs = list(values.get("tutor_messages", []))
         tutor_msgs.append({"role": "user", "content": message})
         tutor_msgs.append({"role": "tutor", "content": reply})
         try:
-            graph.update_state(config, {"tutor_messages": tutor_msgs})
+            from code_tutor_agent.api.deps import pause_safe_update
+            pause_safe_update(graph, config, {"tutor_messages": tutor_msgs})
         except Exception as exc:
             logger.warning("Failed to save chat: %s", exc)
         yield "data: __DONE__\n\n"
@@ -599,6 +601,11 @@ async def chat_with_tutor(sid: str, body: dict, background_tasks: BackgroundTask
     current_msgs = list(values.get("tutor_messages", []))
     current_msgs.append({"role": "user", "content": message})
     current_msgs.append({"role": "tutor", "content": reply})
-    graph.update_state(config, {"tutor_messages": current_msgs})
+    try:
+        # 暂停安全写入（同上）：避免丢失 wait_for_submit 的挂起中断
+        from code_tutor_agent.api.deps import pause_safe_update
+        pause_safe_update(graph, config, {"tutor_messages": current_msgs})
+    except Exception as exc:
+        logger.warning("Failed to save chat: %s", exc)
 
     return {"response": reply}

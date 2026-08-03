@@ -109,9 +109,14 @@ class TestAgentJudgeNode:
 
             result = agent_judge_node(state)
 
-            assert result.goto == "agent_tutor_node"
+            # AC 路由：update_profile_node → critic_node（写画像 + flush 历史 + 暂停）。
+            # 旧断言 goto=agent_tutor_node 是静态边时代的残留（该静态边与 Command
+            # 冲突导致双执行，已于 2026-08-04 移除）。
+            assert result.goto == "update_profile_node"
             assert result.update["last_verdict"] == "AC"
             assert result.update["judge_cycle"] == 1
+            assert result.update["status"] == "done"
+            assert result.update["profile_delta"]["outcome"] == "AC"
             assert "恭喜" in result.update["warm_feedback"]
 
     def test_wa_path(self):

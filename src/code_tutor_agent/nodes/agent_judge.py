@@ -127,10 +127,11 @@ def agent_judge_node(state: SessionState) -> Command:
             runtime_ms=sum(r.runtime_ms for r in raw_results),
         )
     # Append to last submission's judge_results
-    updated_submissions = list(state.submissions)
-    if updated_submissions:
-        updated_submissions[-1] = updated_submissions[-1].model_copy(deep=True)
-        updated_submissions[-1].judge_results.append(base_result)
+    # 注意：submissions 通道是 operator.add reducer——若把完整列表放进 update 返回，
+    # reducer 会把整个列表再追加一遍 → 每次判题提交数翻倍（2026-08-04 E2E 实测发现）。
+    # 与 judge.py 一致改为原地 append（checkpointer 在步末按通道当前值落库）。
+    if state.submissions:
+        state.submissions[-1].judge_results.append(base_result)
 
     # ── LLM analysis of raw results（verdict 以执行引擎客观结果为准） ──
     description = problem_dict.description
@@ -152,6 +153,8 @@ def agent_judge_node(state: SessionState) -> Command:
         feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
 
     # ── Update state ──
+    # 注意：不返回 "submissions" —— 该通道是 operator.add reducer，返回完整列表
+    # 会把整个列表再追加一遍导致提交数翻倍；judge_results 已在上方原地 append。
     update = {
         "last_verdict": analysis.verdict,
         "warm_feedback": analysis.warm_feedback,
@@ -159,7 +162,6 @@ def agent_judge_node(state: SessionState) -> Command:
         "judge_cycle": state.judge_cycle + 1,
         "tutor_messages": state.tutor_messages
         + [{"role": "tutor", "content": feedback_msg}],
-        "submissions": updated_submissions,
     }
 
     # ── 兼容旧版 v1 全局画像（综合熟练度/做题数等顶部指标，每次判题都更新） ──
@@ -181,8 +183,12 @@ def agent_judge_node(state: SessionState) -> Command:
             "outcome": analysis.verdict,
             "fingerprints": [],
         }
-        logger.info("AC — routing to update_profile_node → agent_tutor_node")
-        update["status"] = "tutoring"
+        # AC 收尾状态在这里一次写齐：后续链路为 update_profile_node → critic_node
+        # （AC 分支：flush problem_history + phase=reviewing + 暂停在 wait_for_submit）。
+        # agent_tutor_node 不再参与 AC 路径（原静态边 agent_judge→agent_tutor 与
+        # Command 冲突导致双执行，已于 2026-08-04 移除），status="done" 由此处负责。
+        update["status"] = "done"
+        logger.info("AC — routing to update_profile_node → critic_node")
         return Command(update=update, goto="update_profile_node")
 
     # ── WA：直接回 agent_tutor_node 给重试指导（不写画像） ──

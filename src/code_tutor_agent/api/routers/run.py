@@ -89,7 +89,10 @@ async def run_code(sid: str, body: RunCodeRequest):
         })
 
     try:
-        graph.update_state(config, {"last_run_results": run_results})
+        # 暂停安全写入：直接 update_state 会丢失 wait_for_submit 的挂起中断，
+        # 导致后续 /submit 的 resume 空转（见 deps.pause_safe_update）。
+        from code_tutor_agent.api.deps import pause_safe_update
+        pause_safe_update(graph, config, {"last_run_results": run_results})
     except Exception as exc:
         logger.warning("Failed to persist run results: %s", exc)
 

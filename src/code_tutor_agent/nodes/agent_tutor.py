@@ -4,10 +4,12 @@
 温暖反馈和修复建议已经在判题节点中由 LLM 生成好了；
 本节点只负责路由决策。
 
-节点流转：
-    agent_judge_node → agent_tutor_node
-        ├── AC → planner_node（下一题）
+节点流转（2026-08-04 起）：
+    agent_judge_node ──Command──┬── AC → update_profile_node → critic_node
+                                └── WA → agent_tutor_node
+        agent_tutor_node:
         └── WA → wait_for_submit_node（继续修改）
+    AC 分支保留但正常不可达（AC 收尾改由 critic_node AC 分支完成），仅作兜底。
 """
 
 from __future__ import annotations

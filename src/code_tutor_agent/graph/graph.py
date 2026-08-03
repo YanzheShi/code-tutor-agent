@@ -70,38 +70,41 @@ def _build_graph() -> StateGraph:
         logger.info("start_router → normal mode, goto=planner_node")
         return "planner_node"
 
-    def planner_router(state: SessionState) -> str:
-        if state.problem:
-            return "wait_for_submit_node"
-        return "generator_node"
-
     def wait_for_submit_router(state: SessionState) -> str:
+        # 换题路径：wait 收到 abandon resume 载荷后置 pending_abandon=True，
+        # 直接进 critic_node 走 flush+planner+generator 换题（不产生提交、不判题）。
+        if state.pending_abandon:
+            logger.info("wait_for_submit_router → pending_abandon, goto=critic_node")
+            return "critic_node"
         if state.mode == "agent":
             return "agent_judge_node"
         return "judge_node"
 
     # ── Edges ──
+    # 连线原则（langgraph 1.2.7 语义，scripts/verify_command_edge_conflict.py 实测）：
+    # 节点返回 Command(goto=...) 时，静态边**不会**被覆盖——两者同时生效，
+    # 目标不同时两个目标节点都会执行。因此返回 Command 的节点一律不加静态出边。
+    # 历史上 judge→tutor_router / agent_judge→agent_tutor / update_profile→critic
+    # 三处「静态边 + Command」曾导致双节点执行（2026-08-04 移除）。
     builder.add_conditional_edges("__start__", start_router)
-    builder.add_conditional_edges("planner_node", planner_router)
-    builder.add_edge("generator_node", "wait_for_submit_node")
     builder.add_conditional_edges("wait_for_submit_node", wait_for_submit_router)
 
-    # Judge → tutor_router (WA 路径经过 L0-L4 决策)
-    builder.add_edge("judge_node", "tutor_router_node")
+    # 以下节点全部经 Command(goto=...) 动态路由，无静态边：
+    #   planner_node            → generator_node | wait_for_submit_node
+    #   generator_node          → wait_for_submit_node
+    #   judge_node              → tutor_node
+    #   tutor_node              → constitutional_guard_node | update_profile_node
+    #   constitutional_guard_node → wait_for_submit_node
+    #   update_profile_node     → critic_node
+    #   critic_node             → wait_for_submit_node | planner_node
+    #   agent_judge_node        → update_profile_node(AC) | agent_tutor_node(WA)
+    #   agent_tutor_node        → wait_for_submit_node(WA) | __end__(AC 兜底，正常不可达)
+    # wait_for_submit_node 的条件路由（wait_for_submit_router）：
+    #   pending_abandon → critic_node（换题）| agent → agent_judge_node | judge_node
+    # 注：tutor_router_node 已注册但当前无入边（原 judge→tutor_router 静态边与
+    # judge 的 Command(goto=tutor_node) 冲突导致 tutor 双跑，已移除），保留备用。
 
-    # tutor_router → tutor_node (CONTINUE/ESCALATE) 或 wait_for_submit (RESOLVED)
-    # 由 tutor_router_node 的 Command(goto=...) 动态路由
-
-    # tutor_node (WA 路径) → constitutional_guard_node → wait_for_submit_node（重新暂停等提交）
-    # tutor_node (AC 路径) → update_profile_node（由 tutor_node 的 Command 动态路由）
-    # 注意：constitutional_guard_node 通过 Command(goto="wait_for_submit_node") 动态路由，
-    # 不需要静态边（否则会与静态边冲突，导致两个节点都执行）。
-    builder.add_edge("update_profile_node", "critic_node")
-    # critic_node 动态路由：AC/ABANDON → planner, WA → wait_for_submit
-
-    builder.add_edge("agent_judge_node", "agent_tutor_node")
-    # agent_tutor_node 动态路由：AC → planner, WA → wait_for_submit
-    # chat_node 回到 END（checkpointer 自动保存状态）
+    # chat_node 返回普通 dict，走静态边回 END（checkpointer 自动保存状态）
     builder.add_edge("chat_node", END)
 
     return builder

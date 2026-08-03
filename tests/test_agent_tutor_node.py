@@ -1,7 +1,7 @@
 """Tests for the Agent Tutor node — routing after LLM-driven judging.
 
 Coverage:
-    1. AC verdict → status=done, goto=planner_node
+    1. AC verdict → status=done, phase=reviewing, goto=__end__（兜底分支，正常不可达）
     2. WA verdict → status=awaiting_submit, goto=wait_for_submit_node
     3. RE/TLE verdict → same as WA (loop back)
     4. Empty verdict → loop back (safe default)
@@ -30,13 +30,16 @@ def _make_state(verdict: str = "", cycle: int = 1) -> SessionState:
 class TestAgentTutorNode:
     """Verify routing decisions based on verdict."""
 
-    def test_ac_routes_to_planner(self):
-        """AC → status=done, goto=planner_node."""
+    def test_ac_branch_defensive_ends(self):
+        """AC 分支：正常流程不可达（AC 收尾由 agent_judge → update_profile →
+        critic 的 AC 分支完成，原静态边双执行冲突已于 2026-08-04 修复），
+        仅作兜底：status=done, phase=reviewing, goto=__end__。"""
         state = _make_state(verdict="AC", cycle=2)
         result = agent_tutor_node(state)
 
-        assert result.goto == "planner_node"
+        assert result.goto == "__end__"
         assert result.update["status"] == "done"
+        assert result.update["phase"] == "reviewing"
 
     def test_wa_routes_to_wait_for_submit(self):
         """WA → status=awaiting_submit, goto=wait_for_submit_node."""
