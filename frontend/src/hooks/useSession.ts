@@ -158,7 +158,7 @@ export function useSession() {
       const passed = resp.results?.filter((r: any) => r.passed).length ?? 0;
       const total = resp.results?.length ?? 0;
       setTutorMessages(prev => [...prev, { role: 'user', content: `运行结果：${passed}/${total} 通过` }, { role: 'tutor', content: '' }]);
-      await readStream(sid, `我运行了代码，结果：${passed}/${total} 通过。\n\`\`\`\n${code.slice(0, 500)}\n\`\`\`\n请帮我分析一下。`, (token) => {
+      await readStream(sid, `我运行了代码，结果：${passed}/${total} 通过。\n\`\`\`\n${code}\n\`\`\`\n请帮我分析一下。`, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
       });
       setActiveTabs(prev => ({ ...prev, right: 'tutor' }));

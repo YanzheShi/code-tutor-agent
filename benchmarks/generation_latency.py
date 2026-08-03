@@ -53,7 +53,7 @@ SRC_ROOT = Path(__file__).parent.parent / "code_tutor_agent"
 import sys
 sys.path.insert(0, str(SRC_ROOT.parent))
 
-from code_tutor_agent.agents.problem_generator import generate_problem
+from code_tutor_agent.agents.agent_problem import generate_problem
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
