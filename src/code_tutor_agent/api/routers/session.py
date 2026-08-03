@@ -700,7 +700,13 @@ async def next_problem(sid: str, body: NextProblemReq):
         vals.get("last_verdict") in ("AC", "WA")
         and vals.get("judge_report") is not None
     )
-    need_abandon = not has_terminal and vals.get("phase") in ("solving", "reviewing")
+    # 放弃并出下一题的判定：
+    #  - 未提交（phase=solving）或 WA 之后（last_verdict 为非 AC 终态，critic 会置 phase=done）
+    #    → 用户点「换一题 / 放弃这题」应生成新题；
+    #  - AC 后点「继续出题」走 re-submit（沿用同一题）路径，不在此分支（last_verdict=AC 被排除）。
+    need_abandon = (not has_terminal and vals.get("phase") in ("solving", "reviewing")) or (
+        vals.get("last_verdict") not in (None, "AC")
+    )
 
     # 2. Set up progress messages (frontend polls /state during generation)
     from code_tutor_agent.progress import _generation_progress

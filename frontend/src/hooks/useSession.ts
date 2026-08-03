@@ -279,7 +279,20 @@ export function useSession() {
       return;
     }
 
-    // 默认：新会话（回 welcome）
+    // 非 AC 且已提交（如 WA 后后端置 phase=done）→ 放弃本题并出下一题，
+    // 不要回主页。原默认分支会直接 setScreen('welcome')，导致「换一题」把用户踢回首页
+    // 且全程无后端请求（日志无变化）。
+    if (sessionId && phase !== 'dialog') {
+      if (mode === 'agent') {
+        setMode('agent');
+        await callNextProblem('continue_dialog');
+      } else {
+        await callNextProblem();
+      }
+      return;
+    }
+
+    // 其余（dialog 阶段的「← 返回」等）→ 回主页
     setScreen('welcome'); setSessionId(null); setProblem(null); setEditorCode('');
     setTutorMessages([]); setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
     setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');

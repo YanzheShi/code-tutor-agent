@@ -11,7 +11,7 @@ import sys
 import time
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 
 
@@ -37,7 +37,8 @@ class JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         log_entry: dict[str, Any] = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            # 使用北京时间（UTC+8）输出日志时间戳，避免与本地时间相差 8 小时
+            "timestamp": datetime.now(timezone(timedelta(hours=8))).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
