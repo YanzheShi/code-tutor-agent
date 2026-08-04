@@ -60,7 +60,20 @@ def update_profile_node(
         user_id = config.get("configurable", {}).get("user_id", DEFAULT_USER_ID)
 
         item = store.get(STORE_NS, user_id)
-        profile: UserProfile = item.value if item else _empty_profile()
+        if item:
+            profile: UserProfile = item.value
+        else:
+            # InMemoryStore 为空（服务器重启后），从 SQLite 兜底恢复
+            profile = _empty_profile()
+            try:
+                from code_tutor_agent.db.database import get_user_profile_v2
+                sqlite_profile = get_user_profile_v2()
+                if sqlite_profile.get("prof"):
+                    profile = sqlite_profile
+                    store.put(STORE_NS, user_id, profile)
+                    logger.info("Profile restored from SQLite after restart")
+            except Exception:
+                pass
 
         updated = apply_delta(
             profile=profile,
