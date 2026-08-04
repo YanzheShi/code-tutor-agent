@@ -18,6 +18,7 @@ from typing import Literal
 
 from langgraph.types import Command
 
+from code_tutor_agent.memory import schedule_extraction
 from code_tutor_agent.schemas.state import (
     ProblemAttemptRecord,
     SessionPhase,
@@ -66,6 +67,17 @@ def _build_record(state: SessionState, verdict: str) -> ProblemAttemptRecord:
         diagnosis=state.last_diagnosis,
         abandoned=(verdict == "ABANDON"),
     )
+
+
+def _maybe_extract(state: SessionState) -> None:
+    """Episode 终结 → 异步语义记忆抽取(见 docs/agent-memory-design.md)。
+
+    只在「新 episode 真正终结」的非去重分支调用;调度本身失败也绝不影响主流程。
+    """
+    try:
+        schedule_extraction(state)
+    except Exception as exc:
+        logger.warning("memory extraction scheduling failed (non-fatal): %s", exc)
 
 
 def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", "planner_node"]]:
@@ -142,6 +154,7 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
                 "pending_abandon": False,
                 "phase": SessionPhase.done,
             })
+        _maybe_extract(state)  # 新 episode 终结(ABANDON)→ 异步记忆抽取
         return Command(goto="planner_node", update=updates)
     elif verdict == "AC":
         logger.info("critic_node → goto=wait_for_submit_node (verdict=AC, 重新暂停等待重提交)")
@@ -168,6 +181,7 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
                 "pending_abandon": False,
                 "next_preference": None,
             }
+            _maybe_extract(state)  # 新 episode 终结(AC)→ 异步记忆抽取
         return Command(goto="wait_for_submit_node", update=ac_update)
     else:
         logger.info("critic_node → goto=wait_for_submit_node (verdict=%s)", verdict)

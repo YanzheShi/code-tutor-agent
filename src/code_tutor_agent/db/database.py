@@ -690,3 +690,40 @@ def get_user_profile_v2(user_id: str = "default_v2") -> dict:
             profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 0.0})
         profile["tag_names"] = TAG_DISPLAY
         return profile
+
+
+# ── Agent memory(语义抽取式用户记忆,复用 profiles 表)──
+
+MEMORY_USER_ID = "__memory__"
+
+
+def get_user_memory(user_id: str = MEMORY_USER_ID) -> dict:
+    """读取用户记忆 JSON。读不到 / 解析失败 → 返回空记忆,不抛错。"""
+    import json as _json
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
+        ).fetchone())
+        if not row:
+            return {}
+        data = _json.loads(row["profile_json"])
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.error("get_user_memory(%s) failed: %s", user_id, exc)
+        return {}
+
+
+def save_user_memory(memory: dict, user_id: str = MEMORY_USER_ID) -> None:
+    """保存用户记忆 JSON(upsert)。失败只记日志,不抛错——记忆不允许影响主流程。"""
+    import json as _json
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            (user_id, _json.dumps(memory, ensure_ascii=False)),
+        ))
+        logger.info("save_user_memory(%s) — behavior=%d, observations=%d",
+                    user_id, len(memory.get("behavior", [])), len(memory.get("observations", [])))
+    except Exception as exc:
+        logger.warning("save_user_memory(%s) failed: %s", user_id, exc)

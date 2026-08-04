@@ -54,6 +54,9 @@ PURPOSE_CONFIGS = {
     # === 上下文管理 ===
     "context-summary":      {"alias": "default", "temperature": 0.3},
 
+    # === Agent memory(语义抽取式用户记忆,见 docs/agent-memory-design.md)===
+    "memory-extract":       {"alias": "default", "temperature": 0.1},
+
     # === API 路由 ===
     "api-generation":       {"alias": "default", "temperature": 0.3},
     "api-generation-high":  {"alias": "default", "temperature": 0.5},

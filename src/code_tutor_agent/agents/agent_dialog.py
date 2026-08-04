@@ -229,6 +229,21 @@ def _build_profile_summary() -> str:
     return "\n".join(parts)
 
 
+def _build_memory_summary() -> str:
+    """加载跨会话语义记忆(偏好/行为习惯),渲染为注入块。
+
+    与 _build_profile_summary 互补:画像=规则统计的定量层,
+    记忆=LLM 语义抽取的定性层(见 docs/agent-memory-design.md)。
+    无记忆/加载失败 → 空串,不影响对话。
+    """
+    try:
+        from code_tutor_agent.memory import render_memory_summary
+        return render_memory_summary()
+    except Exception:
+        logger.debug("Cannot render memory summary")
+        return ""
+
+
 def _to_msg_dict(msg) -> dict:
     """Normalize a Message object or plain dict into a consistent dict with 'role' and 'content'."""
     if isinstance(msg, dict):
@@ -421,10 +436,12 @@ async def analyze_user_intent(
 
     transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
+    memory_summary = _build_memory_summary()
     system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
     user_prompt = (
         f"## 对话历史\n\n{transcript}\n\n"
         + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
+        + (f"{memory_summary}\n\n" if memory_summary else "")
         + "请分析用户的意图。"
     )
 
@@ -560,12 +577,14 @@ async def stream_dialog_response(
     """
     transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
+    memory_summary = _build_memory_summary()
 
     # 构建自然对话 prompt（不输出 JSON）
     system = CHAT_STREAM_SYSTEM.format(profile_section=profile_summary or "")
     user_prompt = (
         f"## 对话历史\n\n{transcript}\n\n"
         + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
+        + (f"{memory_summary}\n\n" if memory_summary else "")
         + f"## 当前消息\n{history[-1].content if history else ''}\n\n请回复。"
     )
 
