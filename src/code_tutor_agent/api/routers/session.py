@@ -294,14 +294,19 @@ async def submit_code(sid: str, body: SubmitRequest):
 
     logger.info("POST /session/%s/submit → code=%d chars", sid, len(body.code))
 
-    with collect_runs() as runs:
-        graph.invoke(
-            Command(resume={"code": body.code, "language": body.language}),
-            config,
-        )
-        # collect_runs() 返回 RunCollectorCallbackHandler，需用 .traced_runs 取 run 列表
-        traced = runs.traced_runs if runs else []
-        run_id = traced[-1].id if traced else None
+    def _do_judge() -> str | None:
+        # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，
+        # 避免独占事件循环、拖垮同进程的其它请求与 SSE 推流。
+        with collect_runs() as runs:
+            graph.invoke(
+                Command(resume={"code": body.code, "language": body.language}),
+                config,
+            )
+            # collect_runs() 返回 RunCollectorCallbackHandler，需用 .traced_runs 取 run 列表
+            traced = runs.traced_runs if runs else []
+            return traced[-1].id if traced else None
+
+    run_id = await asyncio.to_thread(_do_judge)
     state = graph.get_state(config)
     values = state.values
 

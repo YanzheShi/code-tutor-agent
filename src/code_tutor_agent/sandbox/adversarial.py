@@ -627,7 +627,11 @@ def run_adversarial_suite(
             validated_cases = []
             for bc in boundary_cases:
                 ref_results = run_solution(ref_code, [bc], timeout=BOUNDARY_TIMEOUT, function_signature=_func_sig)
-                if ref_results and ref_results[0].detail and ref_results[0].status == "Passed":
+                # 边界用例生成时 expected_output 为空 → runner 走「无参考答案」分支，
+                # 参考解跑出的状态是 Skipped（实际输出放在 detail），而不是 Passed。
+                # 旧代码只认 Passed，导致边界用例永远校验失败、边界对抗从不生效。
+                # 参考解崩溃（RE/TLE）时状态不是 Skipped/Passed，依旧会被排除。
+                if ref_results and ref_results[0].detail and ref_results[0].status in ("Passed", "Skipped"):
                     bc["expected_output"] = ref_results[0].detail
                     validated_cases.append(bc)
                 else:

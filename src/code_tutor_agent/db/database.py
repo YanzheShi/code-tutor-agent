@@ -171,16 +171,46 @@ def save_problem(problem_dict: dict) -> int:
         raise
 
 
+def _same_content(existing_row, problem_dict: dict) -> bool:
+    """判断同名题目是否真的是同一道题（比对描述 / 签名 / 模板）。
+
+    只按 title 去重会出问题：LLM 重新出一道同名题时会复用旧 id，
+    造成「展示的题面是新的、判题用的测试用例/参考解却还是旧的」。
+    只有核心内容一致才算重复。
+    """
+    return (
+        (existing_row["description"] or "") == (problem_dict.get("description") or "")
+        and (existing_row["function_signature"] or "") == (problem_dict.get("function_signature") or "")
+        and (existing_row["starter_code"] or "") == (problem_dict.get("starter_code") or "")
+    )
+
+
 def _save_problem(cursor, problem_dict: dict) -> int:
     title = problem_dict.get("title", "")
     if not title:
         raise ValueError("save_problem() requires a 'title'")
 
-    cursor.execute("SELECT id FROM problems WHERE title = ?", (title,))
+    cursor.execute(
+        "SELECT id, description, function_signature, starter_code FROM problems WHERE title = ?",
+        (title,),
+    )
     existing = cursor.fetchone()
     if existing:
-        logger.info("Problem '%s' already exists (id=%d), skipping insert", title, existing["id"])
-        return existing["id"]
+        if _same_content(existing, problem_dict):
+            logger.info("Problem '%s' exists with same content (id=%d), skipping insert",
+                        title, existing["id"])
+            return existing["id"]
+        # 同名但内容不同 → 是另一道题；title 有 UNIQUE 约束，改名后作为新行落库，
+        # 避免复用旧 id 造成题面/用例错位。改名写回 problem_dict，调用方据此展示。
+        base, n = title, 2
+        while True:
+            candidate = f"{base} ({n})"
+            if not cursor.execute("SELECT 1 FROM problems WHERE title = ?", (candidate,)).fetchone():
+                break
+            n += 1
+        logger.info("Problem '%s' exists with DIFFERENT content — inserting as '%s'", title, candidate)
+        title = candidate
+        problem_dict["title"] = candidate
 
     alt = problem_dict.get("alternative_solutions", [])
     if not isinstance(alt, str):

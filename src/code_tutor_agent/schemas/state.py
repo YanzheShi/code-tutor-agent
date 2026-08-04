@@ -267,11 +267,9 @@ class SessionState(BaseModel):
     # ── Error handling ──
     error_message: str = Field(default="", description="Populated when status=error")
 
-    # ── 生成进度（前端轮询显示）──
-    progress_messages: Annotated[list[str], operator.add] = Field(
-        default_factory=list,
-        description="Progress log during generation, e.g. ['正在生成题目…', '自验证通过…']",
-    )
+    # ── 生成进度不放 state：走 api/progress.py 的 `_generation_progress`
+    # （线程安全共享 dict）+ /progress/stream SSE 推送。原 `progress_messages`
+    # 状态字段从无节点写入，2026-08-04 已移除。──
 
     # ── LeetCode import (set when user provides a LC URL) ──
     leetcode: Optional[dict] = Field(
@@ -297,15 +295,8 @@ class SessionState(BaseModel):
         description="Profile delta produced by judge_node, consumed by update_profile_node",
     )
 
-    # ── LangChain message history ──
-    messages: list = Field(
-        default_factory=list,
-        description="LangChain-style message list (HumanMessage, AIMessage). "
-                    "Managed by InMemorySaver checkpointer, not manually.",
-    )
-
     # ── Phase（前端消费态，node 出口写）──
-    # 多个 node（generator / planner / tutor_router / agent_tutor / critic）都会写 phase。
+    # 多个 node（generator / planner / agent_tutor / critic）都会写 phase。
     # 在部分多轮状态下，两个写者会落进 langgraph 的「同一图步」，默认的 last_value
     # 通道会抛 InvalidUpdateError("Can receive only one value per step")。
     # 因此用 reducer：同一步内多写时取最后一个（即最新的当前阶段），语义正确。
@@ -322,20 +313,6 @@ class SessionState(BaseModel):
     total_problems: int = Field(
         default=0, ge=0,
         description="Total problems completed in this session",
-    )
-
-    # ── Tutor micro-loop（D4 才用，先加字段）──
-    turns_in_level: int = Field(
-        default=0, ge=0,
-        description="How many tutor turns at current hint_level",
-    )
-    last_router_decision: Optional[dict] = Field(
-        default=None,
-        description="Last TutorRouterDecision from tutor_router node",
-    )
-    tutor_mode: Literal["normal", "agent"] = Field(
-        default="normal",
-        description="normal = L0-L4 micro-loop; agent = AC复盘单发",
     )
 
     # ── /next-problem 临时信号（消费即清）──

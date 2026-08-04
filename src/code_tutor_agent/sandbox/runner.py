@@ -40,6 +40,18 @@ def _clean_error(stderr: str) -> str:
 TIMEOUT_SECONDS = 10.0      # how long before TLE (per test-case suite)
 HARNESS_TIMEOUT = 2.0       # outer subprocess timeout (includes startup + TLE guard)
 
+# 跑不可信用户代码的子进程只允许携带这些环境变量。
+# 绝不能透传整个 os.environ —— 里面有 LLM_API_KEY 等敏感配置，
+# 用户代码 `import os; print(os.environ)` 就能拖走。
+_SUBPROC_ENV_WHITELIST = ("PATH", "SystemRoot", "SystemDrive", "HOME", "TMPDIR", "TEMP", "TMP")
+
+
+def _build_subprocess_env() -> dict:
+    """构造子进程的最小环境变量（白名单 + 强制 utf-8 IO）。"""
+    env = {k: os.environ[k] for k in _SUBPROC_ENV_WHITELIST if k in os.environ}
+    env["PYTHONIOENCODING"] = "utf-8"
+    return env
+
 
 class RunnerResult:
     """Result of running one solution against one test case."""
@@ -160,7 +172,7 @@ def run_solution(
             capture_output=True,
             text=True,
             timeout=timeout + HARNESS_TIMEOUT,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            env=_build_subprocess_env(),
         )
 
         results: list[RunnerResult] = []

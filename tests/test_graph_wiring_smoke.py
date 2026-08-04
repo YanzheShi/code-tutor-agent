@@ -82,14 +82,12 @@ def test_all_nodes_importable():
         "code_tutor_agent.nodes.judge",
         "code_tutor_agent.nodes.planner",
         "code_tutor_agent.nodes.tutor",
-        "code_tutor_agent.nodes.tutor_router",
         "code_tutor_agent.nodes.critic",
         "code_tutor_agent.nodes.wait_for_submit",
         "code_tutor_agent.profile.node",
         "code_tutor_agent.nodes.agent_dialog",
         "code_tutor_agent.nodes.agent_judge",
         "code_tutor_agent.nodes.agent_tutor",
-        "code_tutor_agent.nodes.chat",
         "code_tutor_agent.nodes.constitutional_guard",
     ]
     for mod in modules:

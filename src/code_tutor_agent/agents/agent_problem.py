@@ -236,6 +236,14 @@ def verify_problem(problem_dict: dict) -> bool:
             sig_line = re.sub(r'^\(self\)', '()', sig_line)
             # 去掉末尾的 :（函数定义行结尾）
             sig_line = sig_line.rstrip(":")
+            # 去掉外层括号，保持统一格式："(nums: List[int]) -> int" → "nums: List[int] -> int"
+            # parse_signature() 的 _PARAM_RE 无法处理外层括号，会把 ) 吞入最后一个参数类型名
+            if '->' in sig_line:
+                _params_part, _return_part = sig_line.split('->', 1)
+                _params_part = _params_part.strip().strip('()').strip()
+                sig_line = f"{_params_part} -> {_return_part.strip()}"
+            else:
+                sig_line = sig_line.strip().strip('()').strip()
             problem_dict["function_signature"] = sig_line
             logger.info("Overrode function_signature from optimal_solution: %s", sig_line[:100])
         else:

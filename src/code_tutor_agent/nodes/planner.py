@@ -28,15 +28,6 @@ _TOPICS_BY_CATEGORY = [
     ("动态规划", "easy"),
 ]
 
-# ── MVP 硬编码主题轮转（无画像 fallback）──
-_TOPIC_QUEUE = [
-    ("two_sum", "数组+哈希表", "easy"),
-    ("sliding_window", "滑动窗口", "medium"),
-    ("linked_list_cycle", "链表", "easy"),
-    ("binary_search", "二分查找", "medium"),
-    ("dp_fib", "动态规划", "easy"),
-]
-
 # ── Tag enum value → 中文 topic（供 same_topic 与 v2 画像选弱 tag 复用）──
 _TAG_TO_TOPIC: dict[str, str] = {
     "array_basics": "数组+哈希表",
