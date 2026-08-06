@@ -1,4 +1,6 @@
 # ── Build stage ──
+# 注意：ghcr.io/astral-sh/uv 镜像在国内 CDN 较慢（~211MB）。
+# 替代方案：把 builder 阶段换成 python:3.12-slim-bookworm + pip install uv。
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm AS builder
 
 WORKDIR /app

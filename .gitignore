@@ -9,8 +9,9 @@ build/
 
 # === 虚拟环境 & 密钥（重中之重）===
 .venv/
-.env
-.env.local
+/.env
+/.env.local
+!docker/.env
 !.env.example
 
 # === Node.js ===

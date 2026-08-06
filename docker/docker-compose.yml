@@ -29,7 +29,8 @@ services:
     container_name: cta-judge0-db
     restart: unless-stopped
     environment:
-      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD:-ct_pg_pwd}
+      POSTGRES_USER: postgres
       POSTGRES_DB: judge0
     volumes:
       - judge0_postgres_data:/var/lib/postgresql/data
@@ -46,13 +47,13 @@ services:
     image: redis:7-alpine
     container_name: cta-judge0-redis
     restart: unless-stopped
-    command: redis-server --requirepass ${JUDGE0_REDIS_PASSWORD} --appendonly yes
+    command: redis-server --requirepass ${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd} --appendonly yes
     volumes:
       - judge0_redis_data:/data
     networks:
       - cta-network
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${JUDGE0_REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -70,7 +71,11 @@ services:
     ports:
       - "2358:2358"  # 暴露端口，Windows镜像模式下可通过localhost:2358访问
     environment:
-      # 数据库配置
+      # 数据库配置（judge0 连接的是另一个容器，需指定主机名）
+      POSTGRES_HOST: judge0-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: judge0
+      POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD:-ct_pg_pwd}
       REDIS_PASSWORD: ${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd}
       # 资源限制（核心！对齐你的判题需求）
@@ -84,7 +89,7 @@ services:
     networks:
       - cta-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:2358/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:2358/"]
       interval: 30s
       timeout: 5s
       retries: 5

@@ -222,6 +222,7 @@ cp .env.example .env
 # 编辑 .env 填入 LLM_API_KEY 等配置
 
 # 2. 一键启动（前后端 + Judge0 判题沙箱）
+#    Judge0 所需变量已在 docker/.env 中预设默认值，无需手动配置
 docker compose -f docker/docker-compose.yml up -d --build
 
 # 3. 验证
