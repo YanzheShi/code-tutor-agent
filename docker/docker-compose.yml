@@ -108,7 +108,9 @@ services:
       - ../src:/app/src
       - ../data:/app/data
     env_file:
-      - ../.env
+      # .env 是个人配置（含密钥），不入库；缺失时用下方默认值，不阻断启动
+      - path: ../.env
+        required: false
     environment:
       - UVICORN_RELOAD=true
       - TZ=Asia/Shanghai
@@ -116,6 +118,8 @@ services:
       - JUDGE0_URL=http://judge0:2358
       # 新增：判题后端切换开关（从.env读取，默认用现有runner）
       - JUDGE_BACKEND=${JUDGE_BACKEND:-self}
+      # 新增：CORS允许的前端来源（默认3000=compose前端端口，可被.env覆盖）
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
     depends_on:
       judge0:
         condition: service_healthy
