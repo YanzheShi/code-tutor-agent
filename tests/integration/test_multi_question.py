@@ -121,6 +121,6 @@ class TestMultiQuestion:
         assert state3["phase"] == "solving"
 
     def test_next_problem_nonexistent_session(self, client):
-        """不存在的 sessionId 应返回 500（LG get_state 不抛异常，返回空 state）。"""
+        """不存在的 sessionId 应返回 409（LG get_state 不抛异常，返回空 state）。"""
         resp = client.post("/session/does-not-exist/next-problem", json={})
-        assert resp.status_code == 500
+        assert resp.status_code == 409

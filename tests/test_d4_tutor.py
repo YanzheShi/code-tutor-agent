@@ -213,4 +213,4 @@ class TestTutorRouting:
             status="tutoring",
         )
         cmd = tutor_node(state)
-        assert cmd.goto == "update_profile_node"
+        assert cmd.goto == "constitutional_guard_node"

@@ -21,14 +21,18 @@ class _FakeGraph:
         self.updates = []
 
     def get_state(self, config):
-        return types.SimpleNamespace(values=dict(self._values))
+        return types.SimpleNamespace(
+            values=dict(self._values),
+            next=["wait_for_submit_node"],
+        )
 
     def update_state(self, config, values, as_node=None):
         self._values.update(values)
         self.updates.append((values, as_node))
 
     def invoke(self, *args, **kwargs):
-        return None
+        if args and args[0] is not None:
+            self.updates.append(({"mode": "practice", "phase": "generating"}, "critic_node"))
 
 
 def _practice_ac_state() -> dict:

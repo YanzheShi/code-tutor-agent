@@ -70,11 +70,12 @@ def test_generate_complex_tests_sanitizes_boundary_end_to_end():
 
     full = SimpleNamespace(
         optimal_solution=_MERGE_CODE,
+        brute_solution="",
         function_signature=_MERGE_SIG,
         title="合并两个有序数组",
-        description="合并两个非递减有序数组",
+        description="合并两个有序数组为一个有序数组",
         difficulty="Easy",
-        constraints=["nums1 长度为 m+n，nums2 长度为 n"],
+        constraints=["nums1 长度为 m，nums2 长度为 n"],
         test_cases=[],
     )
     bad_llm_json = json.dumps([{
