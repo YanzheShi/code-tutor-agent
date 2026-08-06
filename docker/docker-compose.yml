@@ -71,17 +71,16 @@ services:
       - "2358:2358"  # 暴露端口，Windows镜像模式下可通过localhost:2358访问
     environment:
       # 数据库配置
-      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD}
-      REDIS_PASSWORD: ${JUDGE0_REDIS_PASSWORD}
+      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD:-ct_pg_pwd}
+      REDIS_PASSWORD: ${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd}
       # 资源限制（核心！对齐你的判题需求）
-      MEMORY_LIMIT: ${JUDGE0_MEM_LIMIT}        # 512MB，默认128MB太小
-      CPU_TIME_LIMIT: ${JUDGE0_CPU_TIME_LIMIT} # 5秒超时
+      MEMORY_LIMIT: ${JUDGE0_MEM_LIMIT:-512000000}        # 512MB，默认128MB太小
+      CPU_TIME_LIMIT: ${JUDGE0_CPU_TIME_LIMIT:-5} # 5秒超时
       CPU_EXTRA_TIME: 1                         # 额外缓冲时间
       MAX_PROCESSES_PER_USER: 64                # 限制进程数，防恶意代码
       # 安全配置
       NETWORK_ENABLED: false                    # 禁用网络，符合R10安全要求
       ALLOW_REQUEST_ORIGIN: "*"
-    privileged: true  # 必须！Judge0的Isolate沙箱需要特权模式
     networks:
       - cta-network
     healthcheck:
@@ -109,7 +108,7 @@ services:
       - UVICORN_RELOAD=true
       - TZ=Asia/Shanghai
       # 新增：Judge0连接配置（compose内部用服务名通信）
-      - JUDGE0_BASE_URL=http://judge0:2358
+      - JUDGE0_URL=http://judge0:2358
       # 新增：判题后端切换开关（从.env读取，默认用现有runner）
       - JUDGE_BACKEND=${JUDGE_BACKEND:-self}
     depends_on:

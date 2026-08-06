@@ -5,8 +5,9 @@ import type { Message, ProblemMeta, RunResult, SessionStateResp, Submission } fr
 import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
 import { useProgressSSE } from './useProgressSSE';
+import { API_BASE } from '../api/config';
 
-const BASE = 'http://localhost:8765';
+const BASE = API_BASE;
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin';
 export type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history';
 

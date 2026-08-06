@@ -12,8 +12,8 @@ agents/agent_judge.py 保持一致：本仓把「用 LLM 结构化输出完成�
 * **兜底（静态题库）** ``store/static_pool``：LLM 多次重试仍失败时，回退到
   本仓自带题库（自家数据，非外部依赖）。
 
-出题**不依赖任何外部工具**（如 skill-engine）：核心能力的安全网必须是自身
-可控的代码。详见 docs/出题路径移除skill-engine改造方案.md。
+出题**不依赖任何外部工具**：核心能力的安全网必须是自身
+可控的代码。
 
 对外暴露统一入口 ``ProblemAgent.generate()``，按 「LLM → 静态兜底」降级，
 命中通道随结果一并返回。
@@ -37,7 +37,6 @@ from code_tutor_agent.prompts.generate_problem import (
     GENERATE_PROBLEM_SYSTEM,
     GENERATE_PROBLEM_USER,
 )
-from code_tutor_agent.skills import engine_adapter as _adapter  # 仍用于「题解」(generate_detailed_solution)；出题路径已不再走这里
 
 logger = logging.getLogger(__name__)
 
@@ -347,10 +346,27 @@ def _flat_to_problem(flat: dict) -> Problem:
     return Problem(**data)
 
 
+def _get_solution_llm():
+    """详细题解专用 LLM（导师口吻，简单直出）。"""
+    return get_llm(purpose="tutor", temperature=0.4)
+
+
+_DETAILED_SOLUTION_PROMPT = (
+    "你是算法导师。用户希望为下面这道题获得一份简洁、可教学的详细题解。\n"
+    "请用中文输出，包含：解题思路（分步骤）、算法设计、时间与空间复杂度。\n"
+    "代码用 ```python 围栏包裹。不要重复题目原文。\n\n"
+    "题目描述：\n{description}\n\n请生成题解："
+)
+
+
 def generate_detailed_solution(problem_description: str) -> Optional[str]:
-    """生成详细题解 markdown（skill-engine 通道）；失败返回 ``None``。"""
+    """生成详细题解 markdown（导师 LLM 直出）；失败返回 ``None``。"""
     try:
-        return _adapter.generate_detailed_solution(problem_description)
+        llm = _get_solution_llm()
+        msg = _DETAILED_SOLUTION_PROMPT.format(description=problem_description)
+        resp = llm.invoke(msg)
+        text = getattr(resp, "content", None) or str(resp)
+        return text.strip() or None
     except Exception as exc:
         logger.warning("详细题解生成失败: %s", exc)
         return None

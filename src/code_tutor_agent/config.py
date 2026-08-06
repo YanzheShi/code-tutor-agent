@@ -67,9 +67,6 @@ PURPOSE_CONFIGS = {
     "adversarial-eval":     {"alias": "default", "temperature": 0.3},
     "adversarial-eval-low": {"alias": "default", "temperature": 0.2},
 
-    # === Skill 引擎 ===
-    "skill-engine":         {"alias": "default", "temperature": 0.7},
-
     # === 基准测试 ===
     "benchmark":            {"alias": "secondary", "temperature": 0.5},
 }
@@ -149,54 +146,3 @@ def get_cleanup_interval_minutes() -> int:
     从环境变量 SESSION_CLEANUP_INTERVAL_MINUTES 读取，默认 60（1 小时）。
     """
     return int(os.getenv("SESSION_CLEANUP_INTERVAL_MINUTES", "60"))
-
-
-# ── skill-engine CLI 逃生舱 ──
-def get_skill_engine_dir() -> str:
-    """skill-engine 项目根目录（含 skills/ 子目录）。
-
-    从环境变量 SKILL_ENGINE_DIR 读取，默认 D:/Code/PycharmProjects/skill-engine。
-    run 命令用 Path.cwd()/skills 扫描 skill，因此 spawn 时必须 cwd 指到这里。
-    """
-    return os.getenv(
-        "SKILL_ENGINE_DIR",
-        "D:/Code/PycharmProjects/skill-engine",
-    )
-
-
-def get_skill_engine_cli_timeout() -> int:
-    """CLI 子进程超时（秒），默认 60。"""
-    return int(os.getenv("SKILL_ENGINE_CLI_TIMEOUT", "60"))
-
-
-# ── skill-engine import 主通道（engine_adapter）──
-def get_skill_engine_purpose() -> str:
-    """adapter 通道使用的 LLM 用途（单一真源），默认 'skill-engine'。
-
-    三通道（adapter import / cli_runner --purpose / CI --purpose）都解析到同一用途，
-    杜绝 "CLI 读另一套 env" 的分裂。
-    """
-    return os.getenv("SKILL_ENGINE_PURPOSE", "skill-engine")
-
-
-def get_skill_engine_skills_root() -> str:
-    """本系统内置 skill defs 目录（随仓发布，DP-3）；adapter 与 cli 共用。
-
-    默认指向 src/code_tutor_agent/skills/defs（Phase 0 已把两个真实 def
-    还原到此处）。discover(roots=[此绝对路径]) 直接扫描，不经 cwd。
-    """
-    return os.getenv(
-        "SKILL_ENGINE_SKILLS_ROOT",
-        os.path.join(os.path.dirname(__file__), "skills", "defs"),
-    )
-
-
-#: 允许通过 CLI 执行的 skill 名白名单（防止任意 skill 名注进 subprocess）
-#: 出题已收口到 ProblemAgent（原生 LLM + 静态兜底），不再经 skill-engine 出题，
-#: 故此处仅保留「详细题解」这类仍走 skill-engine 的能力。
-SKILL_ENGINE_CLI_ALLOWLIST: frozenset[str] = frozenset(
-    os.getenv(
-        "SKILL_ENGINE_CLI_ALLOWLIST",
-        "cta-generate-solution",
-    ).split(",")
-)

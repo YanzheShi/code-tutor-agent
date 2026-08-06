@@ -1,7 +1,8 @@
 /** SSE 流式聊天读取 hook — 消除 App.tsx 中 3 处重复的流式读取代码。 */
 import { useCallback } from 'react';
+import { API_BASE } from '../api/config';
 
-const BASE = 'http://localhost:8765';
+const BASE = API_BASE;
 
 export function useSSE() {
   const readStream = useCallback(async (

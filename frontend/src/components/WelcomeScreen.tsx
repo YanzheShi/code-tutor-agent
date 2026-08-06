@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
+import { API_BASE } from '../api/config';
 
-const BASE = 'http://localhost:8765';
+const BASE = API_BASE;
 
 type Tab = 'existing' | 'agent' | 'profile' | 'admin';
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string; verdict?: string };

@@ -282,10 +282,6 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         else (problem.get("description", "") if problem else "")
     )
 
-    # 当前题上下文写入 contextvar，供工具里 *_via_skill 日志回溯
-    from code_tutor_agent.agents.tools import current_problem_ctx
-    current_problem_ctx.set({"problem_id": pid, "title": title})
-
     # 收集 tutor_messages 中近期对话作为上下文
     _tutor_msgs = values.get("tutor_messages") or []
     _context_lines = []

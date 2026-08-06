@@ -8,13 +8,14 @@
 * ``verify_problem`` 自校验（编译 / 思维链 / starter_code 推导）
 * ``_extract_code`` 围栏剥离
 * 出题不依赖外部工具：``ProblemAgent.generate`` 降级链仅 LLM → 静态兜底
-* ``generate_detailed_solution``（题解，仍走 skill-engine，属另一功能）
+* ``generate_detailed_solution``（题解，导师 LLM 直出）
 * 统一入口 ``ProblemAgent.generate`` 的降级链（LLM → 静态兜底）
 """
 
 from __future__ import annotations
 
 import pytest
+from types import SimpleNamespace
 
 from code_tutor_agent.agents import agent_problem as agent_problem
 from code_tutor_agent.agents.agent_problem import (
@@ -315,24 +316,27 @@ def test_flat_to_problem_filters_to_model_fields():
 
 
 # ───────────────────────── 出题不依赖外部工具 ─────────────────────────
-# 出题仅走原生 LLM + 静态兜底，不再经由 skill-engine（adapter/cli）出题通道；
-# 相关 skill-engine 出题测试已移除。题解功能（generate_detailed_solution）仍走
-# skill-engine，属另一功能，见下方独立用例。
+# 出题仅走原生 LLM + 静态兜底，不再经由 skill-engine 出题通道；
+# 相关 skill-engine 出题测试已移除。题解功能（generate_detailed_solution）由导师
+# LLM 直出，见下方独立用例。
 
 
 def test_generate_detailed_solution_success(monkeypatch):
+    class _FakeResp:
+        content = "# 详细题解\n\n这是题解。"
+
     monkeypatch.setattr(
-        agent_problem._adapter, "generate_detailed_solution",
-        lambda *a, **k: "# 详细题解\n\n这是题解。",
+        agent_problem, "_get_solution_llm",
+        lambda *a, **k: SimpleNamespace(invoke=lambda msg: _FakeResp()),
     )
     assert "题解" in generate_detailed_solution("题目描述...")
 
 
 def test_generate_detailed_solution_failure_returns_none(monkeypatch):
     def _boom(*a, **k):
-        raise RuntimeError("skill down")
+        raise RuntimeError("llm down")
 
-    monkeypatch.setattr(agent_problem._adapter, "generate_detailed_solution", _boom)
+    monkeypatch.setattr(agent_problem, "_get_solution_llm", _boom)
     assert generate_detailed_solution("题目描述...") is None
 
 

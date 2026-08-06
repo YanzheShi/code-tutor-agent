@@ -24,12 +24,7 @@ dependencies = [
     # API 层
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    # Skill 引擎（本地 path 依赖，editable install）
-    "skill-engine>=0.1.0",
-]
-
-[tool.uv.sources]
-skill-engine = { path = "D:/Code/PycharmProjects/skill-engine", editable = true }
+    ]
 
 [project.optional-dependencies]
 dev = [

@@ -33,7 +33,6 @@ from code_tutor_agent.agents.agent_dialog import (
     DialogIntent,
 )
 from code_tutor_agent.schemas.state import Message
-from code_tutor_agent.skills.result import SkillResult
 from code_tutor_agent.sandbox.judge0_client import Judge0SubmissionResult
 
 
@@ -187,7 +186,6 @@ def test_agent_tools_registry():
         "judge_run_code",
         "judge_code",
         "judge_check_health",
-        "generate_detailed_solution_via_skill",
     }
     # parse_leetcode 工具应声明 url 参数
     tool = get_tool("parse_leetcode")
@@ -377,128 +375,15 @@ async def test_run_tool_loop_ignores_unbound_tool():
 
 
 @pytest.mark.asyncio
-async def test_tutor_tools_includes_detailed_solution():
-    """TUTOR_TOOLS 含 judge 工具 + 详细题解生成工具，不含解析出题工具。"""
-    from code_tutor_agent.agents.tools import TUTOR_TOOLS, JUDGE_TOOLS
+async def test_tutor_chat_tools_are_judge_only():
+    """TUTOR_CHAT_TOOLS 仅含 judge 工具，不含解析出题工具。"""
+    from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, JUDGE_TOOLS
 
-    names = {t.name for t in TUTOR_TOOLS}
+    names = {t.name for t in TUTOR_CHAT_TOOLS}
     assert names == {
         "judge_run_code",
         "judge_code",
         "judge_check_health",
-        "generate_detailed_solution_via_skill",
     }
     assert set(names) >= {t.name for t in JUDGE_TOOLS}
     assert "parse_leetcode" not in names
-
-
-@pytest.mark.asyncio
-async def test_run_tool_loop_invokes_detailed_solution_via_tutor_tools():
-    """辅导工具循环：LLM 调 generate_detailed_solution_via_skill → 执行并回写结果。"""
-    from langchain_core.messages import SystemMessage, HumanMessage
-    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_TOOLS
-
-    tcs = [{
-        "name": "generate_detailed_solution_via_skill",
-        "args": {"description": "给定一个数组 nums，求两数之和的下标。", "mode": "cli"},
-        "id": "t1",
-    }]
-    fake_llm = _ToolLoopFakeLLM(tcs)
-    msgs = [SystemMessage(content="sys"), HumanMessage(content="讲讲这题")]
-    md = "# 思路一\n## Code\n```python\nclass Solution: ...\n```"
-
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-detailed-solution", ok=True, output=md,
-        ),
-    ):
-        result = await run_tool_loop(fake_llm, msgs, tools=TUTOR_TOOLS)
-
-    assert len(result) == 4
-    from langchain_core.messages import ToolMessage
-    assert isinstance(result[-1], ToolMessage)
-    assert md in result[-1].content
-
-
-# ──────────────────────────────────────────────
-#  skill-engine CLI 逃生舱工具
-# ──────────────────────────────────────────────
-
-
-def test_skill_tools_registry():
-    """出题统一走 ProblemAgent，不再有独立的 skill-engine 出题工具集；SKILL_TOOLS 为空。"""
-    from code_tutor_agent.agents.tools import SKILL_TOOLS
-
-    assert len(SKILL_TOOLS) == 0
-
-
-@pytest.mark.asyncio
-async def test_agent_tools_registry_includes_detailed_solution():
-    """generate_detailed_solution_via_skill 已注册进 AGENT_TOOLS，LLM 可见可调。"""
-    from code_tutor_agent.agents.tools import AGENT_TOOLS
-
-    assert "generate_detailed_solution_via_skill" in {t.name for t in AGENT_TOOLS}
-
-
-@pytest.mark.asyncio
-async def test_generate_detailed_solution_via_skill_success():
-    """CLI 逃生舱生成详细题解成功 → 返回 Markdown 原文（已 strip）。"""
-    from code_tutor_agent.agents.tools import generate_detailed_solution_via_skill
-
-    md = "# 思路一：暴力\n## Code\n```python\nclass Solution: ...\n```"
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-detailed-solution", ok=True, output="  " + md + "\n",
-        ),
-    ):
-        out = await generate_detailed_solution_via_skill("题面描述", mode="cli")
-    assert out == md
-
-
-@pytest.mark.asyncio
-async def test_generate_detailed_solution_via_skill_cli_failure():
-    """CLI 失败 → 转成 {"error": ...} JSON，不抛异常。"""
-    from code_tutor_agent.agents.tools import generate_detailed_solution_via_skill
-
-    with patch(
-        "code_tutor_agent.agents.skill_cli.run_skill_cli",
-        return_value=SkillResult(
-            skill_name="cta-generate-detailed-solution", ok=False, error="boom",
-        ),
-    ):
-        out = await generate_detailed_solution_via_skill("题面描述", mode="cli")
-    import json
-    data = json.loads(out)
-    assert "error" in data
-    assert "生成详细题解失败" in data["error"]
-
-
-@pytest.mark.asyncio
-async def test_generate_detailed_solution_via_skill_default_adapter():
-    """默认 mode=adapter → 调 engine_adapter.generate_detailed_solution，返回 markdown。"""
-    from code_tutor_agent.agents.tools import generate_detailed_solution_via_skill
-
-    md = "# 思路一\n## Code\n```python\nclass Solution: ...\n```"
-    with patch(
-        "code_tutor_agent.skills.engine_adapter.generate_detailed_solution",
-        return_value=md,
-    ):
-        out = await generate_detailed_solution_via_skill("题面描述")
-    assert out == md
-
-
-@pytest.mark.asyncio
-async def test_generate_detailed_solution_via_skill_adapter_failure():
-    """adapter 通道异常 → 归一为 {"error": ...} JSON，不冒泡。"""
-    from code_tutor_agent.agents.tools import generate_detailed_solution_via_skill
-
-    with patch(
-        "code_tutor_agent.skills.engine_adapter.generate_detailed_solution",
-        side_effect=RuntimeError("boom"),
-    ):
-        out = await generate_detailed_solution_via_skill("题面描述")
-    data = json.loads(out)
-    assert "error" in data
-    assert "adapter 生成详细题解失败" in data["error"]

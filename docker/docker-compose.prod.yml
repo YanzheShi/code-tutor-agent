@@ -19,13 +19,14 @@ services:
           memory: 2G
           cpus: "1.0"
 
-  frontend:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.frontend
-    environment:
-      - API_URL=http://backend:8765
-    deploy:
+   frontend:
+     build:
+       context: ..
+       dockerfile: docker/Dockerfile.frontend
+       args:
+         VITE_API_BASE: /
+     environment: []
+     deploy:
       resources:
         limits:
           memory: 128M

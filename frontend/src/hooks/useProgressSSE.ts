@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
+import { API_BASE } from '../api/config';
 
-const BASE = 'http://localhost:8765';
+const BASE = API_BASE;
 
 type ProgressHandlers = {
   onProgress?: (message: string) => void;

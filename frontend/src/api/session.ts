@@ -1,11 +1,12 @@
 import type { RunCodeResponse, SessionStateResp, SubmitResponse } from '../types/session';
+import { API_BASE } from './config';
 
-const BASE = 'http://localhost:8765';
+const BASE = API_BASE;
 
 export async function createSession(
   opts?: { topic?: string; difficulty?: string; mode?: string },
 ): Promise<{ session_id: string; status: string }> {
-  const r = await fetch(`http://localhost:8765/session`, {
+  const r = await fetch(`${BASE}/session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: opts ? JSON.stringify(opts) : undefined,

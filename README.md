@@ -210,6 +210,53 @@ GET  /session/{sid}/state  → 前端轮询渲染
 GET  /health               → 健康检查
 ```
 
+---
+
+## Docker 部署
+
+### 快速开始（开发模式）
+
+```bash
+# 1. 复制环境变量模板
+cp .env.example .env
+# 编辑 .env 填入 LLM_API_KEY 等配置
+
+# 2. 一键启动（前后端 + Judge0 判题沙箱）
+docker compose -f docker/docker-compose.yml up -d --build
+
+# 3. 验证
+curl http://localhost:8765/health
+# 前端访问 http://localhost:3000
+```
+
+### 生产模式（nginx 反向代理 + 多副本）
+
+```bash
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up -d --build
+# 前端 http://localhost:3000（nginx 代理所有 API 路由到后端）
+```
+
+### 环境变量说明
+
+| 变量 | 必需 | 默认值 | 说明 |
+|---|---|---|---|
+| `LLM_MODEL` | 是 | — | LLM 模型名（OpenAI 兼容） |
+| `LLM_BASE_URL` | 是 | — | LLM API 基础 URL |
+| `LLM_API_KEY` | 是 | — | LLM API 密钥 |
+| `JUDGE0_URL` | 否 | `http://localhost:2358` | Judge0 沙箱地址（设为 `http://judge0:2358` 由 compose 自动注入） |
+| `JUDGE_BACKEND` | 否 | `self` | 判题后端切换：`self`（本地 subprocess）/ `judge0` |
+| `VITE_API_BASE` | 否 | `http://localhost:8765` | 前端 API 基础 URL（构建时注入；生产模式设为 `/` 走同源代理） |
+
+### 容器结构
+
+- **backend**：FastAPI + uvicorn，端口 8765，挂载 `src/`（开发模式热重载）和 `data/`（持久化）
+- **frontend**：Nginx 静态服务，端口 3000，代理 `/session/`、`/problems`、`/admin/`、`/leetcode/`、`/health` 到后端（SSE 路径关闭缓冲）
+- **judge0**（可选）：判题沙箱，含 PostgreSQL + Redis，需要 `privileged` 模式
+
+### 移除 skill-engine
+
+`skill-engine`（本地 Python 包）已从项目依赖中移除。详细题解功能改由导师 LLM 直接生成简单题解，无需额外安装。如需恢复 skill-engine 集成，请参考独立仓库 `skill-engine` 手动安装。
+
 ### 5. LangSmith Trace
 
 跑起来后 LangSmith 控制台能看到每条 session 全链路：

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { Submission } from '../types/session';
 
-const BASE = 'http://localhost:8765';
+import { API_BASE } from '../api/config';
+
+const BASE = API_BASE;
 
 export default function SubmissionHistory({ problemId }: { problemId: number }) {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
