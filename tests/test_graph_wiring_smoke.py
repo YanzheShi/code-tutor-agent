@@ -27,10 +27,11 @@ from typing import Annotated
 
 from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
+from pydantic import BaseModel, Field
 
 from code_tutor_agent.graph.graph import compile_graph
 from code_tutor_agent.profile.node import update_profile_node
-from code_tutor_agent.schemas.state import SessionPhase, SessionState, last_phase
+from code_tutor_agent.schemas.state import SessionPhase, SessionState, last_phase, last_wins_list
 
 
 def _make_state(mode: str) -> SessionState:
@@ -148,9 +149,9 @@ def test_phase_channel_tolerates_multiple_writes_per_step():
     本测试构建一个最小图：START 并行指向 a、b 两个节点，二者在**同一拍**
     都写 phase，验证通道不再抛 InvalidUpdateError，且取二者之一。
     """
-    from pydantic import BaseModel
-    from langgraph.graph import END, START, StateGraph
     from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import END, START, StateGraph
+    from pydantic import BaseModel
 
     class _Mini(BaseModel):
         phase: Annotated[SessionPhase, last_phase] = SessionPhase.solving
@@ -175,3 +176,64 @@ def test_phase_channel_tolerates_multiple_writes_per_step():
         {"configurable": {"thread_id": "mini-phase"}},
     )
     assert out["phase"] in (SessionPhase.reviewing, SessionPhase.done)
+
+
+def test_last_wins_list_reducer_takes_last():
+    """last_wins_list reducer：多写取最后一个；单写原样返回；空列表可清空。"""
+    assert last_wins_list(["a"], ["a", "b"]) == ["a", "b"]
+    assert last_wins_list(["a", "b"], []) == []          # critic 清空 tutor_messages
+    assert last_wins_list(["a"], ["a", "u1", "t1"]) == ["a", "u1", "t1"]
+
+
+def test_last_wins_list_tolerates_repeated_pause_safe_writes():
+    """回归 2026-08-07 连续点「运行」报错：
+
+    'At key tutor_messages: Can receive only one value per step.
+     Use an Annotated key to handle multiple values.'
+
+    根因：tutor_messages 无 reducer（LastValue 单值通道），而 pause_safe_update 在
+    graph 暂停于 wait_for_submit_node 时用 ``invoke(Command(update=..., goto=...))``
+    重装中断，暂停期**第二次**写入同一单值通道即触发 langgraph 同一步双写校验；
+    与是否并发无关（纯串行实验第二次必炸）。
+
+    修复：tutor_messages / agent_dialog_history / problem_history 改为
+    ``Annotated[list, last_wins_list]``（last-wins，非 operator.add——所有写入者
+    传全量列表，add 会导致历史重复追加）。
+
+    本测试验证：暂停在 interrupt 上、连续多次 ``invoke(Command(update, goto))``
+    写同一 list 通道不再抛 InvalidUpdateError，且消息不丢不重。
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+    from langgraph.graph import StateGraph
+    from langgraph.types import interrupt
+
+    class _Mini(BaseModel):
+        tutor_messages: Annotated[list[str], last_wins_list] = Field(default_factory=list)
+        status: str = ""
+
+    def _wait(state):
+        interrupt({"type": "awaiting_submit"})
+        return {}
+
+    def _router(state):
+        return "wait"
+
+    g = StateGraph(_Mini)
+    g.add_node("wait", _wait)
+    g.add_conditional_edges("__start__", _router)
+    app = g.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": "mini-tm"}}
+
+    app.invoke({"tutor_messages": [], "status": "awaiting_submit"}, config)
+    assert app.get_state(config).next == ("wait",)
+
+    # 模拟 run→chat 保存连续 3 轮（真实时序：每轮基于当前快照 + 追加新消息）
+    for i in range(3):
+        cur = app.get_state(config).values.get("tutor_messages", [])
+        app.invoke(
+            Command(update={"tutor_messages": list(cur) + [f"u{i}", f"t{i}"]}, goto="wait"),
+            config,
+        )
+
+    final = app.get_state(config).values.get("tutor_messages", [])
+    assert final == ["u0", "t0", "u1", "t1", "u2", "t2"], f"消息丢失/重复: {final}"

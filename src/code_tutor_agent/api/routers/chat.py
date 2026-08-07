@@ -392,7 +392,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             from code_tutor_agent.api.deps import pause_safe_update
             pause_safe_update(graph, config, {"tutor_messages": tutor_msgs})
         except Exception as exc:
-            logger.warning("Failed to save chat: %s", exc)
+            logger.exception("Failed to save chat: %s", exc)
         yield "data: __DONE__\n\n"
 
     return StreamingResponse(normal_chat_stream(), media_type="text/event-stream")

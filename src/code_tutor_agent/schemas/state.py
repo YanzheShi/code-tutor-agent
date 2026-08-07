@@ -38,6 +38,22 @@ def last_phase(current: "SessionPhase | None", update: "SessionPhase | list") ->
     return update
 
 
+def last_wins_list(current: list, update: list) -> list:
+    """list 通道的 last-wins reducer：同一步多个写入者时取最后一个值。
+
+    与 last_phase 同理：默认 last_value 通道在「同一步收到多个写」时会抛
+    InvalidUpdateError("Can receive only one value per step")。
+    tutor_messages / agent_dialog_history / problem_history 都是多写者字段
+    （graph 节点出口 + HTTP 端点的 pause_safe_update 都会写），必须用 reducer。
+
+    ⚠️ 必须用 last-wins 而不是 operator.add：所有写入者传的都是「全量列表」
+    （state.xxx + 本次新增，见 tutor.py / generator.py / agent_judge.py / chat.py），
+    operator.add 会让历史被重复追加（2026-08-07 实测 4 轮翻到 30 条）；last-wins
+    与现有覆盖语义完全一致，只是不再抛错。
+    """
+    return update
+
+
 # ──────────────────────────────────────────────
 #  Sub-types carried inside SessionState
 # ──────────────────────────────────────────────
@@ -220,7 +236,7 @@ class SessionState(BaseModel):
         default=0, ge=0, le=4,
         description="Current hint level (0=no hint yet, 4=almost answer)",
     )
-    tutor_messages: list[Message] = Field(
+    tutor_messages: Annotated[list[Message], last_wins_list] = Field(
         default_factory=list,
         description=(
             "Conversation visible in the tutor panel. "
@@ -243,7 +259,7 @@ class SessionState(BaseModel):
     # ── Agent mode fields ──
     # These are only used when mode == "agent"
 
-    agent_dialog_history: list[Message] = Field(
+    agent_dialog_history: Annotated[list[Message], last_wins_list] = Field(
         default_factory=list,
         description="Agent mode: dialog transcript before problem generation (出题前对话)",
     )
@@ -306,7 +322,7 @@ class SessionState(BaseModel):
     )
 
     # ── 跨题历史（每 flush 一题 +1）──
-    problem_history: list[ProblemAttemptRecord] = Field(
+    problem_history: Annotated[list[ProblemAttemptRecord], last_wins_list] = Field(
         default_factory=list,
         description="All completed problem records, in order",
     )
