@@ -31,6 +31,9 @@ export function useProgressSSE() {
     esRef.current = es;
     let finished = false;
 
+    es.addEventListener('open', () => {
+    });
+
     const finish = () => {
       finished = true;
       es.close();

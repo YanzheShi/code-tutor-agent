@@ -16,10 +16,48 @@ export const DEFAULT_TAB_PANEL: Record<TabId, 'left' | 'right'> = {
   code: 'right', run: 'right', tutor: 'right', 'agent-history': 'left',
 };
 
+// ── 会话恢复（根治“自动回主页”bug）──
+// 把做题页的关键状态落盘到 localStorage，整页刷新 / Vite HMR 重挂载后自动恢复，
+// 避免纯内存 screen 被重置回 welcome。只持久化 main 屏，loading/error/admin 不持久化。
+const RESTORE_KEY = 'code-tutor:session';
+interface PersistedSession { screen: Screen; sessionId: string | null; mode: string; }
+function loadPersisted(): PersistedSession | null {
+  try {
+    const raw = localStorage.getItem(RESTORE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as PersistedSession;
+    if (p && typeof p.screen === 'string' && 'sessionId' in p) return p;
+  } catch { /* ignore */ }
+  return null;
+}
+function savePersisted(p: PersistedSession) {
+  try { localStorage.setItem(RESTORE_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+}
+function clearPersisted() { try { localStorage.removeItem(RESTORE_KEY); } catch { /* ignore */ } }
+// 页面生命周期内只读取一次 localStorage（模块级缓存，避免每次渲染都读）
+let _cachedPersist: PersistedSession | null | undefined;
+function getInitialPersist(): PersistedSession | null {
+  if (_cachedPersist === undefined) _cachedPersist = loadPersisted();
+  return _cachedPersist;
+}
+
 export function useSession() {
-  const [screen, setScreen] = useState<Screen>('welcome');
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [mode, setMode] = useState<string>('practice');
+  const initial = getInitialPersist();
+  // 只恢复 main 屏（做题页）；loading/error/admin 刷新后回 welcome 更安全
+  const [screen, setScreen] = useState<Screen>(
+    initial?.screen === 'main' && initial?.sessionId ? 'main' : 'welcome',
+  );
+
+  const [sessionId, setSessionId] = useState<string | null>(initial?.sessionId ?? null);
+  const [mode, setMode] = useState<string>(initial?.mode || 'practice');
+
+  // 持久化：main 屏且有 sessionId 时落盘；其余情况（welcome/loading/error/admin）清掉，
+  // 保证刷新后只恢复到做题页，不会卡在 loading/error 等中间态。
+  useEffect(() => {
+    if (screen === 'main' && sessionId) savePersisted({ screen, sessionId, mode });
+    else clearPersisted();
+  }, [screen, sessionId, mode]);
+
   const [problem, setProblem] = useState<ProblemMeta | null>(null);
   const [editorCode, setEditorCode] = useState('');
   const [tutorMessages, setTutorMessages] = useState<Message[]>([]);
@@ -90,6 +128,29 @@ export function useSession() {
   }, [subscribeProgress, applySessionState]);
 
   useEffect(() => () => { closeProgress(); }, [closeProgress]);
+
+  // 重挂载恢复：若初始即 main（来自持久化），重新拉取会话状态，避免刷新后“空做题页”。
+  // 题目仍在生成则继续监听进度；否则已可在做题页等待提交。
+  const didRestore = useRef(false);
+  useEffect(() => {
+    if (didRestore.current) return;
+    const restoredScreen = initial?.screen;
+    const restoredSessionId = initial?.sessionId;
+    if (restoredScreen !== 'main' || !restoredSessionId) return;
+    didRestore.current = true;
+    (async () => {
+      try {
+        const state = await getState(restoredSessionId);
+        applySessionState(state, true);
+        if (!state.problem) startProgress(restoredSessionId);
+      } catch {
+        clearPersisted();
+        setScreen('welcome');
+      }
+    })();
+    // 仅挂载时执行一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── 创建会话 ──
   // Agent 模式的对话就绪与出题就绪都通过 SSE 的 done 事件推送（见 session.py
