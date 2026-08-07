@@ -4,6 +4,22 @@ import { API_BASE } from '../api/config';
 
 const BASE = API_BASE;
 
+/** 解析 SSE data 载荷：后端用 JSON { "t": text } 序列化 token（保留换行），
+ *  兼容旧的裸文本格式。解析失败返回 null（跳过该事件，不破坏当前流）。 */
+function decodePayload(raw: string): string | null {
+  if (raw === '__DONE__') return '__DONE__';
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed.t === 'string') return parsed.t;
+    } catch {
+      /* fall through to legacy raw-text */
+    }
+  }
+  return raw;
+}
+
 export function useSSE() {
   const readStream = useCallback(async (
     sid: string,
@@ -30,7 +46,9 @@ export function useSSE() {
       buffer = events.pop() || '';
       for (const event of events) {
         if (event.startsWith('data: ')) {
-          const token = event.slice(6);
+          const raw = event.slice(6);
+          const token = decodePayload(raw);
+          if (token == null) continue;
           if (token === '__DONE__') continue;
           onToken(token);
         }

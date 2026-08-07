@@ -20,6 +20,14 @@ from code_tutor_agent.observability import build_run_config, record_verdict_feed
 from code_tutor_agent.api.serializers import serialize_state, empty_state
 from code_tutor_agent.api.services.generation import run_generation, run_fast_path, GENERATION_TIMEOUT
 from code_tutor_agent.config import get_checkpoint_db_path
+from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
+from code_tutor_agent.db.database import (
+    delete_session_activity,
+    get_problem_by_id,
+    get_stale_sessions,
+    save_submission,
+    touch_session,
+)
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
 from code_tutor_agent.schemas.state import SessionState, ProblemMeta, Message
@@ -89,7 +97,6 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
 
     # 记录活跃时间（TTL 清理用）
     try:
-        from code_tutor_agent.db.database import touch_session
         touch_session(sid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
@@ -203,7 +210,6 @@ async def delete_session(sid: str):
 
         # 清理活跃时间记录
         try:
-            from code_tutor_agent.db.database import delete_session_activity
             delete_session_activity(sid)
         except Exception as exc:
             logger.warning("delete_session_activity failed for %s: %s", sid, exc)
@@ -224,8 +230,6 @@ async def cleanup_sessions(
     基于 session_activity 表的 last_active_at 时间戳精确判断过期，
     不再使用 ROWID 近似。
     """
-    from code_tutor_agent.db.database import get_stale_sessions, delete_session_activity
-
     stale = get_stale_sessions(max_age_hours)
 
     if dry_run:
@@ -287,7 +291,6 @@ async def submit_code(sid: str, body: SubmitRequest):
 
     # 记录活跃时间
     try:
-        from code_tutor_agent.db.database import touch_session
         touch_session(sid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
@@ -327,7 +330,6 @@ async def submit_code(sid: str, body: SubmitRequest):
         if subs and problem:
             pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
             last_sub = subs[-1] if isinstance(subs, list) else subs
-            from code_tutor_agent.db.database import save_submission
             verdict = getattr(last_sub, "last_verdict", "") or getattr(last_sub, "verdict", "") or values.get("last_verdict", "")
             if verdict:
                 raw_results = getattr(last_sub, "judge_results", [])
@@ -369,7 +371,6 @@ async def get_session_state(sid: str):
 
     # 记录活跃时间（TTL 清理用）
     try:
-        from code_tutor_agent.db.database import touch_session
         touch_session(sid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
@@ -481,7 +482,6 @@ async def get_reference_code(sid: str):
     if not problem:
         raise HTTPException(400, "No problem loaded")
 
-    from code_tutor_agent.db.database import get_problem_by_id
     pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
     full = get_problem_by_id(pid)
     if not full:
@@ -493,7 +493,6 @@ async def get_reference_code(sid: str):
 async def create_session_with_existing(problem_id: int):
     """Create a session using an existing problem from the database."""
     graph = get_graph()
-    from code_tutor_agent.db.database import get_problem_by_id
 
     full = get_problem_by_id(problem_id)
     if not full:
@@ -561,7 +560,6 @@ async def next_problem(sid: str, body: NextProblemReq):
 
     # 记录活跃时间
     try:
-        from code_tutor_agent.db.database import touch_session
         touch_session(sid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
@@ -592,9 +590,6 @@ async def next_problem(sid: str, body: NextProblemReq):
     # 效果：第 3 题时 LLM 看到的上下文 = 跨题摘要(~300 token) + 当前题对话(~3000 token)
     #      而不是旧方案的 全量历史(~15000+ token) + 当前题对话
     if mode == "agent" or body.preference == "continue_dialog":
-        from code_tutor_agent.context_manager import build_cross_problem_context
-        from code_tutor_agent.progress import _generation_progress
-
         _generation_progress[sid] = ["回到与导师的对话…"]
 
         # ── 1. 构建跨题上下文摘要 ──
@@ -618,7 +613,6 @@ async def next_problem(sid: str, body: NextProblemReq):
         dialogue_summary = ""
         if problem_history:
             try:
-                from code_tutor_agent.context_manager import generate_summary
                 last_record = problem_history[-1] if problem_history else None
                 dialogue_summary = generate_summary(_norm_history, last_record)
             except Exception as exc:
@@ -708,7 +702,6 @@ async def next_problem(sid: str, body: NextProblemReq):
     # 走 critic(ABANDON) → planner → generator → wait 完成换题。
 
     # Set up progress messages (frontend polls /state during generation)
-    from code_tutor_agent.progress import _generation_progress
     _generation_progress[sid] = ["正在准备下一题…"]
 
     if "wait_for_submit_node" not in (state.next or ()):

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import ProblemDesc from './LeftPanel/ProblemDesc';
 import AgentChat from './LeftPanel/AgentChat';
 import CodeEditor from './LeftPanel/CodeEditor';
@@ -73,6 +73,14 @@ export default function MainLayout(props: MainLayoutProps) {
   } = props;
 
   const isLoading = running || submittingFlag;
+
+  // 导师 Tab 自动滚到底部（AgentChat 已有同样逻辑，这里补上：
+  // 之前 chatEndRef 只挂载从不滚动，导致点开导师 tab 时滚动条停在最上面）
+  useEffect(() => {
+    if (activeTabs.left === 'tutor' || activeTabs.right === 'tutor') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatEndRef, activeTabs, tutorMessages]);
 
   // Bug 2: 从最后一条 submission 的 base 阶段提取首个失败用例，用于「期望 vs 实际」对比
   const failedCase: FailedCase | null = useMemo(() => {

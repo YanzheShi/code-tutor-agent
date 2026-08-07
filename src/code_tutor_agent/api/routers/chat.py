@@ -22,6 +22,16 @@ def _chunk_text(text: str, size: int = 6):
         yield text[i : i + size]
 
 
+def _sse_payload(text: str, key: str = "t") -> str:
+    """把文本包进 JSON 再作为 SSE data 发送（保留换行的同时避免 \n\n 撞上事件边界）。
+
+    LLM token 里常含代码块的换行/空行，若直接 `data: {text}\n\n`，前端的
+    `split('\\n\\n')` 会把单个事件拦腰切开、后半段被丢弃；JSON 转义可彻底规避。
+    事件形如 `data: {"t": "...\\n..."}\n\n`。
+    """
+    return f"data: {json.dumps({key: text}, ensure_ascii=False)}\n\n"
+
+
 def _build_results_context(values: dict) -> str:
     """把用户最近的运行 / 判题结果格式化为文本，供导师 prompt 注入。
 
@@ -239,7 +249,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
 
                 # 伪流式输出固定收尾文案，保持打字效果
                 for chunk in _chunk_text(ready_msg.content):
-                    yield f"data: {chunk}\n\n"
+                    yield _sse_payload(chunk)
 
                 # 用 BackgroundTasks 可靠触发题目生成（planner→generator），
                 # 并在 graph.invoke 后补跑完整测试套件（与 run_generation 对齐）
@@ -254,9 +264,9 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
                     "tutor_messages": _full_display,
                 }, as_node="agent_dialog_node")
                 for chunk in _chunk_text(reply):
-                    yield f"data: {chunk}\n\n"
+                    yield _sse_payload(chunk)
 
-            yield "data: __DONE__\n\n"
+            yield _sse_payload("__DONE__")
 
         return StreamingResponse(
             dialog_event_stream(),
@@ -373,7 +383,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
                 token = chunk.content if hasattr(chunk, "content") else str(chunk)
                 if token:
                     full.append(token)
-                    yield f"data: {token}\n\n"
+                    yield _sse_payload(token)
         except Exception as exc:
             logger.warning("Normal chat LLM failed: %s", exc)
 
@@ -381,7 +391,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         if not reply.strip():
             reply = "抱歉，我现在无法回答。请稍后再试。"
         if not full:
-            yield f"data: {reply}\n\n"
+            yield _sse_payload(reply)
 
         # 手动保存到 state（暂停安全写入：直接 update_state 会丢失
         # wait_for_submit 的挂起中断，见 deps.pause_safe_update）
@@ -393,6 +403,6 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
             pause_safe_update(graph, config, {"tutor_messages": tutor_msgs})
         except Exception as exc:
             logger.exception("Failed to save chat: %s", exc)
-        yield "data: __DONE__\n\n"
+        yield _sse_payload("__DONE__")
 
     return StreamingResponse(normal_chat_stream(), media_type="text/event-stream")
