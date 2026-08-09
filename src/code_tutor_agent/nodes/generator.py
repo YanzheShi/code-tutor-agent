@@ -32,19 +32,31 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Literal
 
-from langgraph.types import Command
 from langgraph.config import get_stream_writer
+from langgraph.types import Command
 
 from code_tutor_agent.agents.agent_problem import ProblemAgent, ProblemChannel
-from code_tutor_agent.db.database import save_problem, update_problem_optimal_solution
+from code_tutor_agent.db.database import (
+    get_problem_by_id,
+    save_problem,
+    update_problem_optimal_solution,
+)
+from code_tutor_agent.leetcode.leetcode_fetcher import (
+    _parse_examples_to_test_cases,
+    extract_function_signature,
+)
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.sandbox.ds import get_struct_prologue
 from code_tutor_agent.sandbox.runner import run_solution
-from code_tutor_agent.leetcode.leetcode_fetcher import extract_function_signature
-from code_tutor_agent.schemas.state import Message as TutorMsg
-from code_tutor_agent.schemas.state import ProblemMeta, SessionPhase, SessionState
+from code_tutor_agent.schemas.state import (
+    Message as TutorMsg,
+    ProblemMeta,
+    SessionPhase,
+    SessionState,
+)
 from code_tutor_agent.store.static_pool import get_static_problem
 
 logger = logging.getLogger(__name__)
@@ -197,7 +209,6 @@ def _generate_optimal_for_leetcode_sync(
         )
         code = resp.content if hasattr(resp, "content") else str(resp)
         # Strip markdown fences
-        import re
         m = re.search(r"```python\n?(.*?)```", code, re.DOTALL)
         if m:
             code = m.group(1).strip()
@@ -238,8 +249,6 @@ def _generate_from_leetcode(
     starter_code = lc_data.get("starter_code", "")
     tags = lc_data.get("tags", [])
     hints = lc_data.get("hints", [])
-
-    from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases, extract_function_signature
 
     # Derive a topic from the first tag, or fall back to "算法"
     topic = tags[0] if tags else "算法"
@@ -324,6 +333,68 @@ def _generate_from_leetcode(
     )
 
 
+def _take_visible(test_cases: list[dict], n: int = 2) -> list[dict]:
+    """取前 n 条可见（非 hidden）测试用例。"""
+    return [tc for tc in test_cases[:n] if not tc.get("is_hidden", False)]
+
+
+def _self_verify_reference(brute_code: str, sample_tcs: list[dict], func_sig: str) -> bool:
+    """用参考解在沙箱跑示例，验证其可执行并回填 expected_output。
+
+    所有示例自验证通过返回 True；任一示例参考解崩溃/无输出则返回 False。
+    sample_tcs 中的 expected_output 会被参考解的实际输出就地覆盖。
+    """
+    for tc in sample_tcs:
+        input_args = tc.get("input_args", [])
+        results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
+        if not results:
+            logger.warning("参考解自验证失败: TC %s 无结果", input_args)
+            return False
+        r = results[0]
+        if r.status in ("Runtime Error", "TLE", "Judge Error"):
+            logger.warning("参考解自验证失败: %s on %s", r.status, input_args)
+            return False
+        actual = r.detail or ""
+        if not actual:
+            logger.warning("参考解自验证失败: TC %s 无实际输出 (%s)", input_args, r.status)
+            return False
+        tc["expected_output"] = actual
+    return True
+
+
+def _generate_llm_problem(
+    outcome: Any,
+    sid: str,
+    writer,
+) -> tuple[dict | None, list[dict]]:
+    """LLM 通道成功：解析示例 → 参考解自验证，产出可靠可见用例。
+
+    返回 (problem_dict, sample_tcs)；任一步失败（无参考解 / 示例解析失败 /
+    自验证不通过）返回 (None, []) 表示需回退静态题库。
+    """
+    problem_dict = outcome.problem.model_dump()
+    brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
+    if not brute_code:
+        logger.warning("LLM 产出无 optimal_solution — 回退静态题库")
+        return None, []
+    examples = problem_dict.get("examples", [])
+    func_sig = problem_dict.get("function_signature", "")
+    logger.info("Parsing %d examples, sig=%s", len(examples), func_sig)
+    _progress(sid, "🧪 正在解析示例测试用例…")
+    writer("🧪 正在解析示例测试用例…")
+    sample_tcs = _parse_examples_to_test_cases(examples, func_sig)
+    if not sample_tcs:
+        logger.warning("示例解析失败 — 回退静态题库")
+        return None, []
+    if _self_verify_reference(brute_code, sample_tcs, func_sig):
+        logger.info("Lightweight generation OK — %d sample test cases", len(sample_tcs))
+        _progress(sid, "✅ 题目已就绪！")
+        writer("✅ 题目已就绪！")
+        return problem_dict, sample_tcs
+    logger.warning("示例自验证失败 — 回退静态题库")
+    return None, []
+
+
 def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node"]]:
     """Day2 generator: LLM → problem+brute → random 2 sample I/O → deliver.
 
@@ -368,70 +439,25 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
 
     if outcome.ok and outcome.channel == ProblemChannel.LLM:
         # LLM 出题成功：解析示例 → 参考解自验证，产出可靠可见用例
-        problem_dict = outcome.problem.model_dump()
-        brute_code = problem_dict.get("optimal_solution", "") or problem_dict.get("brute_solution", "")
-        if not brute_code:
-            logger.warning("LLM 产出无 optimal_solution — 回退静态题库")
-            problem_dict = None
-        else:
-            examples = problem_dict.get("examples", [])
-            func_sig = problem_dict.get("function_signature", "")
-            logger.info("Parsing %d examples, sig=%s", len(examples), func_sig)
-            _progress(sid, "🧪 正在解析示例测试用例…")
-            writer("🧪 正在解析示例测试用例…")
-            from code_tutor_agent.leetcode.leetcode_fetcher import _parse_examples_to_test_cases
-            sample_tcs = _parse_examples_to_test_cases(examples, func_sig)
-            if not sample_tcs:
-                logger.warning("示例解析失败 — 回退静态题库")
-                problem_dict = None
-            else:
-                all_ok = True
-                for tc in sample_tcs:
-                    input_args = tc.get("input_args", [])
-                    results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
-                    if results:
-                        r = results[0]
-                        if r.status in ("Runtime Error", "TLE", "Judge Error"):
-                            logger.warning("参考解自验证失败: %s on %s", r.status, input_args)
-                            all_ok = False
-                            break
-                        actual = r.detail or ""
-                        if actual:
-                            tc["expected_output"] = actual
-                        else:
-                            logger.warning("TC %s: no actual output (%s)", input_args, r.status)
-                            all_ok = False
-                    else:
-                        logger.warning("TC %s: no results", input_args)
-                        all_ok = False
-                if not all_ok:
-                    logger.warning("示例自验证失败 — 回退静态题库")
-                    problem_dict = None
-                else:
-                    logger.info("Lightweight generation OK — %d sample test cases", len(sample_tcs))
-                    _progress(sid, "✅ 题目已就绪！")
-                    writer("✅ 题目已就绪！")
-
+        problem_dict, sample_tcs = _generate_llm_problem(outcome, sid, writer)
     elif outcome.ok and outcome.channel == ProblemChannel.STATIC:
         # LLM 全失败，ProblemAgent 已回退到静态题库：直接采用，不二次拉取
         problem_dict = outcome.problem.model_dump()
-        sample_tcs = problem_dict.get("test_cases", [])[:2]
-        sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
+        sample_tcs = _take_visible(problem_dict.get("test_cases", []))
         logger.info("出题走静态兜底（ProblemAgent 返回）: %s", problem_dict.get("title"))
         _progress(sid, "✅ 题目已就绪（静态兜底）！")
         writer("✅ 题目已就绪（静态兜底）！")
 
-    # ── 极端兜底：LLM 与静态均不可用；强制再拉一次静态题库（不依赖 skill-engine）──
+    # ── 极端兜底：LLM 与静态均不可用；强制再拉一次静态题库──
     if problem_dict is None:
-        logger.warning("出题回退静态题库（不依赖 skill-engine）")
+        logger.warning("出题回退静态题库")
         _progress(sid, "⚠️ 大模型出题失败，切换到静态题库…")
         writer("⚠️ 大模型出题失败，切换到静态题库…")
         problem_dict = get_static_problem(topic=topic, difficulty=difficulty)
         if problem_dict is None:
             problem_dict = get_static_problem()
         logger.info("Fallback → %s", problem_dict.get("title", "unknown"))
-        sample_tcs = problem_dict.get("test_cases", [])[:2]
-        sample_tcs = [tc for tc in sample_tcs if not tc.get("is_hidden", False)][:2]
+        sample_tcs = _take_visible(problem_dict.get("test_cases", []))
 
     # ── 持久化到 DB — 先保存示例用例，完整用例后续补充 ──
     # The full test_suite will be generated in the background (API layer)
@@ -452,10 +478,8 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     problem_id = save_problem(problem_dict or {})
 
     # If dedup happened (title already existed), reload from DB for correct starter_code
-    from code_tutor_agent.db.database import get_problem_by_id
     db_problem = get_problem_by_id(problem_id)
-    db_starter_code = db_problem.starter_code if db_problem else "" if db_problem else ""
-    db_optimal = db_problem.optimal_solution if db_problem else "" if db_problem else ""
+    db_starter_code = db_problem.starter_code if db_problem else ""
 
     # Build visible test cases (sample ones)
     visible_tcs = [

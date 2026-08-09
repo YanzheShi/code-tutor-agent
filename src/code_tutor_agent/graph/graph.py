@@ -42,10 +42,12 @@ def _build_graph() -> StateGraph:
     builder.add_node("tutor_node", tutor_node)
     builder.add_node("critic_node", critic_node)
     builder.add_node("update_profile_node", update_profile_node)
+    builder.add_node("constitutional_guard_node", constitutional_guard_node)
+
+    # 后续为agent 模式增加的节点
     builder.add_node("agent_dialog_node", agent_dialog_node)
     builder.add_node("agent_judge_node", agent_judge_node)
     builder.add_node("agent_tutor_node", agent_tutor_node)
-    builder.add_node("constitutional_guard_node", constitutional_guard_node)
 
     # ── Start router: agent mode or normal ──
     # （2026-08-04 死代码清理：移除 chat_node 分支——聊天走 API 层直连 LLM，

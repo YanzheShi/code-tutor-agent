@@ -79,8 +79,8 @@ def test_generate_from_leetcode_falls_back_when_no_parsed_tcs():
     with patch.object(generator, "get_stream_writer", return_value=None), \
          patch.object(generator, "save_problem", return_value=1) as mock_save, \
          patch.object(generator, "_generate_optimal_for_leetcode_sync"), \
-         patch(
-             "code_tutor_agent.leetcode.leetcode_fetcher._parse_examples_to_test_cases",
+         patch.object(
+             generator, "_parse_examples_to_test_cases",
              return_value=[fallback_tc],
          ) as mock_parse:
         cmd = generator._generate_from_leetcode("sid-456", lc)

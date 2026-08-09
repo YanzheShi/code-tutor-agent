@@ -16,6 +16,9 @@ import subprocess
 import sys
 import tempfile
 from typing import Any
+from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
+from code_tutor_agent.sandbox import struct_convert
+from code_tutor_agent.sandbox.input_generator import parse_signature
 
 logger = logging.getLogger(__name__)
 
@@ -209,9 +212,7 @@ def _build_harness(code: str, test_cases: list[dict], function_signature: str | 
     ListNode/TreeNode objects and serialises structured return values back
     to arrays (LeetCode convention).
     """
-    from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
-    from code_tutor_agent.sandbox import struct_convert
-    from code_tutor_agent.sandbox.input_generator import parse_signature
+
 
     # 解析签名，得到 (参数类型列表, 返回类型)，用于按类型还原/序列化
     param_types: list[str] = []
