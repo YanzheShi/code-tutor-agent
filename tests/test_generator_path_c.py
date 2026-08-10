@@ -1,12 +1,12 @@
 """针对 generator_node 出题路径的单元测试。
 
-验证「出题不依赖 skill-engine」后的行为：
-* LLM 主通道（ProblemAgent）成功 → 走示例解析 + 参考解自验证，正常落库；
-* LLM 全失败 → ProblemAgent 回退静态题库 → generator_node 采用静态题落库；
-* 静态题库也为空（极端）→ generator_node 强制再拉一次静态兜底，仍返回合法 Command。
+生成子 Agent 架构（docs/generation-subagent-design.md §2/§12）下，generator_node
+是薄壳翻译器：决策都在 generation/ 包的 ProblemGenerationAgent 内（LLM 原创 →
+重试 → LeetCode 拉题 → 历史未 AC → 静态题库）。此处 mock _GEN_AGENT 验证：
 
-覆盖 Phase 改造点：移除原路径 C（engine_adapter / skill-engine），统一走
-ProblemAgent（原生 LLM + 静态兜底）。
+* 翻译成功（任意通道）→ goto wait_for_submit_node，welcome 与题目数据正确落位；
+* 全通道失败 → 不落库、置 status=error 并以 error_message 友好提示用户；
+* 命中通道（channel）落盘到 progress，供 serializer 透出前端。
 """
 from __future__ import annotations
 
@@ -18,76 +18,110 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from code_tutor_agent.nodes import generator
-from code_tutor_agent.agents.agent_problem import ProblemChannel
-from code_tutor_agent.schemas.state import SessionState
+from code_tutor_agent.generation.state import (  # noqa: E402
+    GenerationResult,
+    ProblemDraft,
+)
+from code_tutor_agent.nodes import generator  # noqa: E402
+from code_tutor_agent.schemas.state import SessionState  # noqa: E402
 
 
 def _make_state() -> SessionState:
     return SessionState(session_id="sid-pathc", topic="数组", difficulty="easy", mode="practice")
 
 
-def _fake_static_problem() -> dict:
-    return {
-        "title": "Two Pointers Basics",
-        "topic": "双指针",
-        "difficulty": "easy",
-        "description": "静态题面",
-        "starter_code": "class Solution:\n    def f(self, a, b): pass\n",
-        "optimal_solution": "class Solution:\n    def f(self, a, b): return a\n",
-        "test_cases": [
+def _draft(title: str = "Two Pointers Basics") -> ProblemDraft:
+    return ProblemDraft(
+        topic="数组",
+        difficulty="easy",
+        title=title,
+        description="静态题面",
+        starter_code="class Solution:\n    def f(self, a, b): pass\n",
+        optimal_solution="class Solution:\n    def f(self, a, b): return a\n",
+        function_signature="a: int, b: int -> int",
+        test_cases=[
             {"input_args": ["[1,2]"], "expected_output": "[1,2]", "explanation": "s"},
         ],
-    }
+    )
 
 
-def _fake_outcome(channel: str, title: str):
-    """构造一个轻量 GenerationOutcome：problem.model_dump() 返回给定 dict。"""
-    static = _fake_static_problem()
-    static["title"] = title
-    fake_problem = SimpleNamespace(model_dump=lambda: dict(static))
-    return SimpleNamespace(ok=True, channel=channel, problem=fake_problem)
+def _fake_agent(result: GenerationResult) -> SimpleNamespace:
+    return SimpleNamespace(run=lambda ctx, sink=None: result)
 
 
-def test_generator_uses_problem_agent_static_fallback():
-    """LLM 主通道失败 → ProblemAgent 回退静态题库 → generator_node 采用并落库。"""
+def test_generator_uses_static_channel_result():
+    """agent 返回 static 通道结果 → generator_node 采用并落库（welcome 为普通文案）。"""
     state = _make_state()
-    fake_db = SimpleNamespace(starter_code="", optimal_solution="")
+    result = GenerationResult(ok=True, channel="static", problem_id=9, draft=_draft())
 
-    with patch.object(generator, "get_stream_writer", return_value=None), \
-         patch.object(
-             generator, "ProblemAgent",
-             return_value=SimpleNamespace(generate=lambda: _fake_outcome(ProblemChannel.STATIC, "Two Pointers Basics")),
-         ), \
-         patch.object(generator, "save_problem", return_value=9) as mock_save, \
-         patch("code_tutor_agent.db.database.get_problem_by_id", return_value=fake_db), \
+    with patch.object(generator, "_GEN_AGENT", _fake_agent(result)), \
+         patch.object(generator, "get_stream_writer", return_value=None), \
          patch.object(generator, "get_struct_prologue", return_value=""):
         cmd = generator.generator_node(state)
 
-    assert cmd is not None
     assert cmd.goto == "wait_for_submit_node"
-    saved = mock_save.call_args[0][0]
-    assert saved["title"] == "Two Pointers Basics"
+    assert cmd.update["problem"].title == "Two Pointers Basics"
+    assert cmd.update["problem"].problem_id == 9
+    assert cmd.update["status"] == "awaiting_submit"
+    assert cmd.update["tutor_messages"][0].content.startswith("来，试试这道")
+    # 通道透出：static 结果写进 progress
+    from code_tutor_agent.progress import get_generation_channel
+    assert get_generation_channel("sid-pathc") == "static"
 
 
-def test_generator_forces_static_when_problem_agent_returns_nothing():
-    """ProblemAgent 全失败（含静态为空）→ generator_node 强制再拉静态兜底，不抛异常。"""
+def test_generator_uses_leetcode_import_channel_result():
+    """LC 导入通道 → welcome 带 LeetCode 铭牌。"""
     state = _make_state()
-    fake_db = SimpleNamespace(starter_code="", optimal_solution="")
-
-    with patch.object(generator, "get_stream_writer", return_value=None), \
-         patch.object(
-             generator, "ProblemAgent",
-             return_value=SimpleNamespace(generate=lambda: SimpleNamespace(ok=False, channel=ProblemChannel.STATIC, problem=None)),
-         ), \
-         patch.object(generator, "get_static_problem", return_value=_fake_static_problem()) as mock_static, \
-         patch.object(generator, "save_problem", return_value=11) as mock_save, \
-         patch("code_tutor_agent.db.database.get_problem_by_id", return_value=fake_db), \
+    result = GenerationResult(
+        ok=True, channel="leetcode_import", problem_id=4,
+        draft=_draft(title="Two Sum"),
+    )
+    with patch.object(generator, "_GEN_AGENT", _fake_agent(result)), \
+         patch.object(generator, "get_stream_writer", return_value=None), \
          patch.object(generator, "get_struct_prologue", return_value=""):
         cmd = generator.generator_node(state)
 
-    assert mock_static.called
-    assert cmd is not None
     assert cmd.goto == "wait_for_submit_node"
-    saved = mock_save.call_args[0][0]
-    assert saved["title"] == "Two Pointers Basics"
+    assert "来自 LeetCode 的 **Two Sum**" in cmd.update["tutor_messages"][0].content
+
+
+def test_generator_errors_cleanly_when_all_channels_fail():
+    """全通道失败 → 不抛异常、不落库，status=error + 友好提示，通道不入库。"""
+    state = SessionState(
+        session_id="sid-pathc-fail", topic="数组", difficulty="easy", mode="practice",
+    )
+    result = GenerationResult(ok=False, channel=None, error="所有可用通道均失败")
+
+    with patch.object(generator, "_GEN_AGENT", _fake_agent(result)), \
+         patch.object(generator, "get_stream_writer", return_value=None):
+        cmd = generator.generator_node(state)
+
+    assert cmd.goto == "__end__"
+    assert cmd.update["status"] == "error"
+    assert "换个主题" in cmd.update["error_message"]
+    from code_tutor_agent.progress import get_generation_channel
+    assert get_generation_channel("sid-pathc-fail") == ""  # None 不透出
+
+
+def test_generator_agent_mode_preserves_dialog():
+    """agent 模式：出题前对话保留 + welcome 追加，channel 仍透出。"""
+    from code_tutor_agent.schemas.state import Message as TutorMsg
+
+    state = SessionState(
+        session_id="sid-pathc-agent", topic="数组", difficulty="easy", mode="agent",
+        tutor_messages=[
+            TutorMsg(role="tutor", content="我们来做一道数组题吧"),
+            TutorMsg(role="user", content="好呀"),
+        ],
+    )
+    result = GenerationResult(ok=True, channel="llm", problem_id=2, draft=_draft())
+    with patch.object(generator, "_GEN_AGENT", _fake_agent(result)), \
+         patch.object(generator, "get_stream_writer", return_value=None), \
+         patch.object(generator, "get_struct_prologue", return_value=""):
+        cmd = generator.generator_node(state)
+
+    msgs = cmd.update["tutor_messages"]
+    assert msgs[0].content == "我们来做一道数组题吧"
+    assert msgs[-1].content.startswith("来，试试这道")
+    from code_tutor_agent.progress import get_generation_channel
+    assert get_generation_channel("sid-pathc-agent") == "llm"

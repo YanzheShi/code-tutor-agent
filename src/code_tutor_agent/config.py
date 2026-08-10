@@ -46,9 +46,10 @@ PURPOSE_CONFIGS = {
     "generator":            {"alias": "default", "temperature": 0.3},
 
     # === Agent 模块 ===
-    "dialog":               {"alias": "default", "temperature": 0.3, "max_tokens": 512},
+    "dialog":               {"alias": "default", "temperature": 0.3, "max_tokens": 2048},
     "dialog-stream":        {"alias": "default", "temperature": 0.7, "streaming": True},
     "judge":                {"alias": "default", "temperature": 0.7},
+    # 这里
     "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 8192},
 
     # === 上下文管理 ===

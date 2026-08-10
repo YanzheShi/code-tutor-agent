@@ -63,10 +63,11 @@ def test_unsanitized_bad_input_causes_re_but_sanitized_passes():
 
 
 def test_generate_complex_tests_sanitizes_boundary_end_to_end():
-    """端到端（mock LLM/DB）：生成管线收到 m/n 乱数的边界用例，应自动校正并保留。"""
-    from code_tutor_agent.api.services.generation import _generate_complex_tests
+    """端到端（mock LLM/DB）：build_suite 收到 m/n 乱数的边界用例，应自动校正并保留。"""
+    from code_tutor_agent.api.services.generation import _SUITE_AGENT
     from code_tutor_agent.db import database as db_mod
-    from code_tutor_agent.config import get_llm
+    from code_tutor_agent.generation.state import NullSink
+    from code_tutor_agent.generation.suite import build_suite
 
     full = SimpleNamespace(
         optimal_solution=_MERGE_CODE,
@@ -103,9 +104,9 @@ def test_generate_complex_tests_sanitizes_boundary_end_to_end():
     with patch.object(db_mod, "get_problem_by_id", fake_get_problem), \
          patch.object(db_mod, "update_problem_test_cases", fake_update), \
          patch("code_tutor_agent.config.get_llm", return_value=_LLM()):
-        # _generate_complex_tests 是同步函数，线上用 asyncio.to_thread 调用；
+        # build_suite 是同步函数，线上用 asyncio.to_thread 调用；
         # 单测直接同步调用即可（不要 asyncio.run，否则会报 None 非协程）。
-        _generate_complex_tests(999003, "sid-test")
+        build_suite(_SUITE_AGENT, 999003, NullSink())
 
     suite = captured.get("suite", [])
     bc = next((t for t in suite if t.get("explanation") == "bad boundary from llm"), None)

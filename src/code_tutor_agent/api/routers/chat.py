@@ -183,14 +183,14 @@ async def _run_graph_and_generate_tests(graph, config, sid: str):
     """
     cur = graph.get_state(config)
     await asyncio.to_thread(graph.invoke, dict(cur.values), config)
-    from code_tutor_agent.api.services.generation import _generate_complex_tests
+    from code_tutor_agent.api.services.generation import _run_suite_safe
     try:
         state = graph.get_state(config)
         problem = state.values.get("problem")
         if problem:
             pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
             if pid:
-                await asyncio.to_thread(_generate_complex_tests, pid, sid)
+                await _run_suite_safe(pid, sid)
     except Exception as e:
         logger.error("Background complex test generation failed for %s: %s", sid, e, exc_info=True)
 
@@ -246,9 +246,9 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
     否则 test_agent_dialog_handoff 对 `agent_dialog.analyze_user_intent` 的 patch 会失效。
     """
     from code_tutor_agent.agents.agent_dialog import (
+        DialogIntent,
         analyze_user_intent,
         build_ready_message,
-        DialogIntent,
     )
 
     raw_history = values.get("agent_dialog_history", [])
@@ -357,9 +357,10 @@ def _handle_normal_chat_stream(sid, config, graph, values, message) -> Streaming
           graph.stream(None, config) 从 END 不会重启，返回空。
     统一走直接 LLM 是最可靠的做法。
     """
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, run_tool_loop
     from code_tutor_agent.config import get_llm
-    from code_tutor_agent.agents.tools import run_tool_loop, TUTOR_CHAT_TOOLS
-    from langchain_core.messages import SystemMessage, HumanMessage
 
     llm = get_llm(purpose="api-chat")
 

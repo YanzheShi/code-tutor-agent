@@ -44,8 +44,9 @@ export async function runCode(
   code: string,
 ): Promise<RunCodeResponse> {
   // 加硬超时，避免后端异常卡死时「运行中」永远不解除
+  // todo 调大到 300s，避免断点调试时停留过久被超时掐断链路
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60000);
+  const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
     const r = await fetch(`${BASE}/session/${sid}/run`, {
       method: 'POST',

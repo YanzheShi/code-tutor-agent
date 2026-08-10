@@ -42,10 +42,13 @@ logger = logging.getLogger(__name__)
 
 
 class ProblemChannel(str, Enum):
-    """出题通道标识。"""
+    """出题通道标识（设计 docs/generation-subagent-design.md §7）。"""
 
-    LLM = "llm"          # LLM 结构化出题（主通道）
-    STATIC = "static"    # 静态题库兜底
+    LLM = "llm"                   # LLM 原创生成（主通道）
+    LEETCODE_IMPORT = "leetcode_import"   # 用户贴 URL 导入成功
+    LEETCODE_PULL = "leetcode_pull"       # LLM 失败后按主题拉 LeetCode 题
+    DB_UNAC = "db_unac"                   # 历史未 AC 题
+    STATIC = "static"             # 静态题库兜底
 
     def __str__(self) -> str:  # 让日志/测试打印出裸值而非 "ProblemChannel.LLM"
         return self.value
@@ -160,8 +163,6 @@ def verify_problem(problem_dict: dict) -> bool:
     if _is_stub_solution(optimal):
         logger.warning("optimal_solution is a stub (no real logic) — rejecting")
         return False
-
-    # P0-3: 同时验证 brute_solution 可编译
     brute = _extract_code(problem_dict.get("brute_solution", ""))
     problem_dict["brute_solution"] = brute
     if not brute:
@@ -255,7 +256,7 @@ def generate_problem(
     topic: str,
     difficulty: str,
     purpose: str = "problem",
-    max_retries: int = 3,
+    max_retries: int =2,
 ) -> Problem:
     """（主通道）调用 LLM 结构化生成一道题，返回 ``Problem`` 对象。
 
@@ -283,7 +284,8 @@ def generate_problem(
     chain = prompt | structured_llm
 
     problem: Problem | None = None
-    for attempt in range(max_retries + 1):
+    # 调用重试
+    for attempt in range(max_retries):
         logger.info("LLM call attempt %d/%d …", attempt + 1, max_retries + 1)
 
         try:
@@ -294,6 +296,7 @@ def generate_problem(
 
         problem_dict = problem.model_dump()
 
+        # 校验题目的完整性, 给出的暴力解和最优解能否编译
         if verify_problem(problem_dict):
             # 日志：打印 LLM 出题完整内容，方便调试
             logger.info(
@@ -378,6 +381,12 @@ def generate_detailed_solution(problem_description: str) -> Optional[str]:
 
 class ProblemAgent:
     """出题 Agent：统一入口，按降级链产出题目并报告命中通道。
+
+    .. deprecated::
+        generation/ 包（ProblemGenerationAgent）接管出题后已无活调用方
+        （2026-08-10 审计确认，仅剩模块 docstring 示例引用）。请勿在新代码使用；
+        待确认无外部依赖后整体删除。模块内 generate_problem / verify_problem 仍活跃
+        （LlmGateway 底层），不在废弃范围。
 
     用法::
 

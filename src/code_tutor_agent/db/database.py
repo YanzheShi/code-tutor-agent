@@ -448,6 +448,50 @@ def get_all_problem_verdicts() -> dict[int, str]:
         return {}
 
 
+def get_unac_problem(
+    topic: str | None = None,
+    difficulty: str | None = None,
+    profile_hint: str | None = None,
+) -> Optional[int]:
+    """返回一道「历史做过但未 AC」的题目 id（HISTORY 兜底通道）。
+
+    优先级（在未 AC 的题目中）：
+    1. topic / profile_hint 命中的题目（弱项优先：profile_hint > 当前 topic）
+    2. difficulty 命中
+    3. 最近提交的题目
+
+    无未 AC 题目或查询失败返回 None。
+    """
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT s.problem_id, p.topic, p.difficulty, s.id AS sub_id "
+            "FROM submissions s "
+            "JOIN (SELECT problem_id, MAX(id) AS max_id FROM submissions GROUP BY problem_id) latest "
+            "ON s.problem_id = latest.problem_id AND s.id = latest.max_id "
+            "JOIN problems p ON p.id = s.problem_id "
+            "WHERE s.verdict IS NOT NULL AND s.verdict != 'AC' "
+            "ORDER BY s.id DESC"
+        ).fetchall())
+        if not rows:
+            return None
+
+        def _score(row) -> int:
+            s = 0
+            if profile_hint and (row["topic"] == profile_hint or profile_hint in row["topic"]):
+                s += 8
+            elif topic and (row["topic"] == topic or topic in row["topic"]):
+                s += 8
+            if difficulty and row["difficulty"] == difficulty:
+                s += 4
+            return s
+
+        best = max(rows, key=_score)
+        return best["problem_id"]
+    except Exception as exc:
+        logger.error("get_unac_problem() failed: %s", exc)
+        return None
+
+
 # ── 会话活跃时间（TTL 自动清理）──
 
 

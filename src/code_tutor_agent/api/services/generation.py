@@ -2,28 +2,44 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.generation import ProblemGenerationAgent
+from code_tutor_agent.generation.state import GenEvent
+from code_tutor_agent.generation.suite import build_suite
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.progress import _generation_progress
-from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg, SessionState
+from code_tutor_agent.schemas.state import Message as TutorMsg
+from code_tutor_agent.schemas.state import ProblemMeta, SessionState
 
 logger = logging.getLogger(__name__)
-
-# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃
-_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
 
 # 题目生成超时（秒），可通过环境变量覆盖
 GENERATION_TIMEOUT = int(os.getenv("GENERATION_TIMEOUT_SECONDS", "120"))
 
+# 后台套件生成的统一执行器（graph.invoke 后由 API 层调度，设计 §13）
+_SUITE_AGENT = ProblemGenerationAgent()
+
+
+class _ProgressSink:
+    """把 suite 的 GenEvent 追加到会话进度（API 无 stream writer 的上下文）。"""
+
+    _PREFIX = {"progress": "", "warning": "⚠️ ", "error": "❌ ", "info": "📝 "}
+
+    def __init__(self, sid: str) -> None:
+        self._sid = sid
+
+    def event(self, ev: GenEvent) -> None:
+        _generation_progress.setdefault(self._sid, []).append(
+            f"{self._PREFIX.get(ev.kind, '')}{ev.message}"
+        )
+
 
 def _extract_code_from_llm_response(text: str) -> str:
     """Extract Python code from LLM response — strip markdown fences if present."""
-    import re
     m = re.search(r"```python\n?(.*?)```", text, re.DOTALL)
     if m:
         return m.group(1).strip()
@@ -117,7 +133,7 @@ async def run_generation(sid: str, initial_dict: dict):
                 if pid:
                     # 彻底独立于 run_generation 生命周期：题目就绪后即可进做题，
                     # 复杂测试用例在独立 task 中后台生成（不阻塞本协程返回）。
-                    asyncio.create_task(_run_complex_tests_safe(pid, sid))
+                    asyncio.create_task(_run_suite_safe(pid, sid))
                 else:
                     _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
             else:
@@ -201,298 +217,28 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
         )
 
 
-async def _run_complex_tests_safe(problem_id: int, sid: str):
-    """Wrapper that swallows exceptions from background test generation.
+async def _run_suite_safe(problem_id: int, sid: str):
+    """后台用 build_suite 生成完整测试套件（随机 + 边界 + 交叉验证）。
 
-    Prevents ``asyncio.create_task`` "Task exception was never retrieved"
-    warnings and keeps a dangling reference to the failure in the UI.
+    统一入口：generation 包不再自调度（线程内无事件循环会静默跳过，且与
+    API 层调度双跑），graph.invoke 返回后一律由这里调度（2026-08-10）。
     """
     try:
         # 关键：整段用例生成是纯同步阻塞（subprocess 跑参考解验证 + LLM 生成边界用例），
         # 必须丢进线程池，否则会独占事件循环，导致 SSE 的 done 事件要等全部用例生成完
         # 才能推送、题目迟迟不显示。to_thread 释放事件循环，题目就绪即可推。
-        await asyncio.to_thread(_generate_complex_tests, problem_id, sid)
+        await asyncio.to_thread(build_suite, _SUITE_AGENT, problem_id, _ProgressSink(sid))
     except Exception as exc:
-        logger.warning("Background complex test generation failed for %d: %s", problem_id, exc)
+        logger.warning("Background suite generation failed for %d: %s", problem_id, exc)
         _generation_progress.setdefault(sid, []).append("\u26a0\ufe0f 部分测试用例生成失败")
-
-
-def _generate_complex_tests(problem_id: int, sid: str):
-    """Generate random + boundary test cases (SYNCHRONOUS).
-
-    整段是纯同步阻塞：subprocess 跑参考解做验证 + LLM 生成边界用例。
-    一律由调用方用 ``asyncio.to_thread`` 丢进线程池执行，切勿直接 await，
-    否则会独占事件循环，导致 SSE 的 done 事件要等全部用例生成完才推送、
-    题目迟迟不显示。
-    """
-    from code_tutor_agent.db.database import get_problem_by_id, update_problem_test_cases
-    from code_tutor_agent.sandbox.input_generator import (
-        generate_random_inputs,
-        sanitize_test_case,
-        _needs_sorted_inputs,
-    )
-    from code_tutor_agent.sandbox.runner import run_solution
-
-    logger.info("_generate_complex_tests() — problem_id=%d", problem_id)
-    full = get_problem_by_id(problem_id)
-    if not full:
-        logger.warning("Problem %d not found", problem_id)
-        return
-
-    # P3: 双参考解交叉验证 — 需要 optimal_solution 和 brute_solution 都可用
-    optimal_code = full.optimal_solution or ""
-    brute_code = full.brute_solution or ""
-    func_sig = full.function_signature
-    # 有双解时，optimal 优先做参考解，brute 做交叉验证
-    # 仅单解时回退到单解验证
-    ref_code = optimal_code or brute_code
-    cross_code = brute_code if optimal_code else None
-    use_cross_validation = bool(optimal_code and brute_code)
-
-    if not ref_code:
-        logger.warning("No optimal_solution or brute_solution for %d — skipping bg test gen", problem_id)
-        _generation_progress.setdefault(sid, []).append("📝 无参考代码，跳过后台测试生成")
-        return
-
-    _generation_progress.setdefault(sid, []).append(
-        "🔄 双参考解交叉验证" if use_cross_validation else "🔄 单参考解验证"
-    )
-
-    # 「有序」类题目（合并有序数组 / 有序数组二分等）：对输入数组排序（方案 B）。
-    sort_inputs = _needs_sorted_inputs(*(getattr(full, "constraints", None) or []), getattr(full, "description", None) or "")
-
-    _generation_progress.setdefault(sid, []).append("\U0001f9ea 正在生成更多测试用例...")
-
-    random_inputs = generate_random_inputs(
-        func_sig, count=12, seed=problem_id,
-        constraints=getattr(full, "constraints", None),
-        description=getattr(full, "description", None),
-    )
-    logger.info("Generated %d random inputs", len(random_inputs))
-    if not random_inputs:
-        _generation_progress.setdefault(sid, []).append("✅ 无函数签名，跳过随机测试生成")
-        return
-
-    _generation_progress.setdefault(sid, []).append(f"\U0001f527 正在运行参考解验证 {len(random_inputs)} 个用例...")
-    all_tcs: list[dict] = []
-    dropped_cross = 0  # P3: 交叉验证不一致的丢弃数
-    for idx, inp in enumerate(random_inputs):
-        # 先校正 input 契约（重算 m/n、补零到 m+n 等），校正失败则丢弃。
-        # 不校正的话，合并类题的 nums1 没补零，参考解会越界 RE。
-        if func_sig:
-            san = sanitize_test_case(func_sig, {"input_args": inp}, sort_inputs=sort_inputs)
-            if not san or not san.get("input_args"):
-                logger.warning("Random case input malformed, dropping (pid=%d idx=%d)", problem_id, idx)
-                continue
-            inp = san["input_args"]
-        tc = {
-            "input_args": inp,
-            "expected_output": "",
-            "is_hidden": idx >= 4,
-            "explanation": f"随机生成测试 {idx+1}",
-        }
-        # ── P3: 双参考解交叉验证 ──
-        if use_cross_validation:
-            opt_results = run_solution(optimal_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            brute_results = run_solution(brute_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            if not opt_results or not brute_results:
-                logger.warning("Cross-validation: one or both refs failed, dropping (pid=%d idx=%d)", problem_id, idx)
-                dropped_cross += 1
-                continue
-            opt_r, brute_r = opt_results[0], brute_results[0]
-            if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                logger.warning("Cross-validation: ref crashed opt=%s brute=%s, dropping", opt_r.status, brute_r.status)
-                dropped_cross += 1
-                continue
-            opt_actual = (opt_r.detail or "").strip()
-            brute_actual = (brute_r.detail or "").strip()
-            if not opt_actual or not brute_actual:
-                logger.warning("Cross-validation: empty output, dropping")
-                dropped_cross += 1
-                continue
-            if opt_actual != brute_actual:
-                logger.warning("Cross-validation mismatch: opt=%s brute=%s, dropping", opt_actual, brute_actual)
-                dropped_cross += 1
-                continue
-            # 一致 → 用 optimal 的输出作为 expected
-            tc["expected_output"] = opt_actual
-            all_tcs.append(tc)
-        else:
-            # 单参考解：回退到原逻辑
-            results = run_solution(ref_code, [tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            if not results:
-                continue
-            r = results[0]
-            if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该用例无效，丢弃
-                logger.warning("Random case ref %s, dropping (pid=%d idx=%d)", r.status, problem_id, idx)
-                continue
-            actual = r.detail or ""
-            if actual:
-                tc["expected_output"] = actual
-                all_tcs.append(tc)
-
-    _generation_progress.setdefault(sid, []).append("\U0001f916 正在生成边界测试用例...")
-    try:
-        from code_tutor_agent.config import get_llm
-        from code_tutor_agent.prompts.generate_boundary_cases import (
-            GENERATE_BOUNDARY_SYSTEM,
-            GENERATE_BOUNDARY_USER,
-        )
-
-        existing_cases_str = "\n".join(
-            f"  #{i+1}: input_args={tc.get('input_args', [])} \u2192 {tc.get('expected_output', '')}"
-            for i, tc in enumerate(all_tcs[:4])
-        )
-        constraints_str = "\n".join(f"  - {c}" for c in full.constraints) if full.constraints else ""
-
-        prompt_user = GENERATE_BOUNDARY_USER.format(
-            title=full.title,
-            description=full.description,
-            difficulty=full.difficulty,
-            function_signature=func_sig,
-            constraints=constraints_str,
-            optimal_code=ref_code,
-            existing_cases=existing_cases_str,
-            count=8,
-        )
-
-        llm = get_llm(purpose="api-generation-high")
-        resp = llm.invoke([
-            ("system", GENERATE_BOUNDARY_SYSTEM),
-            ("human", prompt_user),
-        ])
-        content = resp.content if hasattr(resp, "content") else str(resp)
-
-        # 贪婪匹配到最后一个 ]：避免 input_args 里的 "[1,2,3]" 等含方括号字符串
-        # 被非贪婪 .*? 提前截断导致 JSON 解析失败
-        json_match = re.search(r"\[.*\]", content, re.DOTALL)
-        if json_match:
-            boundary_cases = json.loads(json_match.group(0))
-            logger.info("LLM generated %d boundary cases", len(boundary_cases))
-
-            _generation_progress.setdefault(sid, []).append(f"\U0001f527 正在验证 {len(boundary_cases)} 个边界用例...")
-            for bc in boundary_cases:
-                # 先校正 input 契约（重算 m/n、补零等），校正失败则丢弃
-                if func_sig:
-                    bc = sanitize_test_case(func_sig, bc, sort_inputs=sort_inputs) or {}
-                    if not bc.get("input_args"):
-                        logger.warning("Boundary case input malformed, dropping: %s", bc.get("explanation", ""))
-                        continue
-                # P3: 双参考解交叉验证（有双解时），否则单解验证
-                _tc = {
-                    "input_args": bc.get("input_args", []),
-                    # 强制空 expected：让 runner 进入「回传实际输出」模式，
-                    # 避免 LLM 自带的 expected 触发比较模式把 detail 污染成
-                    # "expected=... got=..." 报告字符串。
-                    "expected_output": "",
-                }
-                if use_cross_validation:
-                    opt_results = run_solution(optimal_code, [_tc], timeout=10.0, function_signature=func_sig, force_local=True)
-                    brute_results = run_solution(brute_code, [_tc], timeout=10.0, function_signature=func_sig, force_local=True)
-                    if not opt_results or not brute_results:
-                        logger.warning("Boundary cross-val: no result, dropping: %s", bc.get("explanation", ""))
-                        continue
-                    opt_r, brute_r = opt_results[0], brute_results[0]
-                    if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                        logger.warning("Boundary cross-val: ref crashed, dropping: %s", bc.get("explanation", ""))
-                        continue
-                    opt_actual = (opt_r.detail or "").strip()
-                    brute_actual = (brute_r.detail or "").strip()
-                    if not opt_actual or not brute_actual or opt_actual != brute_actual:
-                        logger.warning("Boundary cross-val: mismatch, dropping: %s (opt=%s brute=%s)",
-                                       bc.get("explanation", ""), opt_actual, brute_actual)
-                        dropped_cross += 1
-                        continue
-                    bc["expected_output"] = opt_actual
-                else:
-                    results = run_solution(ref_code, [_tc], timeout=10.0, function_signature=func_sig, force_local=True)
-                    if not results:
-                        logger.warning("Boundary case no result, dropping: %s", bc.get("explanation", ""))
-                        continue
-                    r = results[0]
-                    if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该用例无效，丢弃
-                        logger.warning("Boundary case ref %s, dropping: %s", r.status, bc.get("explanation", ""))
-                        continue
-                    actual = r.detail or ""
-                    if not actual:
-                        logger.warning("Boundary case ref produced empty output, dropping: %s", bc.get("explanation", ""))
-                        continue
-                    bc["expected_output"] = actual
-                bc["is_hidden"] = True
-                bc["explanation"] = bc.get("explanation", "LLM 生成的边界用例")
-                all_tcs.append(bc)
-    except Exception as exc:
-        logger.warning("Prompt B (boundary LLM) failed: %s", exc)
-
-    # ── 关键修复：验证 LLM 生成的示例/可见用例 ──
-    # 这些用例的 expected 是 LLM 在题目契约 Examples 里直接编的（从未验证），
-    # 会出现「编错数字」类错误（如题目 15 把 [-7,-3,2,3,11] 期望写成 [4,9,16,49,121]）。
-    # 用参考解重算期望并校验，参考解跑挂的用例直接丢弃。
-    existing_tcs = full.test_cases
-    sample_tcs = [tc for tc in existing_tcs if not tc.get("is_hidden", False)][:2]
-    verified_visible: list[dict] = []
-    for tc in sample_tcs:
-        san = dict(tc)
-        if func_sig:
-            san = sanitize_test_case(func_sig, san, sort_inputs=sort_inputs) or {}
-        if not san or not san.get("input_args"):
-            logger.warning("Sample/visible case input malformed, dropping: %s", tc.get("explanation", ""))
-            continue
-        _tc = {"input_args": san["input_args"], "expected_output": ""}
-        # P3: 双参考解交叉验证
-        if use_cross_validation:
-            opt_results = run_solution(optimal_code, [_tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            brute_results = run_solution(brute_code, [_tc], timeout=10.0, function_signature=func_sig, force_local=True)
-            if not opt_results or not brute_results:
-                logger.warning("Sample cross-val: no result, dropping: %s", tc.get("explanation", ""))
-                continue
-            opt_r, brute_r = opt_results[0], brute_results[0]
-            if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                logger.warning("Sample cross-val: ref crashed, dropping: %s", tc.get("explanation", ""))
-                continue
-            opt_actual = (opt_r.detail or "").strip()
-            brute_actual = (brute_r.detail or "").strip()
-            if not opt_actual or not brute_actual or opt_actual != brute_actual:
-                logger.warning("Sample cross-val: mismatch, dropping: %s (opt=%s brute=%s)",
-                               tc.get("explanation", ""), opt_actual, brute_actual)
-                dropped_cross += 1
-                continue
-            san["expected_output"] = opt_actual
-        else:
-            results = run_solution(
-                ref_code, [_tc],
-                timeout=10.0, function_signature=func_sig, force_local=True,
-            )
-            if not results:
-                logger.warning("Sample/visible case no result, dropping: %s", tc.get("explanation", ""))
-                continue
-            r = results[0]
-            if r.status in _DROP_STATUSES:  # 参考解跑挂 -> 该示例无效，丢弃
-                logger.warning("Sample/visible case ref %s, dropping: %s", r.status, tc.get("explanation", ""))
-                continue
-            actual = r.detail or ""
-            if not actual:
-                logger.warning("Sample/visible case ref produced empty output, dropping: %s", tc.get("explanation", ""))
-                continue
-            san["expected_output"] = actual
-        san["is_hidden"] = False
-        verified_visible.append(san)
-
-    full_suite = verified_visible + all_tcs
-    # 可见用例 = 已验证的示例用例 + 已验证的随机用例兜底（至多 4 条），全部经参考解验证。
-    visible_final = [tc for tc in full_suite if not tc.get("is_hidden", False)][:4]
-
-    update_problem_test_cases(problem_id, full_suite, visible_final)
-    _drop_msg = f"（交叉验证丢弃 {dropped_cross} 个不一致用例）" if dropped_cross else ""
-    _generation_progress.setdefault(sid, []).append(f"\u2705 共 {len(full_suite)} 个测试用例已就绪{_drop_msg}（含 LLM 边界用例）")
-    logger.info("Completed background test gen for problem %d (dropped %d cross-validation)", problem_id, dropped_cross)
 
 
 def run_fast_path(sid: str, body: dict, graph, config):
     """Handle LeetCode fast-path — create session from parsed data, skip graph generation."""
     from code_tutor_agent.db.database import save_problem
-    from code_tutor_agent.schemas.state import ProblemMeta, Message as TutorMsg
     from code_tutor_agent.leetcode.leetcode_fetcher import extract_function_signature
+    from code_tutor_agent.schemas.state import Message as TutorMsg
+    from code_tutor_agent.schemas.state import ProblemMeta
 
     le_data = body.get("leetcode", {})
     parsed_tcs = le_data.get("parsed_test_cases") or []
@@ -527,7 +273,7 @@ def run_fast_path(sid: str, body: dict, graph, config):
         except Exception:
             pass
         try:
-            await asyncio.to_thread(_generate_complex_tests, problem_id, sid)
+            await _run_suite_safe(problem_id, sid)
         except Exception:
             logger.warning("Background test generation failed for problem %d", problem_id)
 

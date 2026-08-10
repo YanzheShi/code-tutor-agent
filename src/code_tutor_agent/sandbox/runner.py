@@ -8,16 +8,15 @@ optimal_solution（必须通过）和参考解。
 
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import os
 import subprocess
 import sys
 import tempfile
-from typing import Any
-from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
+
 from code_tutor_agent.sandbox import struct_convert
+from code_tutor_agent.sandbox.ds import INJECT_PROLOGUE
 from code_tutor_agent.sandbox.input_generator import parse_signature
 
 logger = logging.getLogger(__name__)

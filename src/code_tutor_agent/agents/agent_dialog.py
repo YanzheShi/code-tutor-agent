@@ -528,7 +528,7 @@ async def analyze_user_intent(
         structured_llm = llm.with_structured_output(DialogIntent)
         intent = structured_llm.invoke(messages)
     except Exception as exc:
-        logger.warning("LLM structured output failed after tool loop, fallback: %s", exc)
+        logger.error("LLM structured output failed after tool loop, fallback: %s", exc)
         intent = _fallback_parse_intent(transcript, profile_summary)
 
     # ── 把解析结果挂到意图上，供路由层写入 state.leetcode ──

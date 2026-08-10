@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from code_tutor_agent.progress import _generation_progress
+from code_tutor_agent.progress import _generation_progress, get_generation_channel
 
 
 def serialize_state(state: Any) -> dict:
@@ -57,6 +57,8 @@ def serialize_state(state: Any) -> dict:
         "last_verdict": d.get("last_verdict"),
         "last_review_payload": d.get("last_review_payload"),
         "error_message": d.get("error_message", ""),
+        # 出题命中通道透出（llm / leetcode_import / leetcode_pull / db_unac / static）
+        "channel": get_generation_channel(sid),
         "progress_messages": progress,
         "repair_suggestion": d.get("repair_suggestion", ""),
         "warm_feedback": d.get("warm_feedback", ""),

@@ -43,10 +43,21 @@ def _make_fake_graph(record: list):
 
 
 async def _collect(resp) -> str:
+    """拼接 SSE 流里的真实文本。
+
+    每个事件是 `data: {"t": "..."}` 的 JSON 包裹（见 chat._sse_payload），
+    需解析内层 "t" 再拼接，否则中文被 _chunk_text 切块后子串断言会假失败。
+    """
+    import json
+
     chunks = []
     async for part in resp.body_iterator:
         if part.startswith("data: ") and "__DONE__" not in part:
-            chunks.append(part[len("data: "):].rstrip("\n"))
+            payload = part[len("data: "):].rstrip("\n")
+            try:
+                chunks.append(json.loads(payload).get("t", ""))
+            except (json.JSONDecodeError, TypeError):
+                chunks.append(payload)
     return "".join(chunks)
 
 

@@ -53,8 +53,8 @@ class JsonFormatter(logging.Formatter):
             log_entry["exception"] = str(record.exc_info[1])
         return json.dumps(log_entry, ensure_ascii=False, default=str)
 
-
-def setup_logging(level: int = logging.INFO) -> None:
+# 日志默认级别修改
+def setup_logging(level: int = logging.DEBUG) -> None:
     """安装结构化 JSON 日志处理器，替换所有现有 handler。
 
     调用时机：应用启动时，在任何 logger 使用之前。

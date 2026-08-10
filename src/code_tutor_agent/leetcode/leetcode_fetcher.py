@@ -4,16 +4,15 @@ Fetch LeetCode problem via GraphQL.
 Can be imported by both the API endpoint and the CLI script.
 """
 
+import argparse
+import html as html_mod
 import json
+import logging
 import re
 import time
-import logging
-import argparse
-import urllib.request
 import urllib.error
-import html as html_mod
+import urllib.request
 from dataclasses import dataclass, field
-from typing import Optional
 
 # 配置日志记录
 logging.basicConfig(
@@ -36,6 +35,30 @@ class LeetCodeProblem:
     tags: list[str] = field(default_factory=list)
     starter_code: str = ""
     content_html: str = ""
+
+
+@dataclass
+class LeetCodeProblemListItem:
+    """主题题目列表中的单条摘要（fetch_problem_list 的返回项）。
+
+    仅供列表展示/筛选，完整题目内容仍需走 fetch_problem(slug)。
+    """
+
+    frontend_question_id: str
+    title: str
+    slug: str
+    difficulty: str
+    ac_rate: float
+    paid_only: bool
+    topic_tags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class LeetCodeProblemList:
+    """主题题目列表查询结果。"""
+
+    total: int
+    items: list["LeetCodeProblemListItem"]
 
 
 def _html_to_text(html: str) -> str:
@@ -285,8 +308,6 @@ def problem_to_markdown(p: LeetCodeProblem) -> str:
     return "\n".join(parts)
 
 
-import argparse
-import json
 
 
 def extract_function_signature(starter_code: str) -> str:
@@ -449,6 +470,7 @@ def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
         "hints": p.hints,
         "tags": p.tags,
         "session_id": "",
+        "function_signature": extract_function_signature(p.starter_code),
         "parsed_test_cases": _parse_examples_to_test_cases(p.examples, p.starter_code),
     }
 
@@ -573,6 +595,134 @@ def _split_input_args(text: str) -> list[str]:
     if current:
         parts.append("".join(current).strip())
     return parts
+
+
+# 仅在 leetcode.com 上可用：leetcode.cn 的公开 GraphQL 已移除 questionList 字段
+# （2026-08-10 实测：cn 的 questionList/questionListV2 均报 Cannot query field，
+#  /api/problems/{topic}/ 恒返回空，/api/problem-list/{id}/ 404；com 的
+#  filters.listId 会被静默忽略，只有 filters.tags 真正生效，与 difficulty 可组合）
+_PROBLEM_LIST_GRAPHQL = """
+query problemsetQuestionList(
+    $categorySlug: String, $limit: Int, $skip: Int, $filters: QuestionListFilterInput
+) {
+    problemsetQuestionList: questionList(
+        categorySlug: $categorySlug
+        limit: $limit
+        skip: $skip
+        filters: $filters
+    ) {
+        total: totalNum
+        questions: data {
+            acRate
+            difficulty
+            frontendQuestionId: questionFrontendId
+            paidOnly: isPaidOnly
+            title
+            titleSlug
+            topicTags { slug }
+        }
+    }
+}
+"""
+
+_PROBLEM_LIST_DIFFICULTIES = {"EASY", "MEDIUM", "HARD"}
+
+
+def fetch_problem_list(
+    topic: str,
+    difficulty: str | None = None,
+    limit: int = 10,
+    skip: int = 0,
+) -> LeetCodeProblemList:
+    """按主题（topic tag）获取题目摘要列表。
+
+    对应 LeetCode 的 /problem-list/{topic} 专题页（如 segment-tree）。
+    仅支持 leetcode.com（见模块级注释）；topic 过滤为 AND 语义，
+    可与 difficulty（"EASY"/"MEDIUM"/"HARD"）组合过滤。
+
+    Args:
+        topic: 主题 slug，如 "segment-tree"、"dynamic-programming"。
+        difficulty: 可选难度过滤，大写 "EASY"/"MEDIUM"/"HARD"。
+        limit: 本次返回条数（1~100）。
+        skip: 分页偏移。
+
+    Returns:
+        列表结果（total 为题数，items 为摘要条目）。
+
+    Raises:
+        ValueError: topic 不是合法主题标签，或 difficulty 非法；
+            GraphQL 层错误（含网络/429 重试耗尽）。
+    """
+    if difficulty is not None and difficulty.upper() not in _PROBLEM_LIST_DIFFICULTIES:
+        valid = sorted(_PROBLEM_LIST_DIFFICULTIES)
+        raise ValueError(f"difficulty 必须是 {valid} 之一，got '{difficulty}'")
+    difficulty_norm = difficulty.upper() if difficulty else None
+
+    if limit < 1 or limit > 100:
+        raise ValueError(f"limit 必须在 1~100 之间，got {limit}")
+    if skip < 0:
+        raise ValueError(f"skip 不能为负，got {skip}")
+
+    # filters.tags 对非法 tag 静默忽略（返回全库），因此无法从 total 判断合法性；
+    # 改为校验第一题必含查询 tag——合法 tag 的列表首题必然命中该 tag。
+    filters: dict = {"tags": [topic]}
+    if difficulty_norm:
+        filters["difficulty"] = difficulty_norm
+
+    logger.info(f"Fetching problem list topic='{topic}' difficulty={difficulty_norm}")
+
+    req = urllib.request.Request(
+        "https://leetcode.com/graphql",
+        data=json.dumps({
+            "query": _PROBLEM_LIST_GRAPHQL,
+            "variables": {
+                "categorySlug": "",
+                "skip": skip,
+                "limit": limit,
+                "filters": filters,
+            },
+        }).encode(),
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "application/json",
+            "Referer": "https://leetcode.com/problemset/",
+        },
+    )
+
+    data = _post_with_retry(req)
+
+    if "errors" in data:
+        err_msgs = [e.get("message", str(e)) for e in data["errors"]]
+        raise ValueError(f"GraphQL errors: {'; '.join(err_msgs)}")
+
+    payload = (data.get("data") or {}).get("problemsetQuestionList")
+    if payload is None:
+        raise ValueError(f"topic '{topic}' 无查询返回")
+
+    questions = payload.get("questions") or []
+    first_tags = {t["slug"] for t in (questions[0].get("topicTags") or [])} if questions else set()
+    if not questions or topic not in first_tags:
+        logger.warning(f"topic '{topic}' 未被 LeetCode 识别，过滤被忽略（返回全库）")
+        raise ValueError(f"topic '{topic}' 不是合法的 LeetCode 主题标签")
+
+    items = [
+        LeetCodeProblemListItem(
+            frontend_question_id=str(q.get("frontendQuestionId", "")),
+            title=q.get("title", "") or "",
+            slug=q.get("titleSlug", "") or "",
+            difficulty=str(q.get("difficulty", "") or ""),
+            ac_rate=float(q.get("acRate", 0.0) or 0.0),
+            paid_only=bool(q.get("paidOnly", False)),
+            topic_tags=[t.get("slug", "") for t in (q.get("topicTags") or []) if t.get("slug")],
+        )
+        for q in questions
+    ]
+    return LeetCodeProblemList(total=int(payload.get("total", 0)), items=items)
 
 
 if __name__ == "__main__":

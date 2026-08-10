@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from code_tutor_agent.schemas.state import Message as TutorMsg, SessionPhase
+from code_tutor_agent.schemas.state import Message as TutorMsg
+from code_tutor_agent.schemas.state import SessionPhase
 
 
 def _fake_leetcode_data() -> dict:
@@ -28,19 +29,34 @@ def _fake_leetcode_data() -> dict:
 
 
 def _run_lc(existing_tutor_messages=None):
-    from code_tutor_agent.nodes.generator import _generate_from_leetcode
+    from types import SimpleNamespace
+
+    from code_tutor_agent.generation.state import GenerationResult, ProblemDraft
+    from code_tutor_agent.nodes import generator
+    from code_tutor_agent.schemas.state import SessionState
 
     lc_data = _fake_leetcode_data()
-    with patch("code_tutor_agent.db.database.save_problem", return_value=1), \
-         patch("code_tutor_agent.nodes.generator._generate_optimal_for_leetcode_sync",
-               return_value=None), \
-         patch("code_tutor_agent.nodes.generator.writer", MagicMock(), create=True), \
-         patch("code_tutor_agent.nodes.generator.get_stream_writer",
-               return_value=MagicMock()):
-        cmd = _generate_from_leetcode(
-            "sid", lc_data,
-            existing_tutor_messages=existing_tutor_messages,
-        )
+    draft = ProblemDraft(
+        topic="数组", difficulty="easy", title="Two Sum",
+        description="Given an array...",
+        starter_code="class Solution:\n    def twoSum(self, nums, target):\n        pass",
+        function_signature="nums: list[int], target: int -> list[int]",
+        test_cases=[
+            {"input_args": ["[2,7,11,15]", "9"], "expected_output": "[0,1]", "explanation": "s"},
+        ],
+    )
+    result = GenerationResult(ok=True, channel="leetcode_import", problem_id=1, draft=draft)
+    fake_agent = SimpleNamespace(run=lambda ctx, sink=None: result)
+    state = SessionState(
+        session_id="sid", topic="数组", difficulty="easy",
+        mode="agent" if existing_tutor_messages is not None else "practice",
+        leetcode=lc_data,
+        tutor_messages=list(existing_tutor_messages) if existing_tutor_messages else [],
+    )
+    with patch.object(generator, "_GEN_AGENT", fake_agent), \
+         patch.object(generator, "get_stream_writer", return_value=MagicMock()), \
+         patch.object(generator, "get_struct_prologue", return_value=""):
+        cmd = generator.generator_node(state)
     return cmd
 
 
