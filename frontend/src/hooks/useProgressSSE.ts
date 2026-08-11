@@ -59,9 +59,18 @@ export function useProgressSSE() {
       finish();
     });
 
-    es.addEventListener('error', () => {
+    es.addEventListener('error', (e) => {
       if (finished) return;
-      handlers?.onError?.('生成失败，请重试');
+      // 优先采用后端自定义 error 事件携带的真实文案；传输层错误（连接断开）无
+      // data 时回退默认文案，避免把网络抖动误报成"出题失败"。
+      let msg = '生成失败，请重试';
+      try {
+        const data = JSON.parse((e as MessageEvent).data);
+        if (data && data.message) msg = data.message;
+      } catch {
+        /* 传输层错误无 data，使用默认文案 */
+      }
+      handlers?.onError?.(msg);
       finish();
     });
 

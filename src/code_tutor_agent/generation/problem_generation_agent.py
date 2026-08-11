@@ -4,7 +4,7 @@
 
     D1{lc url 空?}
      ├─ 否 → import: fetch → to_lc_dict → 补双解(可选) → 成功 ⇒ 后台补用例 → SAVE
-     │       失败 ⇒ 显式兜底链（绝不静默生成原创题）
+     │       失败 ⇒ 直接报错提示用户（绝不静默换题/生成原创题）
      └─ 是 → llm_gen: 生成(双解+示例) → verify(结构/编译/无CoT)
                ├─ 通过 ⇒ 后台补用例 → SAVE
                └─ 失败 ⇒ 重试 < MAX ？ 重试 ；否则
@@ -51,6 +51,12 @@ MAX_RETRIES = 3
 _DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
 
 
+def _safe_err_msg(exc: Exception) -> str:
+    """截取异常信息前 80 字符，避免 UI 展示过长调用栈（镜像 api/services/generation.py）。"""
+    msg = str(exc)
+    return msg[:80] + "…" if len(msg) > 80 else msg
+
+
 class ProblemGenerationAgent:
     """出题子 Agent：一处入口 + 一条数据化降级链（设计 §2）。
 
@@ -84,11 +90,19 @@ class ProblemGenerationAgent:
         # ── 通道 A：LeetCode 导入 ──
         if ctx.lc_url:
             sink.event(GenEvent("progress", "📥 使用 LeetCode 题目…"))
-            draft = self._import_from_leetcode(ctx, sink)
+            draft, import_err = self._import_from_leetcode(ctx, sink)
             if draft is None:
-                # 导入失败 → 直进显式兜底链（设计 §4 D1：绝不静默生成原创题）
-                sink.event(GenEvent("warning", "LeetCode 导入失败，转入兜底链（不静默生成原创题）"))
-                logger.warning("leetcode import failed → fallback chain")
+                # 导入/解析失败：直接报错，绝不替用户换题（PULL/HISTORY/STATIC 一律跳过）。
+                # 设计 §4 D1 升级：原「转入兜底链」改为「直接报错」，用户明确不要静默换题。
+                msg = import_err or "LeetCode 题目解析失败，请检查链接或稍后重试"
+                sink.event(GenEvent("error", msg))
+                logger.warning("LeetCode 导入失败（%s）→ 直接报错，不换题", import_err)
+                return GenerationResult(
+                    ok=False,
+                    channel=ProblemChannel.LEETCODE_IMPORT.value,
+                    error=msg,
+                    fallback_chain=[],
+                )
             elif ctx.options.dual_solution:
                 # 生成暴力解法
                 draft = self._ensure_dual(draft, sink)
@@ -96,10 +110,10 @@ class ProblemGenerationAgent:
         # ── 通道 B：LLM 生成 + 校验 + 重试（仅未贴 LeetCode 时）──
         if draft is None and not ctx.lc_url:
             sink.event(GenEvent("progress", "正在调用大模型生成题目…"))
-            # 这里的重试有两层：
-            # 外层重试： 针对 LLM 出题，结构没有问题，但是题目不能自下，就是给的是写法，不能跑通自身的示例输入输出。
-            # 内层重试： LlmGateway.generate_problem 里面重试一次，针对LLM 出的题目结构不对，比如说缺少字段，题解代码有问题等
-            # 对于网络问题，langchain会自己重试，默认再重试2次
+            # 两层重试：
+            # 外层：LLM 出题结构没问题，但题目自身不能自洽（题解跑不通自身示例）；
+            # 内层：LlmGateway.generate_problem 重试一次，针对结构不对（缺字段/题解异常）；
+            # 网络问题 langchain 自带重试（默认 2 次）。
             for _attempt in range(ctx.options.max_retries or MAX_RETRIES):
                 draft = self._llm_generate(ctx, sink)
                 if draft and self.verifier.verify(draft)[0]:
@@ -160,13 +174,14 @@ class ProblemGenerationAgent:
     # ── 通道 A：LeetCode 导入 ──
     def _import_from_leetcode(
         self, ctx: GenerationContext, sink: ProgressSink,
-    ) -> ProblemDraft | None:
-        data = self._lc_data(ctx)
+    ) -> tuple[ProblemDraft | None, str | None]:
+        """LeetCode URL 导入；返回 (draft, 失败原因)，失败原因用于直接报错而非换题。"""
+        data, reason = self._lc_data(ctx)
         if not data:
-            return None
+            return None, reason
         draft = self._lc_dict_to_draft(data, ctx)
         if draft is None:
-            return None
+            return None, "LeetCode 题目解析失败：无法提取完整的标题/描述/代码，该题型可能暂不支持"
         # 有 URL 时回填真实 slug（dict 导入无 slug，靠 imported 标记推导通道）
         if ctx.lc_url:
             draft.source_slug = slug_from_url(ctx.lc_url) or ""
@@ -186,19 +201,25 @@ class ProblemGenerationAgent:
                 sink.event(GenEvent("warning", "最优解代码生成失败（不影响做题）"))
         # dict 导入无 slug，显式打上导入标记，保证 from_leetcode 落库判定正确
         draft.imported = True
-        return draft
+        return draft, None
 
-    def _lc_data(self, ctx: GenerationContext) -> dict | None:
-        """按 URL 抓取 LeetCode 题目（解析统一收口到本题，不再接受预解析 dict）。"""
+    def _lc_data(self, ctx: GenerationContext) -> tuple[dict | None, str | None]:
+        """按 URL 抓取 LeetCode 题目；返回 (data, 失败原因)。
+
+        失败原因用于向用户透传「为什么没换成那道题」，而不是静默换题。
+        """
         slug = slug_from_url(ctx.lc_url or "")
         if not slug:
             logger.warning("lc_url 无法解析 slug: %r", ctx.lc_url)
-            return None
+            return None, "链接格式无法识别，请检查 LeetCode 题目链接"
         try:
-            return self.leetcode.fetch(slug)
+            return self.leetcode.fetch(slug), None
         except Exception as exc:
             logger.warning("LeetCode fetch 失败 %s: %s", slug, exc)
-            return None
+            return None, (
+                f"无法获取 LeetCode 题目（{_safe_err_msg(exc)}），"
+                "可能网络异常、题目不存在或为付费题"
+            )
 
     def _lc_dict_to_draft(self, data: dict, ctx: GenerationContext) -> ProblemDraft | None:
         """to_lc_dict 产物 → ProblemDraft（镜像 _generate_from_leetcode 的落库字段）。"""

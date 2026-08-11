@@ -449,6 +449,13 @@ async def stream_progress(sid: str):
                 yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"
                 return
 
+            # 生成彻底失败（后端已置 status=error，无题目）：立即报错，不空等超时。
+            # 练习/普通模式走此路径（agent 模式失败会回 dialog 态，由上面 done 分支处理）。
+            if not problem and status == "error":
+                _emsg = (state or {}).get("error_message") or "\u51fa\u9898\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5"
+                yield f"event: error\ndata: {json.dumps({'message': _emsg}, ensure_ascii=False)}\n\n"
+                return
+
             if loop.time() > deadline:
                 if problem:
                     await asyncio.sleep(0.05)

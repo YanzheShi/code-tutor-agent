@@ -366,15 +366,19 @@ def _pick_auto_topic(profile_summary: str) -> str:
 
 
 def _extract_leetcode_url(history: list[Message]) -> str | None:
-    """从对话历史里找出第一个 LeetCode 题目链接（若有）。"""
+    """从「最近一条用户消息」里找出 LeetCode 题目链接（若有）。
+
+    只扫最后一条用户消息：URL 触发导入的语义是"当前这条消息想做这道具体题"，
+    历史里的旧链接不应在后续对话中被反复重新导入（避免解析失败后，下一轮对话
+    又触发同一失败链接，形成死循环）。
+    """
     pattern = re.compile(r"https?://(?:www\.)?(?:leetcode\.(?:com|cn))/problems/([^/\s?#]+)")
-    for m in history:
-        content = _to_msg_dict(m).get("content", "")
-        if not content:
+    for m in reversed(history):
+        msg = _to_msg_dict(m)
+        if msg.get("role") != "user":
             continue
-        mm = pattern.search(content)
-        if mm:
-            return mm.group(0)
+        mm = pattern.search(msg.get("content", "") or "")
+        return mm.group(0) if mm else None
     return None
 
 

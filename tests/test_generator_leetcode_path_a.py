@@ -2,7 +2,7 @@
 
 覆盖新子 Agent 架构（docs/generation-subagent-design.md §4）的关键决策：
 * URL 导入 → LeetCodeGateway.fetch + slug 回填 → channel=leetcode_import；
-* 导入失败 → 显式降级链（PULL → HISTORY → STATIC），绝不静默生成原创题；
+* 导入失败 → 直接报错提示用户（ok=False + 错误原因），绝不静默换题/生成原创题；
 * 全链路失败 → GenerationResult(ok=False) + fallback_chain。
 （LeetCode 解析已收口到 generation 包，不再接受预解析 dict。）
 """
@@ -161,8 +161,8 @@ def test_import_via_url_fetch_backfills_slug():
     assert result.draft.source_slug == "reverse-integer"
 
 
-def test_import_failure_never_silently_creates_novel():
-    """导入失败 → 走显式降级链拿到静态题，绝不静默生成原创题。"""
+def test_import_failure_reports_error_no_fallback():
+    """导入失败 → 直接报错（ok=False + channel=leetcode_import），绝不静默换题/原创。"""
     store = _RecordingStore()
     llm_calls = {"problem": 0}
 
@@ -196,21 +196,25 @@ def test_import_failure_never_silently_creates_novel():
 
     result = agent.run(ctx)
 
-    assert result.ok
-    assert result.channel == "static"
-    assert result.fallback_chain == ["leetcode_pull", "db_unac", "static"]
-    # 导入失败后不得再插入 LLM 原创尝试（设计 §4 D1，2026-08-10 修复）
-    assert llm_calls["problem"] == 0
-    assert store.saved[0].title == "Static Fallback"
+    # 导入失败：直接报错，不进兜底链、不落库、不插 LLM 原创
+    assert not result.ok
+    assert result.channel == "leetcode_import"
+    assert result.fallback_chain == []
+    assert result.error  # 失败原因已透传
+    assert llm_calls["problem"] == 0           # 仍不得插入 LLM 原创尝试
+    assert store.saved == []                   # 绝不静默落静态题
 
 
 def test_everything_fails_reports_chain():
-    """导入失败 + LLM 失败 + 三条兜底全空 → ok=False 且带 fallback_chain。"""
+    """LLM 失败 + 三条兜底全空（无 lc_url）→ ok=False 且带 fallback_chain。
+
+    lc_url 导入失败已改为「直接报错、不走 chain」，故本用例用非 lc_url 路径
+    覆盖「全链路失败带 chain」这条语义。
+    """
     store = _RecordingStore()
     store.static = None
-    agent = _build_agent(store, fetch=lambda slug: None)
-    ctx = GenerationContext(topic="数组", difficulty="easy",
-                            lc_url="https://leetcode.cn/problems/reverse-integer/")
+    agent = _build_agent(store)
+    ctx = GenerationContext(topic="数组", difficulty="easy")  # 无 lc_url
 
     result = agent.run(ctx)
 

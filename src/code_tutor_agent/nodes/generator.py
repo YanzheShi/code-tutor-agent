@@ -264,13 +264,47 @@ def _translate_to_command(
 def _translate_error(
     state: SessionState, sid: str, writer, result: GenerationResult
 ) -> Command[Literal["__end__"]]:
-    """全线失败（LLM→PULL→HISTORY→STATIC）→ status=error + 友好提示。"""
-    logger.error("generator_node 出题失败 — session=%s topic=%s chain=%s",
-                 sid, state.topic, result.fallback_chain)
+    """全线失败（LLM→PULL→HISTORY→STATIC）→ 友好提示。
+
+    - 普通/练习模式：status=error + error_message（前端跳错误屏，符合"直接报错"）。
+    - Agent 模式：回到对话态（status=dialog），补一句友好提示、清空 leetcode 标记，
+      会话继续（与"贴了非 LeetCode 链接"的 case 一致，不会卡住或跳错误屏）。
+    """
+    logger.error("generator_node 出题失败 — session=%s topic=%s channel=%s",
+                 sid, state.topic, result.channel)
+    if result.channel == "leetcode_import":
+        tail = "请检查题目链接，或换个 LeetCode 题目再试。"
+    else:
+        tail = "请重新生成一次，或者换个主题/难度再试。"
     _err_msg = (
-        f"出题失败:{result.error or '所有可用通道均失败'}。"
-        "请重新生成一次，或者换个主题/难度再试。"
+        f"出题失败:{result.error or '所有可用通道均失败'}。" + tail
     )
+
+    # Agent 模式：解析/拉题失败不跳错误屏，回到对话态让会话继续
+    if state.mode == "agent":
+        friendly = (
+            "抱歉，这个 LeetCode 链接解析失败了（题目可能不存在、需要登录，"
+            "或当前网络异常）😅。你可以换一个 LeetCode 链接，或者直接告诉我"
+            "想练的知识点（比如数组、动态规划、链表），我马上帮你出题～"
+        )
+        # 只追加到 tutor_messages（对话里出现一次，避免与 progress 重复）；
+        # writer 在后台 invoke 路径下为 no-op，这里仅保险。
+        existing = list(state.tutor_messages or [])
+        existing.append(TutorMsg(role="tutor", content=friendly))
+        return Command(
+            update={
+                "status": "dialog",
+                "phase": SessionPhase.dialog,
+                "leetcode": None,  # 清空，避免下一轮对话重新触发该失败链接
+                "agent_dialog_complete": False,
+                "problem": None,
+                "tutor_messages": existing,
+                "error_message": "",
+            },
+            goto="__end__",
+        )
+
+    # 普通/练习模式：status=error + error_message（前端跳错误屏）
     _progress(sid, f"❌ {_err_msg}")
     writer(f"❌ {_err_msg}")
     return Command(

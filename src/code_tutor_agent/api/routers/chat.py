@@ -287,9 +287,14 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
         if intent.is_ready:
             topic = intent.topic or values.get("topic", "数组")
             difficulty = intent.difficulty or values.get("difficulty", "easy")
-            # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
-            # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
-            ready_msg = build_ready_message(topic, difficulty)
+            if intent.source == "leetcode" and intent.leetcode_url:
+                # LeetCode 导入：用意图确认文案，避免误显「数组 方向、简单 难度」
+                # （intent.topic/difficulty 对 leetcode 来源本就为空，硬填会误导）
+                ready_msg = Message(role="tutor", content=intent.next_message)
+            else:
+                # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
+                # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
+                ready_msg = build_ready_message(topic, difficulty)
             history.append(ready_msg)
             _full_display.append(ready_msg)
             # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）

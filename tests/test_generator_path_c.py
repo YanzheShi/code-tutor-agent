@@ -23,6 +23,7 @@ from code_tutor_agent.generation.state import (  # noqa: E402
     ProblemDraft,
 )
 from code_tutor_agent.nodes import generator  # noqa: E402
+from code_tutor_agent.schemas.state import Message as TutorMsg  # noqa: E402
 from code_tutor_agent.schemas.state import SessionState  # noqa: E402
 
 
@@ -125,3 +126,32 @@ def test_generator_agent_mode_preserves_dialog():
     assert msgs[-1].content.startswith("来，试试这道")
     from code_tutor_agent.progress import get_generation_channel
     assert get_generation_channel("sid-pathc-agent") == "llm"
+
+
+def test_generator_agent_mode_leetcode_failure_returns_to_dialog():
+    """agent 模式 LeetCode 导入失败 → 回对话态（status=dialog），不跳错误屏、会话继续。
+
+    对齐"贴了非 LeetCode 链接"的 case：解析失败不卡住、不跳错误屏，而是补一句
+    友好提示、清空 leetcode 标记让会话继续（避免下一轮对话又触发同一失败链接）。
+    """
+    state = SessionState(
+        session_id="sid-pathc-agent-lc-fail", topic="数组", difficulty="easy", mode="agent",
+        tutor_messages=[
+            TutorMsg(role="tutor", content="已识别 LeetCode 链接，正在导入…"),
+        ],
+    )
+    result = GenerationResult(
+        ok=False, channel="leetcode_import",
+        error="无法获取 LeetCode 题目（Problem 'add-three-numbers' not found）",
+    )
+    with patch.object(generator, "_GEN_AGENT", _fake_agent(result)), \
+         patch.object(generator, "get_stream_writer", return_value=None):
+        cmd = generator.generator_node(state)
+
+    assert cmd.goto == "__end__"
+    assert cmd.update["status"] == "dialog"            # 回对话态，不跳错误屏
+    assert cmd.update.get("error_message", "") == ""   # 不置 error_message
+    assert cmd.update.get("leetcode") is None          # 清空，避免下一轮重触发
+    assert cmd.update.get("agent_dialog_complete") is False
+    # 友好提示已追加到 tutor_messages（会话继续）
+    assert any("解析失败" in m.content for m in cmd.update["tutor_messages"])
