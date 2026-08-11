@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 
 from code_tutor_agent.generation.state import ProblemDraft
 
@@ -122,8 +123,16 @@ class LlmGateway:
         difficulty: str,
         starter_code: str = "",
         function_signature: str = "",
+        max_retries: int = 3,
     ) -> str | None:
-        """为 LeetCode 导入题生成最优解代码（镜像 _generate_optimal_for_leetcode_sync）。"""
+        """为 LeetCode 导入题生成最优解代码（镜像 _generate_optimal_for_leetcode_sync）。
+
+        带重试：单次 LLM 调用可能返回空响应或抛异常（网络抖动、模型空响应），
+        最多尝试 ``max_retries`` 次（含首次），非末次失败后简单退避再试，
+        全部失败才返回 ``None``。调用方（``_import_from_leetcode``）会把 ``None``
+        当作致命错误上报，因此这里尽量通过重试消化瞬时失败，避免一道没有参考解
+        的题目被静默导入（缺参考解会导致后续判题无法运行学生提交）。
+        """
         from code_tutor_agent.config import get_llm
 
         prompt = (
@@ -144,15 +153,22 @@ class LlmGateway:
             "- 方法签名必须准确\n"
             "- 只输出代码，不要任何解释\n"
         )
-        try:
-            llm = get_llm(purpose="generator")
-            resp = llm.invoke([("human", prompt)])
-            text = resp.content if hasattr(resp, "content") else str(resp)
-            code = _extract_code(text)
-            return code or None
-        except Exception as exc:
-            logger.warning("最优解生成失败: %s", exc)
-            return None
+        llm = get_llm(purpose="generator")
+        for attempt in range(max_retries):
+            try:
+                resp = llm.invoke([("human", prompt)])
+                text = resp.content if hasattr(resp, "content") else str(resp)
+                code = _extract_code(text)
+                if code:
+                    return code
+                logger.warning("最优解生成为空（attempt %d/%d），重试", attempt + 1, max_retries)
+            except Exception as exc:
+                logger.warning("最优解生成失败（attempt %d/%d）: %s", attempt + 1, max_retries, exc)
+            # 非末次尝试：简单退避后再试（避免对瞬时故障猛打）
+            if attempt < max_retries - 1:
+                time.sleep(1.0 * (attempt + 1))
+        logger.warning("最优解生成在 %d 次尝试后仍失败", max_retries)
+        return None
 
     def generate_dual(self, description: str, starter_code: str, mode: str) -> str | None:
         """补生成对拍解：mode="brute" 生成暴力解（补双解用）。"""

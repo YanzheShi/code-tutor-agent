@@ -174,7 +174,12 @@ def test_generate_problem_all_llm_failures_raises_runtimeerror(monkeypatch):
 
 
 def test_generate_problem_retries_then_raises_on_stub(monkeypatch):
-    """空题目（桩解）应触发重试，重试耗尽后抛 RuntimeError 让上层降级，而非返回空题。"""
+    """空题目（桩解）校验失败应抛 RuntimeError 让上层降级，而非返回空题。
+
+    注意：generate_problem 的循环是 `for attempt in range(max_retries)`，
+    max_retries 即「总尝试次数」（非「重试次数」）。max_retries=1 → 仅 1 次尝试，
+    桩解校验失败后循环直接结束、抛 RuntimeError（无重试）。断言按此实际行为写。
+    """
     calls = {"n": 0}
 
     class _CountingStructured(_StructuredOutput):
@@ -193,8 +198,8 @@ def test_generate_problem_retries_then_raises_on_stub(monkeypatch):
     monkeypatch.setattr(agent_problem, "get_llm", lambda *a, **k: _CountingFakeLLM())
     with pytest.raises(RuntimeError):
         generate_problem("爬楼梯", "medium", max_retries=1)
-    # max_retries=1 → 应有 2 次 LLM 调用（首次 + 1 次重试）
-    assert calls["n"] == 2
+    # max_retries=1 → range(max_retries) 仅 1 次尝试（桩解校验失败后即抛错，无重试）
+    assert calls["n"] == 1
 
 
 # ───────────────────────── verify_problem ─────────────────────────

@@ -352,7 +352,7 @@ def _is_list_type(type_str: str) -> bool:
 # 命中后会对 List[int] 随机输入做升序排序，保证语义正确（方案 B）。
 _SORTED_HINTS = (
     "non-decreasing", "non-increasing", "sorted in", "ascending order",
-    "descending order", "升序", "降序", "有序", "非递减", "非递增",
+    "descending order", "升序", "降序", "有序", "非递减", "非递增", "已排序",
     "sorted array", "sorted list",
 )
 

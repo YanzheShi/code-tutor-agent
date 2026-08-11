@@ -456,7 +456,7 @@ def get_unac_problem(
     """返回一道「历史做过但未 AC」的题目 id（HISTORY 兜底通道）。
 
     优先级（在未 AC 的题目中）：
-    1. topic / profile_hint 命中的题目（弱项优先：profile_hint > 当前 topic）
+    1. topic / profile_hint 命中的题目（用户指定 topic 优先：topic > 弱项 profile_hint）
     2. difficulty 命中
     3. 最近提交的题目
 
@@ -477,9 +477,11 @@ def get_unac_problem(
 
         def _score(row) -> int:
             s = 0
-            if profile_hint and (row["topic"] == profile_hint or profile_hint in row["topic"]):
+            # 用户指定 topic 优先于弱项 profile_hint：topic 命中最先 +8，
+            # 仅当 topic 未命中时才回退到 profile_hint（避免弱项覆盖用户明确意图）。
+            if topic and (row["topic"] == topic or topic in row["topic"]):
                 s += 8
-            elif topic and (row["topic"] == topic or topic in row["topic"]):
+            elif profile_hint and (row["topic"] == profile_hint or profile_hint in row["topic"]):
                 s += 8
             if difficulty and row["difficulty"] == difficulty:
                 s += 4

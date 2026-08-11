@@ -205,6 +205,47 @@ def test_import_failure_reports_error_no_fallback():
     assert store.saved == []                   # 绝不静默落静态题
 
 
+def test_import_optimal_generation_failure_reports_error():
+    """最优解生成失败（generate_optimal 返回 None）→ 导入直接报错，绝不静默落库。
+
+    与 test_import_failure_reports_error_no_fallback 的区别：fetch 成功（题目已解析），
+    但参考解生成失败——这属于「坏题」，同样不能静默写库，必须报错让用户重试/换链接。
+    """
+    store = _RecordingStore()
+    leetcode = SimpleNamespace(
+        fetch=lambda slug: _make_lc_data(),
+        list=lambda *a, **k: [],
+        to_lc_dict=lambda p: _make_lc_data(),
+        parse_examples=lambda examples, starter: [],
+        extract_signature=lambda s: "nums: list[int], target: int -> list[int]",
+    )
+    llm = SimpleNamespace(
+        generate_problem=lambda *a, **k: None,
+        generate_optimal=lambda *a, **k: None,  # 模拟最优解生成失败
+        generate_dual=lambda *a, **k: None,
+    )
+    sandbox = SimpleNamespace(
+        struct_prologue=lambda *a, **k: "",
+        compile=lambda code: True,
+        run_solution=lambda *a, **k: [],
+        random_inputs=lambda *a, **k: [],
+        sanitize=lambda *a, **k: None,
+        needs_sorted_inputs=lambda *a, **k: False,
+    )
+    agent = ProblemGenerationAgent(leetcode=leetcode, llm=llm, store=store, sandbox=sandbox)
+    ctx = GenerationContext(topic="数组", difficulty="easy",
+                            lc_url="https://leetcode.cn/problems/two-sum/")
+
+    result = agent.run(ctx)
+
+    # 致命：直接报错，不进兜底链、不落库（避免一道无参考解的题目进入判题）
+    assert not result.ok
+    assert result.channel == "leetcode_import"
+    assert result.error  # 明确错误信息已透传
+    assert result.fallback_chain == []
+    assert store.saved == []  # 绝不静默落库
+
+
 def test_everything_fails_reports_chain():
     """LLM 失败 + 三条兜底全空（无 lc_url）→ ok=False 且带 fallback_chain。
 

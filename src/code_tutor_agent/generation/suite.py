@@ -5,6 +5,13 @@
 
 签名约定：``build_suite(agent, problem_id, sink)`` 为纯同步阻塞函数，
 调用方必须用 ``asyncio.to_thread``（或线程）执行，切勿在事件循环内直接调用。
+
+结构（重构后）：
+- ``build_suite``        编排层：取题 → 计算公共参数 → 驱动两个生成分支 + 可见用例校验 → 回写 DB。
+- ``_generate_random_cases``     随机生成分支：调用沙箱随机输入，逐个验证后产出用例。
+- ``_generate_llm_boundary_cases``  LM 生成分支：调用 LLM 生成边界用例，逐个验证后产出用例。
+- ``_verify_visible_cases``       校验既有可见用例（用参考解重算期望，跑挂的丢弃）。
+- ``_validate_against_reference`` 交叉验证 / 单解验证的共用核心（被以上三个分支复用）。
 """
 
 from __future__ import annotations
@@ -21,6 +28,206 @@ _DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
 
 _RANDOM_COUNT = 12
 _BOUNDARY_COUNT = 8
+
+
+def _validate_against_reference(
+    agent: ProblemGenerationAgent,
+    tc: dict,
+    *,
+    func_sig: str,
+    use_cross_validation: bool,
+    optimal_code: str,
+    brute_code: str,
+    ref_code: str,
+) -> tuple[str | None, bool]:
+    """用参考解验证单个用例，返回 ``(期望输出, 是否交叉不一致)``。
+
+    - 双解交叉模式：两条参考解各跑一遍，无返回 / 参考解异常 / 结果不一致均判为丢弃；
+      仅「结果不一致」时第二个返回值为 ``True``（用于 dropped_cross 计数）。
+    - 单解模式：仅用最优或暴力解跑一遍，无返回 / 异常 / 无输出即丢弃。
+
+    第一个返回值为 ``None`` 即该用例应丢弃；否则为算出的期望输出。
+    """
+    if use_cross_validation:
+        opt_results = agent.sandbox.run_solution(
+            optimal_code, [tc], function_signature=func_sig,
+        )
+        brute_results = agent.sandbox.run_solution(
+            brute_code, [tc], function_signature=func_sig,
+        )
+        if not opt_results or not brute_results:
+            return None, False
+        opt_r, brute_r = opt_results[0], brute_results[0]
+        if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
+            return None, False
+        opt_actual = (opt_r.detail or "").strip()
+        brute_actual = (brute_r.detail or "").strip()
+        if not opt_actual or not brute_actual or opt_actual != brute_actual:
+            return None, True
+        return opt_actual, False
+
+    results = agent.sandbox.run_solution(ref_code, [tc], function_signature=func_sig)
+    if not results:
+        return None, False
+    r = results[0]
+    if r.status in _DROP_STATUSES:
+        return None, False
+    actual = r.detail or ""
+    if not actual:
+        return None, False
+    return actual, False
+
+
+def _generate_random_cases(
+    agent: ProblemGenerationAgent,
+    sink: ProgressSink,
+    *,
+    func_sig: str,
+    sort_inputs: bool,
+    use_cross_validation: bool,
+    optimal_code: str,
+    brute_code: str,
+    ref_code: str,
+    random_inputs: list,
+    problem_id: int,
+) -> tuple[list[dict], int]:
+    """随机生成分支：对沙箱随机输入逐个对齐签名并验证，返回 ``(用例列表, 交叉丢弃数)``。"""
+    sink.event(GenEvent("progress", f"🔧 正在运行参考解验证 {len(random_inputs)} 个用例..."))
+    all_tcs: list[dict] = []
+    dropped_cross = 0
+    for idx, inp in enumerate(random_inputs):
+        if func_sig:
+            # 随机用例生成后需与签名对齐（list/int/bool 参数转换）
+            san = agent.sandbox.sanitize(func_sig, {"input_args": inp}, sort_inputs=sort_inputs)
+            if not san or not san.get("input_args"):
+                logger.warning(
+                    "Random case input malformed, dropping (pid=%d idx=%d)",
+                    problem_id, idx,
+                )
+                continue
+            inp = san["input_args"]
+        tc = {
+            "input_args": inp,
+            "expected_output": "",
+            "is_hidden": idx >= 4,
+            "explanation": f"随机生成测试 {idx + 1}",
+        }
+        expected, cross_mismatch = _validate_against_reference(
+            agent, tc,
+            func_sig=func_sig, use_cross_validation=use_cross_validation,
+            optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+        )
+        if expected is None:
+            # 随机分支：任何交叉验证失败都计入丢弃（对齐原逻辑的三个分支）
+            if use_cross_validation:
+                dropped_cross += 1
+            continue
+        tc["expected_output"] = expected
+        all_tcs.append(tc)
+    return all_tcs, dropped_cross
+
+
+def _generate_llm_boundary_cases(
+    agent: ProblemGenerationAgent,
+    sink: ProgressSink,
+    *,
+    func_sig: str,
+    sort_inputs: bool,
+    use_cross_validation: bool,
+    optimal_code: str,
+    brute_code: str,
+    ref_code: str,
+    full,
+    random_visible_examples: list,
+    problem_id: int,
+) -> tuple[list[dict], int]:
+    """LM 生成分支：调用 LLM 生成边界用例并逐个验证，返回 ``(用例列表, 交叉丢弃数)``。"""
+    sink.event(GenEvent("progress", "🤖 正在生成边界测试用例..."))
+    all_tcs: list[dict] = []
+    dropped_cross = 0
+    try:
+        boundary_cases = agent.llm.generate_boundary(
+            title=getattr(full, "title", "") or "",
+            description=getattr(full, "description", "") or "",
+            difficulty=getattr(full, "difficulty", "medium") or "medium",
+            function_signature=func_sig,
+            constraints=getattr(full, "constraints", None) or [],
+            optimal_code=ref_code,
+            existing_cases=random_visible_examples,
+            count=_BOUNDARY_COUNT,
+        ) or []
+        sink.event(GenEvent("progress", f"🔧 正在验证 {len(boundary_cases)} 个边界用例..."))
+        for bc in boundary_cases:
+            if func_sig:
+                bc = agent.sandbox.sanitize(func_sig, bc, sort_inputs=sort_inputs) or {}
+                if not bc.get("input_args"):
+                    logger.warning(
+                        "Boundary case input malformed, dropping: %s",
+                        bc.get("explanation", ""),
+                    )
+                    continue
+            _tc = {"input_args": bc.get("input_args", []), "expected_output": ""}
+            expected, cross_mismatch = _validate_against_reference(
+                agent, _tc,
+                func_sig=func_sig, use_cross_validation=use_cross_validation,
+                optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+            )
+            if expected is None:
+                # 边界分支：仅「双解结果不一致」计入交叉丢弃（对齐原逻辑）
+                if use_cross_validation and cross_mismatch:
+                    dropped_cross += 1
+                continue
+            bc["expected_output"] = expected
+            bc["is_hidden"] = True
+            bc["explanation"] = bc.get("explanation", "LLM 生成的边界用例")
+            all_tcs.append(bc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Prompt B (boundary LLM) failed: %s", exc)
+    return all_tcs, dropped_cross
+
+
+def _verify_visible_cases(
+    agent: ProblemGenerationAgent,
+    *,
+    func_sig: str,
+    sort_inputs: bool,
+    use_cross_validation: bool,
+    optimal_code: str,
+    brute_code: str,
+    ref_code: str,
+    full,
+    problem_id: int,
+) -> tuple[list[dict], int]:
+    """校验既有可见用例（用参考解重算期望，跑挂的丢弃），返回 ``(用例列表, 交叉丢弃数)``。"""
+    existing_tcs = getattr(full, "test_cases", None) or []
+    sample_tcs = [tc for tc in existing_tcs if not tc.get("is_hidden", False)][:2]
+    verified_visible: list[dict] = []
+    dropped_cross = 0
+    for tc in sample_tcs:
+        san = dict(tc)
+        if func_sig:
+            san = agent.sandbox.sanitize(func_sig, san, sort_inputs=sort_inputs) or {}
+        if not san or not san.get("input_args"):
+            logger.warning(
+                "Sample/visible case input malformed, dropping: %s",
+                tc.get("explanation", ""),
+            )
+            continue
+        _tc = {"input_args": san["input_args"], "expected_output": ""}
+        expected, cross_mismatch = _validate_against_reference(
+            agent, _tc,
+            func_sig=func_sig, use_cross_validation=use_cross_validation,
+            optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+        )
+        if expected is None:
+            # 可见分支：仅「双解结果不一致」计入交叉丢弃（对齐原逻辑）
+            if use_cross_validation and cross_mismatch:
+                dropped_cross += 1
+            continue
+        san["expected_output"] = expected
+        san["is_hidden"] = False
+        verified_visible.append(san)
+    return verified_visible, dropped_cross
 
 
 def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSink) -> None:
@@ -51,6 +258,7 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
     sort_inputs = agent.sandbox.needs_sorted_inputs(*constraints, description)
 
     sink.event(GenEvent("progress", "🧪 正在生成更多测试用例..."))
+    # 根据提示和参数情况生成随机测试用例
     random_inputs = agent.sandbox.random_inputs(
         func_sig, n=_RANDOM_COUNT, seed=problem_id,
         constraints=constraints, description=description,
@@ -59,171 +267,35 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
         sink.event(GenEvent("progress", "✅ 无函数签名，跳过随机测试生成"))
         return
 
-    sink.event(GenEvent("progress", f"🔧 正在运行参考解验证 {len(random_inputs)} 个用例..."))
-    all_tcs: list[dict] = []
-    dropped_cross = 0
-    for idx, inp in enumerate(random_inputs):
-        if func_sig:
-            # 随机用例生成后需与签名对齐（list/int/bool 参数转换）
-            san = agent.sandbox.sanitize(func_sig, {"input_args": inp}, sort_inputs=sort_inputs)
-            if not san or not san.get("input_args"):
-                logger.warning(
-                    "Random case input malformed, dropping (pid=%d idx=%d)",
-                    problem_id, idx,
-                )
-                continue
-            inp = san["input_args"]
-        tc = {
-            "input_args": inp,
-            "expected_output": "",
-            "is_hidden": idx >= 4,
-            "explanation": f"随机生成测试 {idx + 1}",
-        }
-        # 交叉验证用两条参考解分别跑同一用例，任何一条无结果即弃
-        if use_cross_validation:
-            opt_results = agent.sandbox.run_solution(
-                optimal_code, [tc], function_signature=func_sig,
-            )
-            brute_results = agent.sandbox.run_solution(
-                brute_code, [tc], function_signature=func_sig,
-            )
-            if not opt_results or not brute_results:
-                logger.warning(
-                    "Cross-validation: no results, dropping (pid=%d idx=%d)",
-                    problem_id, idx,
-                )
-                dropped_cross += 1
-                continue
-            opt_r, brute_r = opt_results[0], brute_results[0]
-            if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                dropped_cross += 1
-                continue
-            opt_actual = (opt_r.detail or "").strip()
-            brute_actual = (brute_r.detail or "").strip()
-            if not opt_actual or not brute_actual or opt_actual != brute_actual:
-                dropped_cross += 1
-                continue
-            tc["expected_output"] = opt_actual
-            all_tcs.append(tc)
-        else:
-            results = agent.sandbox.run_solution(ref_code, [tc], function_signature=func_sig)
-            if not results:
-                continue
-            r = results[0]
-            if r.status in _DROP_STATUSES:
-                continue
-            actual = r.detail or ""
-            if actual:
-                tc["expected_output"] = actual
-                all_tcs.append(tc)
+    # ── 随机生成分支 ──
+    random_cases, dropped_random = _generate_random_cases(
+        agent, sink,
+        func_sig=func_sig, sort_inputs=sort_inputs,
+        use_cross_validation=use_cross_validation,
+        optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+        random_inputs=random_inputs, problem_id=problem_id,
+    )
 
-    # ── LLM 边界用例 ──
-    sink.event(GenEvent("progress", "🤖 正在生成边界测试用例..."))
-    try:
-        boundary_cases = agent.llm.generate_boundary(
-            title=getattr(full, "title", "") or "",
-            description=description,
-            difficulty=getattr(full, "difficulty", "medium") or "medium",
-            function_signature=func_sig,
-            constraints=constraints,
-            optimal_code=ref_code,
-            existing_cases=all_tcs[:4],
-            count=_BOUNDARY_COUNT,
-        ) or []
-        sink.event(GenEvent("progress", f"🔧 正在验证 {len(boundary_cases)} 个边界用例..."))
-        for bc in boundary_cases:
-            if func_sig:
-                bc = agent.sandbox.sanitize(func_sig, bc, sort_inputs=sort_inputs) or {}
-                if not bc.get("input_args"):
-                    logger.warning(
-                        "Boundary case input malformed, dropping: %s",
-                        bc.get("explanation", ""),
-                    )
-                    continue
-            _tc = {"input_args": bc.get("input_args", []), "expected_output": ""}
-            if use_cross_validation:
-                opt_results = agent.sandbox.run_solution(
-                    optimal_code, [_tc], function_signature=func_sig,
-                )
-                brute_results = agent.sandbox.run_solution(
-                    brute_code, [_tc], function_signature=func_sig,
-                )
-                if not opt_results or not brute_results:
-                    continue
-                opt_r, brute_r = opt_results[0], brute_results[0]
-                if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                    continue
-                opt_actual = (opt_r.detail or "").strip()
-                brute_actual = (brute_r.detail or "").strip()
-                if not opt_actual or not brute_actual or opt_actual != brute_actual:
-                    dropped_cross += 1
-                    continue
-                bc["expected_output"] = opt_actual
-            else:
-                results = agent.sandbox.run_solution(ref_code, [_tc], function_signature=func_sig)
-                if not results:
-                    continue
-                r = results[0]
-                if r.status in _DROP_STATUSES:
-                    continue
-                actual = r.detail or ""
-                if not actual:
-                    continue
-                bc["expected_output"] = actual
-            bc["is_hidden"] = True
-            bc["explanation"] = bc.get("explanation", "LLM 生成的边界用例")
-            all_tcs.append(bc)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Prompt B (boundary LLM) failed: %s", exc)
+    # ── LM 生成分支（边界用例）──
+    boundary_cases, dropped_boundary = _generate_llm_boundary_cases(
+        agent, sink,
+        func_sig=func_sig, sort_inputs=sort_inputs,
+        use_cross_validation=use_cross_validation,
+        optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+        full=full, random_visible_examples=random_cases[:4], problem_id=problem_id,
+    )
 
-    # ── 验证 LLM 生成的示例/可见用例（用参考解重算期望，跑挂的丢弃）──
-    existing_tcs = getattr(full, "test_cases", None) or []
-    sample_tcs = [tc for tc in existing_tcs if not tc.get("is_hidden", False)][:2]
-    verified_visible: list[dict] = []
-    for tc in sample_tcs:
-        san = dict(tc)
-        if func_sig:
-            san = agent.sandbox.sanitize(func_sig, san, sort_inputs=sort_inputs) or {}
-        if not san or not san.get("input_args"):
-            logger.warning(
-                "Sample/visible case input malformed, dropping: %s",
-                tc.get("explanation", ""),
-            )
-            continue
-        _tc = {"input_args": san["input_args"], "expected_output": ""}
-        if use_cross_validation:
-            opt_results = agent.sandbox.run_solution(
-                optimal_code, [_tc], function_signature=func_sig,
-            )
-            brute_results = agent.sandbox.run_solution(
-                brute_code, [_tc], function_signature=func_sig,
-            )
-            if not opt_results or not brute_results:
-                continue
-            opt_r, brute_r = opt_results[0], brute_results[0]
-            if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
-                continue
-            opt_actual = (opt_r.detail or "").strip()
-            brute_actual = (brute_r.detail or "").strip()
-            if not opt_actual or not brute_actual or opt_actual != brute_actual:
-                dropped_cross += 1
-                continue
-            san["expected_output"] = opt_actual
-        else:
-            results = agent.sandbox.run_solution(ref_code, [_tc], function_signature=func_sig)
-            if not results:
-                continue
-            r = results[0]
-            if r.status in _DROP_STATUSES:
-                continue
-            actual = r.detail or ""
-            if not actual:
-                continue
-            san["expected_output"] = actual
-        san["is_hidden"] = False
-        verified_visible.append(san)
+    # ── 既有可见用例校验 ──
+    verified_visible, dropped_visible = _verify_visible_cases(
+        agent,
+        func_sig=func_sig, sort_inputs=sort_inputs,
+        use_cross_validation=use_cross_validation,
+        optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+        full=full, problem_id=problem_id,
+    )
 
-    full_suite = verified_visible + all_tcs
+    dropped_cross = dropped_random + dropped_boundary + dropped_visible
+    full_suite = verified_visible + random_cases + boundary_cases
     visible_final = [tc for tc in full_suite if not tc.get("is_hidden", False)][:4]
 
     try:

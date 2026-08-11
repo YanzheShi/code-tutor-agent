@@ -198,7 +198,10 @@ class ProblemGenerationAgent:
                 draft.optimal_solution = code
                 sink.event(GenEvent("progress", "🤖 最优解代码已生成"))
             else:
-                sink.event(GenEvent("warning", "最优解代码生成失败（不影响做题）"))
+                # 缺参考解无法判题：与其静默导入一道坏题，不如直接报错
+                # （与「导入失败即报错、绝不静默换题」的设计原则对齐）。
+                # generate_optimal 已内置重试，能走到这里说明是持久失败。
+                return None, "LeetCode 题目已解析，但最优解生成失败，请重试或换一个 LeetCode 链接"
         # dict 导入无 slug，显式打上导入标记，保证 from_leetcode 落库判定正确
         draft.imported = True
         return draft, None
