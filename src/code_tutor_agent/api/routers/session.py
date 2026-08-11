@@ -18,7 +18,7 @@ from langchain_core.tracers.context import collect_runs
 from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.observability import build_run_config, record_verdict_feedback
 from code_tutor_agent.api.serializers import serialize_state, empty_state
-from code_tutor_agent.api.services.generation import run_generation, run_fast_path, GENERATION_TIMEOUT
+from code_tutor_agent.api.services.generation import run_generation, GENERATION_TIMEOUT
 from code_tutor_agent.config import get_checkpoint_db_path
 from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
 from code_tutor_agent.db.database import (
@@ -88,12 +88,9 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
             initial_dict["difficulty"] = body.difficulty
         if body.mode:
             initial_dict["mode"] = body.mode
-        if body.leetcode:
-            initial_dict["leetcode"] = body.leetcode
-
-    # LeetCode 快速路径
-    if body and body.leetcode and body.leetcode.get("parsed_test_cases"):
-        return run_fast_path(sid, body.model_dump() if hasattr(body, "model_dump") else body, graph, config)
+        if body.leetcode_url:
+            # 仅传 URL，解析收口到 generator_node（与 agent 对话路径统一）
+            initial_dict["leetcode"] = {"url": body.leetcode_url}
 
     # 记录活跃时间（TTL 清理用）
     try:

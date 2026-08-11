@@ -22,7 +22,6 @@ from code_tutor_agent.api.logging_config import request_id_ctx, setup_logging
 from code_tutor_agent.api.routers import (
     admin,
     chat,
-    leetcode,
     problems,
     run,
     session,
@@ -123,7 +122,6 @@ app.include_router(session.router, prefix="/session", tags=["session"])
 app.include_router(run.router, prefix="/session", tags=["run"])
 app.include_router(chat.router, prefix="/session", tags=["chat"])
 app.include_router(problems.router, tags=["problems"])
-app.include_router(leetcode.router, tags=["leetcode"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 

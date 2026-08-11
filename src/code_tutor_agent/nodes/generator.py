@@ -179,7 +179,6 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         topic=state.topic,
         difficulty=state.difficulty,
         lc_url=lc_url or None,
-        leetcode=state.leetcode,
         profile_hint=_profile_hint_from(state),
     )
     result = _GEN_AGENT.run(ctx, sink)
@@ -216,10 +215,7 @@ def _translate_to_command(
         topic=topic,
         difficulty=difficulty,
         description=draft.description,
-        description_html=(
-            (state.leetcode or {}).get("description_html", draft.description)
-            if state.leetcode else draft.description
-        ),
+        description_html=draft.description_html or draft.description,
         starter_code=starter,
         visible_test_cases=visible_tcs,
         novelty_score=9.0 if draft.from_leetcode else 7.0,

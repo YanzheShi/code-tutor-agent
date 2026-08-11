@@ -82,7 +82,7 @@ class ProblemGenerationAgent:
         attempted_chain: list[str] = []
 
         # ── 通道 A：LeetCode 导入 ──
-        if ctx.leetcode or ctx.lc_url:
+        if ctx.lc_url:
             sink.event(GenEvent("progress", "📥 使用 LeetCode 题目…"))
             draft = self._import_from_leetcode(ctx, sink)
             if draft is None:
@@ -94,7 +94,7 @@ class ProblemGenerationAgent:
                 draft = self._ensure_dual(draft, sink)
 
         # ── 通道 B：LLM 生成 + 校验 + 重试（仅未贴 LeetCode 时）──
-        if draft is None and not (ctx.leetcode or ctx.lc_url):
+        if draft is None and not ctx.lc_url:
             sink.event(GenEvent("progress", "正在调用大模型生成题目…"))
             # 这里的重试有两层：
             # 外层重试： 针对 LLM 出题，结构没有问题，但是题目不能自下，就是给的是写法，不能跑通自身的示例输入输出。
@@ -189,9 +189,7 @@ class ProblemGenerationAgent:
         return draft
 
     def _lc_data(self, ctx: GenerationContext) -> dict | None:
-        """优先用已解析 dict（/leetcode/parse 产物）；否则按 URL 抓取。"""
-        if ctx.leetcode:
-            return ctx.leetcode
+        """按 URL 抓取 LeetCode 题目（解析统一收口到本题，不再接受预解析 dict）。"""
         slug = slug_from_url(ctx.lc_url or "")
         if not slug:
             logger.warning("lc_url 无法解析 slug: %r", ctx.lc_url)
@@ -232,6 +230,7 @@ class ProblemGenerationAgent:
             difficulty=difficulty,
             title=title,
             description=description,
+            description_html=data.get("description_html", "") or "",
             starter_code=starter_code,
             examples=examples,
             constraints=list(data.get("constraints") or []),

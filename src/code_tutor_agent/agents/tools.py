@@ -1,19 +1,17 @@
 """Agent 工具集 — 包本地 Python 函数为 LangChain ``StructuredTool``。
 
-设计为「首批接入 tool calling 的两个能力域」：
-
-1. **解析 LeetCode**：``parse_leetcode`` —— 包 ``leetcode/leetcode_fetcher.py``
-   的 ``fetch_problem`` / ``problem_to_api_dict``。
-2. **判题 Judge0**：``judge_run_code`` / ``judge_code`` / ``judge_check_health``
-   —— 包 ``sandbox/judge0_client.py`` 的 ``run_code`` / ``submit_test_cases`` /
-   ``check_health``。
+判题 Judge0 工具域（辅导环节 agent 现场跑代码验证/演示）：
+- ``judge_run_code`` / ``judge_code`` / ``judge_check_health``
+  —— 包 ``sandbox/judge0_client.py`` 的 ``run_code`` / ``submit_test_cases`` /
+  ``check_health``。
 
 这些底层函数全是本项目自己的本地同步函数（urllib / 网络），故用本地
 ``bind_tools`` 直接绑，**不**起 MCP 子进程；同步调用统一用 ``asyncio.to_thread``
 包一层，避免阻塞 agent 的事件循环。
 
 > 关键边界（详见 docs/agent-leetcode-toolcall-design.md §2.3）：
-> - ``parse_leetcode`` 在**对话意图分析**阶段使用（agent 自主决定解析题目）。
+> - LeetCode **解析**已收口到 generation 包（generator 路径 A 服务端抓取），
+>   不再是 agent 工具；对话意图分析阶段只负责识别链接并转发 URL。
 > - ``judge_*`` 工具在**辅导**环节使用（agent 现场跑代码验证/演示），
 >   不取代图节点里确定性的批量判题流水线。
 """
@@ -22,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
@@ -31,10 +28,6 @@ import sys as _sys
 # 本模块引用，供 run_tool_loop 动态解析工具函数（便于测试 mock）
 _self_module = _sys.modules[__name__]
 
-from code_tutor_agent.leetcode.leetcode_fetcher import (
-    fetch_problem,
-    problem_to_api_dict,
-)
 from code_tutor_agent.sandbox.judge0_client import (
     run_code,
     submit_test_cases,
@@ -44,30 +37,6 @@ from code_tutor_agent.sandbox.judge0_client import (
 import logging as _logging
 logger = _logging.getLogger(__name__)
 
-
-
-# ──────────────────────────────────────────────
-#  解析 LeetCode
-# ──────────────────────────────────────────────
-
-
-def _parse_leetcode(url: str) -> str:
-    """Synchronous core: extract slug, fetch, and serialize to JSON string."""
-    m = re.search(r"/problems/([^/]+)", url.strip().rstrip("/"))
-    if not m:
-        return json.dumps({"error": "无效的 LeetCode 链接，请粘贴完整题目 URL（含 /problems/xxx）"})
-    slug = m.group(1)
-    domain = "leetcode.cn" if ".cn" in url else "leetcode.com"
-    try:
-        p = fetch_problem(slug, domain=domain)
-        return json.dumps(problem_to_api_dict(p), ensure_ascii=False)
-    except Exception as e:  # 网络失败 / 429 / 题目不存在 → 转成 error JSON，不崩
-        return json.dumps({"error": f"获取题目失败: {e}"})
-
-
-async def parse_leetcode(url: str) -> str:
-    """当用户提供 LeetCode 题目链接时调用，解析并返回结构化题目数据。"""
-    return await asyncio.to_thread(_parse_leetcode, url)
 
 
 # ──────────────────────────────────────────────
@@ -130,15 +99,6 @@ async def judge_check_health() -> str:
 
 
 AGENT_TOOLS = [
-    StructuredTool.from_function(
-        func=parse_leetcode,
-        name="parse_leetcode",
-        description=(
-            "当用户提供 LeetCode 题目链接（leetcode.com 或 leetcode.cn 的 "
-            "/problems/xxx）时调用，解析并返回标题/描述/示例/约束/模板代码等结构化数据，"
-            "用于直接作为练习题。不要在没有链接时调用。"
-        ),
-    ),
     StructuredTool.from_function(
         func=judge_run_code,
         name="judge_run_code",

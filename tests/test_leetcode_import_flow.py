@@ -1,11 +1,14 @@
 """Regression tests for LeetCode import + session creation flow.
 
 Covers:
-  - POST /leetcode/parse  →  parsed problem with test cases
-  - POST /session (with leetcode body)  →  fast-path, status=awaiting_submit
-  - GET  /session/{id}/state  →  problem loaded, test cases visible
+  - POST /session (with leetcode_url)  →  background generation, status=generating
+  - GET  /session/{id}/state  →  polls to awaiting_submit, problem loaded, test cases visible
   - POST /session/{id}/run  →  run user code against visible test cases
-  - Frontend stale closure guard: state returns status=awaiting_submit immediately
+  - Frontend stale closure guard: session must leave 'generating' and reach
+    'awaiting_submit' (otherwise the frontend poll loop would spin forever).
+
+Note: parsing/fetching is now consolidated in the generation package
+(generator_node) — there is no standalone /leetcode/parse endpoint anymore.
 """
 from __future__ import annotations
 
@@ -34,121 +37,89 @@ def client():
         yield c
 
 
+def wait_for_session(c, sid: str, timeout: float = 120.0) -> dict:
+    """Poll GET /session/{sid}/state until it leaves the generating state."""
+    import time
+
+    deadline = time.time() + timeout
+    last = {}
+    while time.time() < deadline:
+        resp = c.get(f"/session/{sid}/state")
+        if resp.status_code != 200:
+            raise AssertionError(f"state poll returned {resp.status_code}")
+        last = resp.json()
+        if last.get("status") not in ("generating", "awaiting_problem"):
+            return last
+        time.sleep(0.5)
+    raise TimeoutError(
+        f"Session {sid} still generating after {timeout}s; last={last}"
+    )
+
+
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-class TestLeetCodeParse:
-    """POST /leetcode/parse — parse a real LeetCode problem."""
+class TestSessionLeetCodeUrlImport:
+    """POST /session + leetcode_url — import path goes through background generation.
+
+    Parsing/fetching is now consolidated in generator_node (generation pkg);
+    the session starts in 'generating' and reaches 'awaiting_submit' after the
+    imported problem is loaded (network permitting).
+    """
 
     LEETCODE_URL = "https://leetcode.cn/problems/reverse-integer/"
 
-    def test_parse_returns_expected_structure(self, client):
-        resp = client.post("/leetcode/parse", json={"url": self.LEETCODE_URL})
-        assert resp.status_code == 200, resp.text
-        data = resp.json()
-
-        # Core fields
-        assert data["title"] == "整数反转"
-        assert data["difficulty"] == "medium"
-        assert data["starter_code"].startswith("class Solution")
-        assert "reverse" in data["starter_code"]
-
-        # Parsed test cases
-        assert "parsed_test_cases" in data
-        tcs = data["parsed_test_cases"]
-        assert len(tcs) >= 4  # 4 examples from LeetCode
-
-        # Each test case has the right shape
-        for tc in tcs:
-            assert "input_args" in tc
-            assert "expected_output" in tc
-            assert "explanation" in tc
-            assert isinstance(tc["input_args"], list)
-            assert isinstance(tc["expected_output"], str)
-
-        # Validate specific examples
-        assert any(tc["expected_output"] == "321" for tc in tcs)
-        assert any(tc["expected_output"] == "-321" for tc in tcs)
-        assert any(tc["expected_output"] == "21" for tc in tcs)
-        assert any(tc["expected_output"] == "0" for tc in tcs)
-
-    def test_parse_bad_url_returns_400(self, client):
-        resp = client.post("/leetcode/parse", json={"url": "https://example.com/not-a-leetcode"})
-        assert resp.status_code == 400
-
-    def test_parse_nonexistent_slug_returns_client_error(self, client):
-        resp = client.post("/leetcode/parse", json={"url": "https://leetcode.cn/problems/this-problem-definitely-does-not-exist-12345/"})
-        assert resp.status_code in (400, 404)
-
-
-class TestSessionLeetCodeFastPath:
-    """POST /session + leetcode body — fast-path skips background generation."""
-
-    def _build_leetcode_body(self, client) -> dict:
-        """Helper: parse a real LeetCode problem and return the body for POST /session."""
-        resp = client.post("/leetcode/parse", json={"url": "https://leetcode.cn/problems/reverse-integer/"})
-        assert resp.status_code == 200
-        parsed = resp.json()
-        return {
-            "topic": parsed["title"],
-            "difficulty": parsed["difficulty"],
+    def test_url_import_returns_generating(self, client):
+        """POST /session with leetcode_url must return status=generating + session_id."""
+        resp = client.post("/session", json={
+            "topic": "整数反转",
+            "difficulty": "medium",
             "mode": "practice",
-            "leetcode": parsed,
-        }
-
-    def test_fast_path_returns_awaiting_submit(self, client):
-        """The fast-path must return status=awaiting_submit and problem immediately."""
-        body = self._build_leetcode_body(client)
-        resp = client.post("/session", json=body)
+            "leetcode_url": self.LEETCODE_URL,
+        })
         assert resp.status_code == 200, resp.text
         data = resp.json()
+        # New contract: import path also runs background generation (no fast-path).
+        assert data["status"] == "generating"
+        assert data["session_id"]
 
-        # THIS is the critical assertion that guards against the stale closure bug:
-        # the frontend polls until status != 'generating' — if the backend ever
-        # returns 'generating' here, the frontend would loop forever.
-        assert data["status"] == "awaiting_submit", (
-            f"Expected awaiting_submit, got '{data['status']}'. "
-            "If this fails, the LeetCode fast-path is not working correctly."
-        )
+    def test_url_import_polls_to_awaiting_submit(self, client):
+        """GET /session/{id}/state must reach awaiting_submit with the imported problem.
 
-        # Problem must be loaded
-        assert data["problem"] is not None
-        assert data["problem"]["title"] == "整数反转"
-        assert data["problem"]["difficulty"] == "medium"
-        assert data["problem"]["starter_code"].startswith("class Solution")
-
-        # Visible test cases must be populated
-        assert len(data["problem"]["visible_test_cases"]) >= 4
-
-        # Session ID
-        assert data["session_id"] is not None
-        assert len(data["session_id"]) > 0
-
-    def test_fast_path_state_polling(self, client):
-        """GET /session/{id}/state must return the same state after fast-path."""
-        body = self._build_leetcode_body(client)
-        resp = client.post("/session", json=body)
+        This is the critical guard against the stale closure bug: the frontend
+        polls until status != 'generating' — the session MUST leave 'generating'
+        and load the imported problem, otherwise the frontend loops forever.
+        """
+        resp = client.post("/session", json={
+            "topic": "整数反转",
+            "difficulty": "medium",
+            "mode": "practice",
+            "leetcode_url": self.LEETCODE_URL,
+        })
         sid = resp.json()["session_id"]
 
-        # Poll the state
-        state = client.get(f"/session/{sid}/state")
-        assert state.status_code == 200
-        s = state.json()
+        state = wait_for_session(client, sid)
+        assert state["status"] == "awaiting_submit"
+        assert state["problem"] is not None
+        assert state["problem"]["title"] == "整数反转"
+        assert state["problem"]["difficulty"] == "medium"
+        assert state["problem"]["starter_code"].startswith("class Solution")
+        assert len(state["problem"]["visible_test_cases"]) >= 4
+        assert state["submissions"] == []
+        assert state["last_verdict"] is None
 
-        assert s["status"] == "awaiting_submit"
-        assert s["problem"] is not None
-        assert s["problem"]["title"] == "整数反转"
-        assert len(s["problem"]["visible_test_cases"]) >= 4
-        assert s["submissions"] == []
-        assert s["last_verdict"] is None
-
-    def test_fast_path_run_code_against_visible_tcs(self, client):
+    def test_url_import_run_code_against_visible_tcs(self, client):
         """POST /session/{sid}/run must work against the imported visible test cases."""
-        body = self._build_leetcode_body(client)
-        resp = client.post("/session", json=body)
+        resp = client.post("/session", json={
+            "topic": "整数反转",
+            "difficulty": "medium",
+            "mode": "practice",
+            "leetcode_url": self.LEETCODE_URL,
+        })
         sid = resp.json()["session_id"]
+        wait_for_session(client, sid)
 
-        # Run a correct solution
+        # Run a correct solution against the imported problem
         code = """class Solution:
     def reverse(self, x: int) -> int:
         sign = 1 if x >= 0 else -1
@@ -168,8 +139,8 @@ class TestSessionLeetCodeFastPath:
         assert r["passed"] == r["total"], f"Expected all passed, got {r['passed']}/{r['total']}: {r}"
         assert r["all_passed"] is True
 
-    def test_fast_path_missing_leetcode_body_falls_back_to_normal(self, client):
-        """POST /session without leetcode body should return generating (background task)."""
+    def test_missing_leetcode_url_falls_back_to_normal(self, client):
+        """POST /session without leetcode_url should return generating (background task)."""
         resp = client.post("/session", json={"topic": "array", "difficulty": "easy", "mode": "practice"})
         assert resp.status_code == 200
         data = resp.json()

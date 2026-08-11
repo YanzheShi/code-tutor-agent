@@ -1,10 +1,10 @@
 """针对 generation 包路径 A（LeetCode 导入）与降级链的单元测试。
 
 覆盖新子 Agent 架构（docs/generation-subagent-design.md §4）的关键决策：
-* dict 导入（/leetcode/parse 产物）→ channel=leetcode_import，constraints 落库；
-* URL 导入 → fetch + slug 回填；
+* URL 导入 → LeetCodeGateway.fetch + slug 回填 → channel=leetcode_import；
 * 导入失败 → 显式降级链（PULL → HISTORY → STATIC），绝不静默生成原创题；
 * 全链路失败 → GenerationResult(ok=False) + fallback_chain。
+（LeetCode 解析已收口到 generation 包，不再接受预解析 dict。）
 """
 from __future__ import annotations
 
@@ -105,11 +105,14 @@ def _build_agent(store, *, fetch=None, listing=None, gen_optimal=None):
     return ProblemGenerationAgent(leetcode=leetcode, llm=llm, store=store, sandbox=sandbox)
 
 
-def test_import_dict_channel_and_constraints():
-    """dict 导入：channel=leetcode_import，constraints 与可见用例随 draft 落库。"""
+def test_import_channel_and_constraints():
+    """URL 导入：channel=leetcode_import，constraints 与可见用例随 draft 落库。"""
     store = _RecordingStore()
     agent = _build_agent(store)
-    ctx = GenerationContext(topic="数组", difficulty="easy", leetcode=_make_lc_data())
+    ctx = GenerationContext(
+        topic="数组", difficulty="easy",
+        lc_url="https://leetcode.cn/problems/two-sum/",
+    )
 
     result = agent.run(ctx)
 
@@ -121,18 +124,20 @@ def test_import_dict_channel_and_constraints():
     assert saved.constraints == _make_lc_data()["constraints"]
     assert saved.test_cases[0]["expected_output"] == "[0, 1]"
     assert saved.optimal_solution  # 缺最优解时由 generate_optimal 补上
-    # dict 导入无 slug，须靠 imported 标志识别来源（2026-08-10 修复）
-    assert saved.imported is True
+    # URL 导入回填 source_slug，from_leetcode 据此判定来源
     assert saved.from_leetcode is True
 
 
-def test_dict_import_persists_leetcode_source():
-    """dict 导入（无 slug）落库也须标 source=leetcode / novelty 9.0。"""
+def test_import_persists_leetcode_source():
+    """URL 导入落库须标 source=leetcode / novelty 9.0。"""
     from code_tutor_agent.generation.gateways.store import draft_to_problem_dict
 
     store = _RecordingStore()
     agent = _build_agent(store)
-    ctx = GenerationContext(topic="数组", difficulty="easy", leetcode=_make_lc_data())
+    ctx = GenerationContext(
+        topic="数组", difficulty="easy",
+        lc_url="https://leetcode.cn/problems/two-sum/",
+    )
 
     result = agent.run(ctx)
 

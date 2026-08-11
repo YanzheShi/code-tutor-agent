@@ -24,8 +24,7 @@ class GenerationContext:
 
     topic: str
     difficulty: str
-    lc_url: str | None = None            # 用户贴的 LeetCode URL（导入通道）
-    leetcode: dict | None = None         # 已解析的 LeetCode dict（/leetcode/parse 产物）
+    lc_url: str | None = None            # 用户贴的 LeetCode URL（导入通道，解析收口到 generation 包）
     profile_hint: str | None = None      # 用户画像弱项提示（HISTORY 优先级用）
     options: GenerationOptions = field(default_factory=GenerationOptions)
 
@@ -39,6 +38,7 @@ class ProblemDraft:
     title: str
     description: str
     starter_code: str
+    description_html: str = ""        # LeetCode 富文本描述（fetch 产物，落库/前端渲染用）
     optimal_solution: str = ""
     brute_solution: str = ""
     examples: list[str] = field(default_factory=list)      # 原始示例文本（LLM/LeetCode 输出）
@@ -53,8 +53,9 @@ class ProblemDraft:
     def from_leetcode(self) -> bool:
         """题目来自 LeetCode（导入或拉题），落库 source/novelty 据此判定。
 
-        dict 导入（/leetcode/parse 产物）不含 url/slug，仅靠 ``source_slug``
-        会误判为「原创」（2026-08-10 修复，docs/generation-subagent-design.md §7）。
+        LeetCode 解析已统一收口到 generation 包：导入通道只接收 URL，
+        由 ``LeetCodeGateway.fetch`` 抓取并回填 ``source_slug``；``imported``
+        作为显式标记兜底（2026-08-10 修复，docs/generation-subagent-design.md §7）。
         """
         return bool(self.source_slug) or self.imported
 

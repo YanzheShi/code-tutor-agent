@@ -41,9 +41,9 @@ class CreateSessionRequest(BaseModel):
         default="practice",
         description="practice / interview / debug_theatre",
     )
-    leetcode: Optional[dict] = Field(
+    leetcode_url: Optional[str] = Field(
         default=None,
-        description="Parsed LeetCode problem data (from /leetcode/parse)",
+        description="LeetCode problem URL to import (fetched & parsed server-side, consolidated in generation pkg)",
     )
 
 
@@ -113,34 +113,6 @@ class RunCodeResponse(BaseModel):
     results: list[RunResult]
     total: int
     passed: int
-
-
-# ──────────────────────────────────────────────
-#  LeetCode parser
-# ──────────────────────────────────────────────
-
-
-class LeetCodeParseRequest(BaseModel):
-    """Request to parse a LeetCode problem URL."""
-
-    url: str = Field(description="LeetCode problem URL, e.g. https://leetcode.com/problems/two-sum/")
-
-
-class LeetCodeParseResponse(BaseModel):
-    """Result of parsing a LeetCode problem."""
-
-    title: str
-    url: str = ""
-    description: str
-    description_html: str = ""  # 原始 HTML 格式，前端渲染富文本
-    difficulty: str
-    examples: list[str] = Field(default_factory=list)
-    constraints: list[str] = Field(default_factory=list)
-    starter_code: str = ""
-    hints: list[str] = Field(default_factory=list)
-    tags: list[str] = Field(default_factory=list)
-    parsed_test_cases: list[dict] = Field(default_factory=list)
-    session_id: str = ""
 
 
 # ──────────────────────────────────────────────

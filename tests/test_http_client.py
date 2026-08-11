@@ -3,8 +3,8 @@
 Covers every endpoint defined in ``api/main.py``:
 
   - GET  /health
-  - POST /leetcode/parse
   - POST /session                          (AI generate)
+  - POST /session (leetcode_url)           (import from LeetCode URL)
   - POST /session/by-problem/{id}          (existing problem)
   - GET  /session/{sid}/state              (poll)
   - POST /session/{sid}/submit             (judge + tutor)
@@ -86,43 +86,6 @@ def test_health() -> None:
         assert data.get("graph_ready") is True
 
 
-def test_leetcode_parse_cn() -> None:
-    """Parse a LeetCode CN problem URL."""
-    _banner("2. LeetCode Parse (CN)")
-    url = "https://leetcode.cn/problems/two-sum/"
-    with httpx.Client() as client:
-        r = client.post(f"{BASE_URL}/leetcode/parse", json={"url": url})
-        data = _print_resp("POST /leetcode/parse", r)
-        assert r.status_code == 200
-        assert data.get("title")
-        assert data.get("difficulty")
-        assert data.get("tags")
-        print(f"  Title: {data['title']}")
-        print(f"  Difficulty: {data['difficulty']}")
-        print(f"  Tags: {', '.join(data['tags'])}")
-
-
-def test_leetcode_parse_com() -> None:
-    """Parse a LeetCode COM problem URL."""
-    _banner("3. LeetCode Parse (COM)")
-    url = "https://leetcode.com/problems/two-sum/"
-    with httpx.Client() as client:
-        r = client.post(f"{BASE_URL}/leetcode/parse", json={"url": url})
-        data = _print_resp("POST /leetcode/parse", r)
-        assert r.status_code == 200
-        assert data.get("title")
-        print(f"  Title: {data['title']}")
-
-
-def test_leetcode_invalid_url() -> None:
-    """Invalid URL should return 400."""
-    _banner("4. LeetCode Parse — Invalid URL")
-    with httpx.Client() as client:
-        r = client.post(f"{BASE_URL}/leetcode/parse", json={"url": "https://leetcode.com/not-a-valid-url"})
-        _print_resp("POST /leetcode/parse (invalid)", r)
-        # May return 400 or 404 depending on how the slug is resolved
-
-
 def test_create_session_ai_generate() -> None:
     """Create a session with AI-generated problem (background)."""
     _banner("5. Create Session (AI Generate)")
@@ -144,37 +107,32 @@ def test_create_session_ai_generate() -> None:
         return sid  # type: ignore[return-value]
 
 
-def test_create_session_leetcode_fast_path() -> None:
-    """Create a session using pre-parsed LeetCode data (fast path)."""
-    _banner("6. Create Session (LeetCode Fast Path)")
+def test_create_session_leetcode_url() -> None:
+    """Create a session from a LeetCode URL (import path).
+
+    The URL is passed through; parsing/fetching is consolidated in the
+    generation package (generator_node), so the session starts in the
+    background ``generating`` state and the imported problem shows up
+    after polling.
+    """
+    _banner("6. Create Session (LeetCode URL)")
     with httpx.Client() as client:
-        # Step 1: parse
-        parse_r = client.post(f"{BASE_URL}/leetcode/parse", json={
-            "url": "https://leetcode.cn/problems/two-sum/",
-        })
-        parsed = _print_resp("Step 1: parse", parse_r)
-        assert parse_r.status_code == 200
-
-        # Step 2: create session with leetcode data
         create_r = client.post(f"{BASE_URL}/session", json={
-            "topic": parsed.get("tags", ["算法"])[0] if parsed.get("tags") else "算法",
-            "difficulty": parsed.get("difficulty", "easy"),
+            "topic": "算法",
+            "difficulty": "easy",
             "mode": "practice",
-            "leetcode": parsed,
+            "leetcode_url": "https://leetcode.cn/problems/two-sum/",
         })
-        create_data = _print_resp("Step 2: create session", create_r)
+        create_data = _print_resp("POST /session (leetcode_url)", create_r)
+        assert create_r.status_code == 200
+        # New contract: import path also goes through background generation.
+        assert create_data.get("status") == "generating"
 
-        # Fast path returns the full state immediately (not {"status": "generating"})
-        if create_r.status_code == 200 and create_data.get("problem"):
-            print(f"  Fast path succeeded!")
-            print(f"  Problem: {create_data['problem']['title']}")
-            print(f"  Status: {create_data['status']}")
-        else:
-            # Background path — poll
-            sid = create_data.get("session_id")
-            if sid:
-                print(f"  Session ID: {sid} (polling …)")
-                state = wait_for_session(sid)
+        sid = create_data.get("session_id")
+        if sid:
+            print(f"  Session ID: {sid} (polling …)")
+            state = wait_for_session(sid)
+            if state.get("problem"):
                 print(f"  Problem: {state.get('problem', {}).get('title', 'N/A')}")
 
 
@@ -274,11 +232,8 @@ def test_session_not_found() -> None:
 
 TESTS = [
     ("Health check", test_health),
-    ("LeetCode CN parse", test_leetcode_parse_cn),
-    ("LeetCode COM parse", test_leetcode_parse_com),
-    ("LeetCode invalid URL", test_leetcode_invalid_url),
     ("Create session (AI generate)", test_create_session_ai_generate),
-    ("Create session (LeetCode fast path)", test_create_session_leetcode_fast_path),
+    ("Create session (LeetCode URL)", test_create_session_leetcode_url),
     ("List problems", test_list_problems),
     ("Create session (existing problem)", test_create_session_existing_problem),
     ("Submit & Run flow", test_submit_and_run_flow),

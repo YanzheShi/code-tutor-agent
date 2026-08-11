@@ -287,21 +287,6 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
         if intent.is_ready:
             topic = intent.topic or values.get("topic", "数组")
             difficulty = intent.difficulty or values.get("difficulty", "easy")
-            # LeetCode 来源：用解析数据里的标题/难度，给更贴合的收尾文案。
-            # 防御：LLM 可能臆造 source=leetcode 并只给一个题号（int），
-            # 此时 leetcode_payload 解析后不是含 title 的 dict，应回退为生成式出题。
-            leetcode_data = None
-            if intent.source == "leetcode" and intent.leetcode_payload:
-                try:
-                    _parsed = json.loads(intent.leetcode_payload)
-                    if isinstance(_parsed, dict) and _parsed.get("title"):
-                        leetcode_data = _parsed
-                        topic = _parsed.get("title") or topic
-                        difficulty = _parsed.get("difficulty") or difficulty
-                except json.JSONDecodeError:
-                    pass
-                if leetcode_data is None:
-                    intent = intent.model_copy(update={"source": "generated"})
             # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
             # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
             ready_msg = build_ready_message(topic, difficulty)
@@ -316,8 +301,10 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
                 "difficulty": difficulty,
                 "tutor_messages": _full_display,
             }
-            if intent.source == "leetcode" and leetcode_data:
-                _updates["leetcode"] = leetcode_data
+            # LeetCode 来源：仅把原始链接交给 generator_node，由其在服务端抓取并解析
+            # （解析逻辑已收口到 generation 包，不再在路由层预解析）。
+            if intent.source == "leetcode" and intent.leetcode_url:
+                _updates["leetcode"] = {"url": intent.leetcode_url}
             graph.update_state(config, _updates, as_node="agent_dialog_node")
 
             # 伪流式输出固定收尾文案，保持打字效果

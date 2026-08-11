@@ -7,20 +7,19 @@
 - 四个工具各自的序列化逻辑（mock 底层同步函数）
 - ``AGENT_TOOLS`` 注册表完整性
 - ``_extract_leetcode_url`` 链接识别
-- ``analyze_user_intent`` 工具循环：贴链接 → 解析 → 意图带 leetcode_payload；
-  以及解析失败 / 无链接两种兜底路径
+- ``analyze_user_intent``：贴 LeetCode 链接 → 短链返回 source=leetcode（解析收口到 generation）；
+  无链接时走 LLM 结构化输出 + 兜底解析
 """
 
 from __future__ import annotations
 
 import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage
 
 from code_tutor_agent.agents.tools import (
-    parse_leetcode,
     judge_run_code,
     judge_code,
     judge_check_health,
@@ -63,71 +62,6 @@ class _FakeModel:
         if self._calls == 1 and self._tool_calls:
             return AIMessage(content="", tool_calls=self._tool_calls)
         return self._final
-
-
-def _lc_payload(title="Two Sum", difficulty="easy") -> str:
-    return json.dumps({
-        "title": title,
-        "difficulty": difficulty,
-        "description": "d",
-        "examples": [],
-        "constraints": [],
-        "starter_code": "",
-        "hints": [],
-        "tags": ["数组"],
-        "parsed_test_cases": [],
-    })
-
-
-# ──────────────────────────────────────────────
-#  工具：解析 LeetCode
-# ──────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_parse_leetcode_success():
-    fake_problem = MagicMock()
-    with patch("code_tutor_agent.agents.tools.fetch_problem", return_value=fake_problem), \
-         patch("code_tutor_agent.agents.tools.problem_to_api_dict",
-               return_value=json.loads(_lc_payload("Two Sum", "easy"))):
-        out = await parse_leetcode("https://leetcode.cn/problems/two-sum")
-    data = json.loads(out)
-    assert data["title"] == "Two Sum"
-    assert data["difficulty"] == "easy"
-    assert "error" not in data
-
-
-@pytest.mark.asyncio
-async def test_parse_leetcode_invalid_url():
-    out = await parse_leetcode("这不是一个链接")
-    data = json.loads(out)
-    assert "error" in data
-
-
-@pytest.mark.asyncio
-async def test_parse_leetcode_domain_detection():
-    captured = {}
-
-    def _fake_fetch(slug, domain="leetcode.cn"):
-        captured["slug"] = slug
-        captured["domain"] = domain
-        return MagicMock()
-
-    with patch("code_tutor_agent.agents.tools.fetch_problem", side_effect=_fake_fetch), \
-         patch("code_tutor_agent.agents.tools.problem_to_api_dict",
-               return_value=json.loads(_lc_payload())):
-        await parse_leetcode("https://leetcode.com/problems/best-time-to-buy-and-sell-stock")
-    assert captured["slug"] == "best-time-to-buy-and-sell-stock"
-    assert captured["domain"] == "leetcode.com"
-
-
-@pytest.mark.asyncio
-async def test_parse_leetcode_network_error_returns_error_json():
-    with patch("code_tutor_agent.agents.tools.fetch_problem",
-               side_effect=ValueError("not found")):
-        out = await parse_leetcode("https://leetcode.cn/problems/does-not-exist")
-    data = json.loads(out)
-    assert "error" in data
 
 
 # ──────────────────────────────────────────────
@@ -181,16 +115,12 @@ async def test_judge_check_health_passthrough():
 
 def test_agent_tools_registry():
     names = {t.name for t in AGENT_TOOLS}
+    # LeetCode 解析已收口到 generation 包，不再作为 agent 工具
     assert names == {
-        "parse_leetcode",
         "judge_run_code",
         "judge_code",
         "judge_check_health",
     }
-    # parse_leetcode 工具应声明 url 参数
-    tool = get_tool("parse_leetcode")
-    assert tool is not None
-    assert "url" in tool.args
 
 
 def test_extract_leetcode_url():
@@ -210,49 +140,55 @@ def test_extract_leetcode_url():
 
 
 @pytest.mark.asyncio
-async def test_analyze_triggers_parse_leetcode():
-    tool_calls = [{
-        "name": "parse_leetcode",
-        "args": {"url": "https://leetcode.cn/problems/two-sum"},
-        "id": "c1",
-    }]
-    fake = _FakeModel(tool_calls, DialogIntent(topic="数组", difficulty="medium", is_ready=True))
+async def test_analyze_leetcode_url_short_circuits():
+    """贴 LeetCode 链接 → analyze_user_intent 直接短链返回 source=leetcode。
 
-    history = [Message(role="user", content="帮我做 https://leetcode.cn/problems/two-sum")]
+    解析已收口到 generator_node，此层只透传 URL、不再调 LLM 解析工具；
+    故即便把 get_llm patch 成"返回 generated 意图"，结果也必须是 leetcode 短链。
+    """
+    fake = _FakeModel([], DialogIntent(topic="数组", difficulty="medium", is_ready=True, source="generated"))
+
+    history = [Message(role="user", content="帮我做 https://leetcode.cn/problems/two-sum 这道题")]
     with patch("code_tutor_agent.agents.agent_dialog.get_llm", return_value=fake), \
          patch("code_tutor_agent.agents.agent_dialog._build_transcript", return_value="transcript"), \
-         patch("code_tutor_agent.agents.agent_dialog._build_profile_summary", return_value=""), \
-         patch("code_tutor_agent.agents.tools.fetch_problem", return_value=MagicMock()), \
-         patch("code_tutor_agent.agents.tools.problem_to_api_dict",
-               return_value=json.loads(_lc_payload("Two Sum", "easy"))):
+         patch("code_tutor_agent.agents.agent_dialog._build_profile_summary", return_value=""):
         intent = await analyze_user_intent(history)
 
+    # 短链返回：source=leetcode，URL 透传，is_ready=True
     assert intent.source == "leetcode"
     assert intent.leetcode_url == "https://leetcode.cn/problems/two-sum"
-    assert "Two Sum" in intent.leetcode_payload
     assert intent.is_ready is True
+    # 未走 LLM 结构化路径：fake 的 final intent 不应被采用（topic 应为空）
+    assert intent.topic == ""
+    # LLM 在短链返回前根本没被调用
+    assert fake._calls == 0
 
 
 @pytest.mark.asyncio
-async def test_analyze_parse_error_keeps_default_source():
-    tool_calls = [{
-        "name": "parse_leetcode",
-        "args": {"url": "https://leetcode.cn/problems/broken"},
-        "id": "c1",
-    }]
-    fake = _FakeModel(tool_calls, DialogIntent(topic="数组", difficulty="medium", is_ready=True))
+async def test_analyze_no_preference_auto_selects_topic():
+    """用户连续 2+ 轮"随便" → 自动选弱项 topic，is_ready=True，不再追问。
 
-    history = [Message(role="user", content="https://leetcode.cn/problems/broken")]
+    替换原 test_analyze_parse_error_keeps_default_source：解析失败兜底已不存在
+    （解析收口到 generator_node），这里转而覆盖"无偏好自动选题"这一独立分支。
+    """
+    history = [
+        Message(role="user", content="随便"),
+        Message(role="tutor", content="那你想练哪个方向？"),
+        Message(role="user", content="都可以"),
+        Message(role="tutor", content="再想想？"),
+        Message(role="user", content="你定吧"),
+    ]
+    fake = _FakeModel([], DialogIntent(topic="", difficulty="", is_ready=False))
     with patch("code_tutor_agent.agents.agent_dialog.get_llm", return_value=fake), \
-         patch("code_tutor_agent.agents.agent_dialog._build_transcript", return_value="transcript"), \
-         patch("code_tutor_agent.agents.agent_dialog._build_profile_summary", return_value=""), \
-         patch("code_tutor_agent.agents.tools.fetch_problem",
-               side_effect=ValueError("boom")):
+         patch("code_tutor_agent.agents.agent_dialog._build_profile_summary",
+               return_value="- **数组**：熟练度很低(prof=0.10)"):
         intent = await analyze_user_intent(history)
 
-    # 解析失败 → 不把坏数据塞进 payload，source 保持默认
-    assert intent.source == "generated"
-    assert intent.leetcode_payload == ""
+    assert intent.is_ready is True
+    assert intent.difficulty == "medium"
+    assert intent.topic == "数组"  # _pick_auto_topic 从画像弱项取
+    # 自动选路在 LLM 之前返回，未调用 LLM
+    assert fake._calls == 0
 
 
 @pytest.mark.asyncio
@@ -363,11 +299,11 @@ async def test_run_tool_loop_tool_error_becomes_json():
 
 @pytest.mark.asyncio
 async def test_run_tool_loop_ignores_unbound_tool():
-    """LLM 调了未绑定工具（如 parse_leetcode）→ 不应执行，循环应立即停。"""
+    """LLM 调了未绑定工具（如 unknown_tool）→ 不应执行，循环应立即停。"""
     from langchain_core.messages import SystemMessage, HumanMessage
     from code_tutor_agent.agents.tools import run_tool_loop, JUDGE_TOOLS
 
-    tcs = [{"name": "parse_leetcode", "args": {"url": "x"}, "id": "t1"}]
+    tcs = [{"name": "unknown_tool", "args": {"url": "x"}, "id": "t1"}]
     fake_llm = _ToolLoopFakeLLM(tcs)
     msgs = [SystemMessage(content="s"), HumanMessage(content="h")]
     result = await run_tool_loop(fake_llm, msgs, tools=JUDGE_TOOLS)
