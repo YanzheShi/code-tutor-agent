@@ -6,8 +6,11 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.api.deps import get_graph, pause_safe_update
+from code_tutor_agent.db.database import get_problem_by_id
+from code_tutor_agent.leetcode.leetcode_fetcher import extract_signature_from_solution
 from code_tutor_agent.observability import build_run_config
+from code_tutor_agent.sandbox.runner import run_solution
 from code_tutor_agent.schemas.api import RunCodeRequest, RunCodeResponse
 
 logger = logging.getLogger(__name__)
@@ -29,7 +32,6 @@ async def run_code(sid: str, body: RunCodeRequest):
     if not problem:
         raise HTTPException(400, "No problem loaded in this session")
 
-    from code_tutor_agent.db.database import get_problem_by_id
     problem_id = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
     full = get_problem_by_id(problem_id)
     if not full:
@@ -40,8 +42,6 @@ async def run_code(sid: str, body: RunCodeRequest):
         test_cases = full.get("test_cases", [])
         visible = [tc for tc in test_cases if not tc.get("is_hidden", False)]
 
-    from code_tutor_agent.sandbox.runner import run_solution
-    from code_tutor_agent.leetcode.leetcode_fetcher import extract_signature_from_solution
     _func_sig = full.get("function_signature", "") or ""
     # ── 兜底：从 optimal_solution 提取签名覆盖 DB 值 ──
     #
@@ -91,7 +91,6 @@ async def run_code(sid: str, body: RunCodeRequest):
     try:
         # 暂停安全写入：直接 update_state 会丢失 wait_for_submit 的挂起中断，
         # 导致后续 /submit 的 resume 空转（见 deps.pause_safe_update）。
-        from code_tutor_agent.api.deps import pause_safe_update
         pause_safe_update(graph, config, {"last_run_results": run_results})
     except Exception as exc:
         logger.warning("Failed to persist run results: %s", exc)

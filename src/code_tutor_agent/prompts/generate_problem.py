@@ -1,10 +1,9 @@
-"""Generation prompts for the self-verifying problem generator (D2).
+"""Generation prompts for the self-verifying problem generator .
 
-Three prompts:
+One prompt:
 
 1. **generate** — produces a full Problem with optimal solution
-2. **fix_expected** — given a failing test case, repairs the expected output
-3. **critic_novelty** — rates the problem on novelty (R03)
+2. **critic_novelty** — rates the problem on novelty (新颖度评判，未实现)
 """
 
 GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的知识点和难度，生成一道高质量算法题。
@@ -84,28 +83,6 @@ GENERATE_PROBLEM_USER = """请生成一道编程题。
 - 难度：{difficulty}
 
 请严格按照要求输出题目信息，包含最优解代码和函数签名描述。"""
-
-
-FIX_EXPECTED_SYSTEM = """你是题目设计助手。一道自生成题目的参考解通过了代码检查，
-但它的预期输出和实际运行结果不一致。
-
-请修复 `expected_output` 字段，使其与参考解的实际输出一致。
-
-注意：参考解是正确的（已通过编译和语法检查），所以以参考解的实际运行为准。
-"""
-
-FIX_EXPECTED_USER = """以下测试用例的预期输出和参考解的实际输出不一致：
-
-测试用例 #{test_case_id}:
-  input_args: {input_args}
-  current_expected: {expected_output}
-  actual_output: {actual_output}
-
-请输出修正后的 `expected_output`，只输出 JSON：
-```json
-{{"test_case_id": {test_case_id}, "fixed_expected": "<修正后的值>"}}
-```"""
-
 
 CRITIC_NOVELTY_SYSTEM = """你是编程题质量评审员（评审 R03）。
 判断一道题的新颖度（novelty_score, 0~10），用于面试简历项目评估。
