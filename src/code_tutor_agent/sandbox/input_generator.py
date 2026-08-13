@@ -34,10 +34,17 @@ _SINGLE_BOUND_RE = re.compile(r"(?P<op>>=|<=|>|<|=)\s*(?P<val>-?\d+(?:\^\d+)?)")
 
 
 def _eval_power(s: str) -> int:
-    """处理 10^4 这样的幂记法为整数 10000。"""
+    """处理 10^4 这样的幂记法为整数 10000；正确处理一元负号（-10^4 = -(10^4)）。"""
+    s = s.strip()
     if '^' in s:
         base, exp = s.split('^', 1)
-        return int(base) ** int(exp)
+        base = base.strip()
+        neg = False
+        if base.startswith('-'):
+            neg = True
+            base = base[1:]
+        val = int(base) ** int(exp)
+        return -val if neg else val
     return int(s)
 
 
@@ -53,6 +60,7 @@ def _parse_constraint_ranges(constraints: list[str] | None) -> tuple[int, int, i
 
     min_val, max_val = -100, 100
     min_len, max_len = 2, 8
+    val_low_specified = False  # 是否有约束显式限定了元素下界（如 0 <= x）
 
     for text in constraints:
         # 尝试匹配 "低 <= 某变量 <= 高"
@@ -67,17 +75,29 @@ def _parse_constraint_ranges(constraints: list[str] | None) -> tuple[int, int, i
                 if high < max_len:
                     max_len = high
             else:
-                if low < min_val:
-                    min_val = low
-                if high > max_val:
-                    max_val = high
-                    # 保证数组长度至少能容纳更多元素
-                    max_len = max(max_len, 8)
+                if low <= high:
+                    # 元素值约束：将取值范围收紧到「默认区间 ∩ 约束区间」。
+                    # 旧逻辑只会放宽（low 更负 / high 更大时改），导致约束更严格时
+                    # 仍用默认的 [-100,100]，从而生成非法值（如 0/1 题出现大整数）。
+                    val_low_specified = True
+                    new_min = max(min_val, low)
+                    new_max = min(max_val, high)
+                    if new_min <= new_max:
+                        min_val, max_val = new_min, new_max
+                    else:
+                        # 约束区间完全在默认区间之外（罕见），以约束为准
+                        min_val, max_val = low, high
+                    if high > 100:
+                        # 元素值范围较大，暗示可用更大数组
+                        max_len = max(max_len, 8)
 
     # 保证合理性
     min_len = max(1, min_len)
     max_len = max(max_len, min_len + 1)
-    min_val = min(min_val, -1)  # 至少包含负数，否则设为 0
+    if not val_low_specified and min_val > -1:
+        # 未显式限定元素下界时，确保随机值至少覆盖到负数（默认 -100 已含负数，
+        # 此处仅在被动抬高下界时才补 -1）；显式下界（如 0 <= x）以约束为准，不加负数。
+        min_val = -1
     max_val = max(max_val, 1)
 
     logger.debug("Parsed constraint ranges: val=[%d, %d] len=[%d, %d]",
@@ -193,7 +213,11 @@ def _generate_param_value(
 
     # 链表 / 树结构：以数组形式生成（runner 会按类型还原成对应对象）
     if type_str in ("ListNode", "TreeNode", "Node", "GraphNode"):
-        return _random_struct_array(type_str, min_val or -100, max_val or 100)
+        return _random_struct_array(
+            type_str,
+            min_val if min_val is not None else -100,
+            max_val if max_val is not None else 100,
+        )
 
     # Handle 2D List[List[...]] FIRST — more specific than the 1D pattern.
     # (A greedy 1D regex would otherwise swallow "List[List[str]]" whole,
@@ -219,14 +243,20 @@ def _generate_param_value(
 
     # Handle basic types
     if type_str == "int":
-        return _random_int(min_val or -1000, max_val or 1000)
+        return _random_int(
+            min_val if min_val is not None else -1000,
+            max_val if max_val is not None else 1000,
+        )
     gen = _TYPE_GENERATORS.get(type_str)
     if gen:
         return gen()
 
     # Fallback: return a default
     logger.warning("Unknown type '%s', defaulting to int", type_str)
-    return _random_int(min_val or -1000, max_val or 1000)
+    return _random_int(
+        min_val if min_val is not None else -1000,
+        max_val if max_val is not None else 1000,
+    )
 
 
 def generate_random_inputs(
@@ -308,9 +338,13 @@ def generate_random_inputs(
                     _n = 5
                 val = str(_n)
             else:
-                # P2: 传入解析后的范围
-                _rmin = _parsed_min_val if t == "int" else None
-                _rmax = _parsed_max_val if t == "int" else None
+                # P2: 传入解析后的范围。
+                # 注意：List[int] 的元素也是 int，约束（如 0 <= nums[i] <= 1）应作用于
+                # 数组元素，故 List[int] 同样传入值范围；否则元素会回退到默认 [-1000,1000]，
+                # 导致 0/1 题等出现非法大整数（旧 bug）。
+                _is_int_like = (t == "int" or _is_list_type(t))
+                _rmin = _parsed_min_val if _is_int_like else None
+                _rmax = _parsed_max_val if _is_int_like else None
                 val = _generate_param_value(type_str, _rmin, _rmax, _parsed_min_len, _parsed_max_len)
             args.append(val)
             prev_type = t
