@@ -238,6 +238,7 @@ class LlmGateway:
             llm = get_llm(purpose="api-generation-high")
             resp = llm.invoke([("system", GENERATE_BOUNDARY_SYSTEM), ("human", prompt_user)])
             content = resp.content if hasattr(resp, "content") else str(resp)
+            logger.info("生成边界测试用例: %s", content)
             json_match = re.search(r"\[.*\]", content, re.DOTALL)
             if not json_match:
                 logger.warning("边界用例响应无 JSON")

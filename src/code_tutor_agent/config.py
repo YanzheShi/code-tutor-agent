@@ -46,11 +46,11 @@ PURPOSE_CONFIGS = {
     "generator":            {"alias": "default", "temperature": 0.3},
 
     # === Agent 模块 ===
-    "dialog":               {"alias": "default", "temperature": 0.3, "max_tokens": 2048},
+    "dialog":               {"alias": "default", "temperature": 0.3},
     "dialog-stream":        {"alias": "default", "temperature": 0.7, "streaming": True},
     "judge":                {"alias": "default", "temperature": 0.7},
     # 这里
-    "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 8192},
+    "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 16384},
 
     # === 上下文管理 ===
     "context-summary":      {"alias": "default", "temperature": 0.3},
@@ -60,7 +60,7 @@ PURPOSE_CONFIGS = {
 
     # === API 路由 ===
     "api-generation":       {"alias": "default", "temperature": 0.3},
-    "api-generation-high":  {"alias": "default", "temperature": 0.5},
+    "api-generation-high":  {"alias": "secondary", "temperature": 0.5, "max_tokens": 16384},
     "api-chat":             {"alias": "default", "temperature": 0.7, "streaming": True},
     "api-chat-query":       {"alias": "default", "temperature": 0.7},
 
