@@ -14,6 +14,10 @@ from code_tutor_agent.generation.state import ProblemDraft
 
 logger = logging.getLogger(__name__)
 
+# 边界用例单条输入字符数硬上限：超过即视为 LLM 又吐了巨数组，直接丢弃该条
+# （而非整批解析失败）。300 对语义边界用例绰绰有余，能挡住 token 爆炸。
+_BOUNDARY_MAX_INPUT_CHARS = 300
+
 
 # ── 中文知识点口语 → 规范化出题描述 ──
 # 典型坑：用户说「图」被 skill/LLM 理解成「图片 / 网格矩阵」，实际指图论
@@ -234,17 +238,47 @@ class LlmGateway:
             existing_cases=existing_str,
             count=count,
         )
-        try:
-            llm = get_llm(purpose="api-generation-high")
-            resp = llm.invoke([("system", GENERATE_BOUNDARY_SYSTEM), ("human", prompt_user)])
-            content = resp.content if hasattr(resp, "content") else str(resp)
-            logger.info("生成边界测试用例: %s", content)
-            json_match = re.search(r"\[.*\]", content, re.DOTALL)
-            if not json_match:
-                logger.warning("边界用例响应无 JSON")
-                return None
-            cases = json.loads(json_match.group(0))
-            return cases if isinstance(cases, list) else None
-        except Exception as exc:
-            logger.warning("边界用例生成失败: %s", exc)
-            return None
+        last_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                llm = get_llm(purpose="api-generation-high")
+                resp = llm.invoke(
+                    [("system", GENERATE_BOUNDARY_SYSTEM), ("human", prompt_user)]
+                )
+                content = resp.content if hasattr(resp, "content") else str(resp)
+                if attempt == 0:
+                    # 截断日志，避免巨型响应刷屏（曾因性能用例巨数组导致日志爆炸）
+                    logger.info("生成边界测试用例: %s", content[:2000])
+                json_match = re.search(r"\[.*\]", content, re.DOTALL)
+                if not json_match:
+                    raise ValueError("响应中未找到 JSON 数组")
+                cases = json.loads(json_match.group(0))
+                if not isinstance(cases, list):
+                    raise ValueError("响应顶层不是 JSON 数组")
+                # 过滤超长/畸形用例，避免单条巨数组拖垮整批
+                kept: list[dict] = []
+                for c in cases:
+                    ias = c.get("input_args") if isinstance(c, dict) else None
+                    if not isinstance(ias, list):
+                        continue
+                    if sum(len(str(a)) for a in ias) > _BOUNDARY_MAX_INPUT_CHARS:
+                        logger.warning(
+                            "边界用例输入过大被跳过: %s",
+                            (c.get("explanation", "") if isinstance(c, dict) else ""),
+                        )
+                        continue
+                    kept.append(c)
+                return kept or None
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                logger.warning("边界用例解析失败(第%d次): %s", attempt + 1, exc)
+                if attempt == 0:
+                    # 首次失败：追加强化约束后重试一次，避免整批静默丢失
+                    prompt_user = (
+                        prompt_user
+                        + "\n\n[重试] 必须只输出一个合法、完整、闭合的 JSON 数组，"
+                        "且不含任何额外文字、不生成超大/达约束上限的数组。"
+                        "每个 input_args 必须很小（总字符数 < 200）。"
+                    )
+        logger.warning("边界用例生成失败: %s", last_exc)
+        return None

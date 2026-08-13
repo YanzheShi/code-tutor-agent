@@ -17,6 +17,8 @@
 from __future__ import annotations
 
 import logging
+import random
+import re
 
 from code_tutor_agent.generation.problem_generation_agent import ProblemGenerationAgent
 from code_tutor_agent.generation.state import GenEvent, ProgressSink
@@ -28,6 +30,80 @@ _DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
 
 _RANDOM_COUNT = 12
 _BOUNDARY_COUNT = 8
+
+# 程序化大规模性能用例：安全长度上限（避免参考解 TLE），仅当约束上限 >= 此值才补
+_STRESS_CAP = 3000
+_STRESS_MIN_LEN = 1000
+
+
+def _single_list_param_type(func_sig: str) -> str | None:
+    """若 ``func_sig`` 恰好只有一个 List/列表类型参数，返回其元素类型名（如 'int'），否则 None。"""
+    m = re.search(r"def\s+\w+\s*\(([^)]*)\)", func_sig or "")
+    if not m:
+        return None
+    params = [p.strip() for p in m.group(1).split(",") if p.strip()]
+    if len(params) != 1:
+        return None
+    pm = re.match(r"\w+\s*:\s*(?:List|list)\[(\w+)\]", params[0])
+    return pm.group(1) if pm else None
+
+
+def _parse_constraint_num(tok: str) -> int:
+    """把约束里的数字字面量转成 int，支持 `10^4` 指数记法。"""
+    tok = tok.replace(",", "")
+    if "^" in tok:
+        base, exp = tok.split("^", 1)
+        return int(base) ** int(exp)
+    return int(tok)
+
+
+def _constraint_max_len(constraints) -> int | None:
+    """从约束文本解析数组长度上界（只认 `length` 关键字，如 'nums.length <= 10^4'）。
+
+    仅用 `length` 而非裸 `n`，避免把无关参数（如 `k <= 10^5`）误判为数组长度。
+    """
+    best = None
+    for c in (constraints or []):
+        for mm in re.finditer(r"length\s*<=\s*(\d+(?:\^\d+)?)", c, re.IGNORECASE):
+            n = _parse_constraint_num(mm.group(1))
+            if best is None or n > best:
+                best = n
+    return best
+
+
+def _constraint_value_upper(constraints, default: int = 1000) -> int:
+    """粗略解析元素数值上界（如 'nums[i] <= 1000'），取最小值作安全上限。"""
+    upper = default
+    for c in (constraints or []):
+        for mm in re.finditer(r"\[\w+\]\s*<=\s*(\d+(?:\^\d+)?)", c, re.IGNORECASE):
+            n = _parse_constraint_num(mm.group(1))
+            if 0 < n <= 10**9:
+                upper = n
+    return upper
+
+
+def _build_stress_case(*, func_sig: str, constraints) -> dict | None:
+    """若题目存在单一数值列表参数且约束上限较大，构造一个大规模性能用例的输入。
+
+    替代 LLM 曾吐的巨数组（会触发 token 上限导致 JSON 截断），返回
+    ``{"input_args": [...], "explanation": ...}``；不适合时返回 None。
+    """
+    elem_type = _single_list_param_type(func_sig)
+    if elem_type not in ("int", "float"):
+        return None
+    max_len = _constraint_max_len(constraints)
+    if max_len is None or max_len < _STRESS_MIN_LEN:
+        return None
+    length = min(max_len, _STRESS_CAP)
+    rng = random.Random(20240813)
+    upper = _constraint_value_upper(constraints, default=1000)
+    lo, hi = (0, upper) if upper >= 0 else (upper, 0)
+    lo, hi = min(lo, hi), max(lo, hi)
+    vals = [rng.randint(lo, hi) for _ in range(length)]
+    return {
+        "input_args": [str(vals)],
+        "explanation": f"大规模性能用例（后台程序化构造，长度 {len(vals)}）",
+    }
 
 
 def _validate_against_reference(
@@ -181,6 +257,29 @@ def _generate_llm_boundary_cases(
             bc["is_hidden"] = True
             bc["explanation"] = bc.get("explanation", "LLM 生成的边界用例")
             all_tcs.append(bc)
+
+        # ── 程序化大规模性能用例（替代 LLM 曾吐的巨数组，避免 token 爆炸）──
+        stress = _build_stress_case(
+            func_sig=func_sig,
+            constraints=getattr(full, "constraints", None) or [],
+        )
+        if stress is not None:
+            san = agent.sandbox.sanitize(func_sig, stress, sort_inputs=sort_inputs) or {}
+            if san and san.get("input_args"):
+                _tc = {"input_args": san["input_args"], "expected_output": ""}
+                expected, _ = _validate_against_reference(
+                    agent, _tc,
+                    func_sig=func_sig, use_cross_validation=use_cross_validation,
+                    optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
+                )
+                if expected is not None:
+                    san["expected_output"] = expected
+                    san["is_hidden"] = True
+                    san["explanation"] = stress.get("explanation", "大规模性能用例（后台程序化构造）")
+                    all_tcs.append(san)
+                    logger.info("Appended programmatic stress case (pid=%d, len=%d)", problem_id, len(san["input_args"]))
+                else:
+                    logger.warning("Stress case 参考解验证失败，丢弃 (pid=%d)", problem_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Prompt B (boundary LLM) failed: %s", exc)
     return all_tcs, dropped_cross
