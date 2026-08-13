@@ -23,6 +23,9 @@ export default function RunResults({ results, running }: { results: RunResult[] 
             {r.runtime_ms > 0 && <span className="text-ct-muted text-[10px]">{r.runtime_ms.toFixed(1)}ms</span>}
             {r.memory_kb > 0 && <span className="text-ct-muted text-[10px] ml-1">| {r.memory_kb.toFixed(0)}KB</span>}
           </div>
+          {r.input_args && r.input_args.length > 0 && (
+            <div className="text-ct-muted mb-1">输入: {r.input_args.join('  ')}</div>
+          )}
           {r.detail && <div className="text-ct-muted mb-1">{r.detail}</div>}
           <div className="text-ct-muted">期望: {r.expected}</div>
         </div>

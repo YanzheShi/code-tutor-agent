@@ -128,6 +128,11 @@ class Submission(BaseModel):
         default=0, ge=0, le=4,
         description="Hint level the tutor gave *after* this submission",
     )
+    is_run: bool = Field(
+        default=False,
+        description="True if this submission came from the 运行 button (sample scope), "
+                    "not a graded 提交. Run results are diagnostic only and never written to profile.",
+    )
 
 
 class Message(BaseModel):
@@ -211,8 +216,9 @@ class SessionState(BaseModel):
     topic: str = Field(default="数组", description="User-selected knowledge point")
     difficulty: str = Field(default="easy", description="User-selected difficulty")
     mode: Literal["practice", "interview", "debug_theatre", "agent"] = Field(
-        default="practice",
-        description="Session mode: normal modes vs agent-driven (dialog + MCP judging)",
+        default="agent",
+        description="Session mode: agent-driven (dialog + MCP judging). "
+                    "normal modes (practice/interview/debug_theatre) removed — all sessions are agent.",
     )
     status: Literal[
         "awaiting_problem", "awaiting_submit", "judging",
@@ -251,10 +257,6 @@ class SessionState(BaseModel):
         default=None,
         description="Shortcut: latest judge verdict for easy routing",
     )
-    adversarial_triggered: bool = Field(
-        default=False,
-        description="Did the adversarial phase run on the latest AC submission?",
-    )
 
     # ── Agent mode fields ──
     # These are only used when mode == "agent"
@@ -279,6 +281,11 @@ class SessionState(BaseModel):
         default=0,
         description="Agent mode: how many judge cycles have completed (1-based)",
     )
+    judge_scope: Literal["sample", "full"] = Field(
+        default="full",
+        description="Scope of the latest judge: 'sample' (运行, visible cases only, "
+                    "diagnostic, no profile) or 'full' (提交, all cases incl. boundary).",
+    )
 
     # ── Error handling ──
     error_message: str = Field(default="", description="Populated when status=error")
@@ -299,10 +306,10 @@ class SessionState(BaseModel):
         description="Most recent code review payload (set by judge, consumed by tutor)",
     )
 
-    # ── Run results (set by POST /session/{sid}/run) ──
-    last_run_results: Annotated[list, operator.add] = Field(
+    # ── Run results (set by 运行 endpoint via agent_judge_node, scope=sample) ──
+    last_run_results: list = Field(
         default_factory=list,
-        description="Most recent run-code results (survives page reload); set by run endpoint",
+        description="Diagnostic results of the latest 运行 (sample scope). Replaced each run; never written to profile.",
     )
 
     # ── Profile module delta ──

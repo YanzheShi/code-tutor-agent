@@ -217,16 +217,28 @@ export function useSession() {
     try {
       const resp = await runCode(sid, code);
       setRunResults(resp.results);
-      const passed = resp.results?.filter((r: any) => r.passed).length ?? 0;
-      const total = resp.results?.length ?? 0;
-      setTutorMessages(prev => [...prev, { role: 'user', content: `运行结果：${passed}/${total} 通过` }, { role: 'tutor', content: '' }]);
-      await readStream(sid, `我运行了代码，结果：${passed}/${total} 通过。\n\`\`\`\n${code}\n\`\`\`\n请帮我分析一下。`, (token) => {
-        setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
-      });
-      setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+      // 运行 = 快速自测：仅展示 Judge0 执行结果，不触发 LLM 导师评价。
+      // 同时把运行结果摘要拼接进对话（纯本地、不调 LLM、不会误判 AC），
+      // 恢复「点运行后对话里直接看到结果」的体感；详细逐用例在「运行结果」标签。
+      if (resp.results && resp.results.length > 0) {
+        const pass = resp.results.filter(r => r.passed).length;
+        const total = resp.results.length;
+        let summary: string;
+        if (pass === total) {
+          summary = `✅ **运行结果**：样例 ${pass}/${total} 全部通过！点「提交」跑完整用例试试吧。`;
+        } else {
+          const fails = resp.results
+            .filter(r => !r.passed)
+            .map(r => `• 用例#${r.test_case_id}（${r.status}）输入: ${r.input_args?.join(' ') || '—'} → 期望 ${r.expected || '—'}`)
+            .join('\n');
+          summary = `⚠️ **运行结果**：样例 ${pass}/${total} 通过。\n${fails}`;
+        }
+        setTutorMessages(prev => [...prev, { role: 'tutor', content: summary }]);
+        setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+      }
     } catch (e) { setErrorMsg(String(e)); }
     finally { setRunning(false); }
-  }, [sessionId, editorCode, running, readStream]);
+  }, [sessionId, editorCode, running, setTutorMessages]);
 
   // ── Agent 对话 ──
   const handleAgentSend = useCallback(async (text: string) => {

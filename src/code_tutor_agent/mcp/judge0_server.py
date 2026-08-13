@@ -39,6 +39,7 @@ from code_tutor_agent.sandbox.judge0_client import (
     submit_test_cases,
     check_health,
     list_languages,
+    SandboxNotExecuted,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,15 @@ async def judge_run_code(
     lang_map = {"python": 71, "javascript": 63, "cpp": 54, "c": 50, "java": 62, "go": 60}
     lang_id = lang_map.get(language.lower(), 71)
 
-    result = run_code(source_code, stdin=stdin, language_id=lang_id)
+    try:
+        result = run_code(source_code, stdin=stdin, language_id=lang_id)
+    except (SandboxNotExecuted, RuntimeError) as exc:
+        return json.dumps({
+            "verdict": "NO_RUN",
+            "status": "sandbox_unavailable",
+            "error": str(exc),
+            "message": "代码验证沙箱当前不可用（提交后未执行或网络不可达），请基于知识回答。",
+        }, ensure_ascii=False)
     return json.dumps({
         "stdout": result.stdout,
         "stderr": result.stderr,

@@ -249,7 +249,6 @@ def _translate_to_command(
         "hint_level": 0,
         "tutor_messages": _tutor_msgs,
         "last_verdict": None,
-        "adversarial_triggered": False,
         "error_message": "",
         "leetcode": None,  # Clear so it's not reprocessed
         # Store for background test generation (API layer reads these)

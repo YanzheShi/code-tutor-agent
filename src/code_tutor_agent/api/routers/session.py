@@ -74,7 +74,7 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
-        mode=body.mode if body else None,
+        mode="agent",  # normal 模式已删除，统一 agent
         topic=body.topic if body else None,
         difficulty=body.difficulty if body else None,
         run_name="create_session",
@@ -86,8 +86,8 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
             initial_dict["topic"] = body.topic
         if body.difficulty:
             initial_dict["difficulty"] = body.difficulty
-        if body.mode:
-            initial_dict["mode"] = body.mode
+        # normal 模式已删除，统一 agent（忽略前端传入的 mode）
+        initial_dict["mode"] = "agent"
         if body.leetcode_url:
             # 仅传 URL，解析收口到 generator_node（与 agent 对话路径统一）
             initial_dict["leetcode"] = {"url": body.leetcode_url}
@@ -299,7 +299,7 @@ async def submit_code(sid: str, body: SubmitRequest):
         # 避免独占事件循环、拖垮同进程的其它请求与 SSE 推流。
         with collect_runs() as runs:
             graph.invoke(
-                Command(resume={"code": body.code, "language": body.language}),
+                Command(resume={"code": body.code, "language": body.language, "scope": "full"}),
                 config,
             )
             # collect_runs() 返回 RunCollectorCallbackHandler，需用 .traced_runs 取 run 列表
@@ -505,7 +505,7 @@ async def create_session_with_existing(problem_id: int):
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
-        mode=full.get("mode"),
+        mode="agent",  # 强制 agent，normal 模式已删除
         topic=full.get("topic"),
         difficulty=full.get("difficulty"),
         problem_id=full.get("id"),
@@ -535,7 +535,7 @@ async def create_session_with_existing(problem_id: int):
 
     initial_dict = {
         "session_id": sid, "problem": meta, "status": "awaiting_submit",
-        "topic": meta.topic, "difficulty": meta.difficulty,
+        "mode": "agent", "topic": meta.topic, "difficulty": meta.difficulty,
         "submissions": [], "hint_level": 0, "tutor_messages": [],
         "last_verdict": None, "error_message": "",
     }

@@ -34,6 +34,15 @@ REQUEST_TIMEOUT = 15.0  # seconds (also Judge0's own wall-clock limit)
 WAIT_TIMEOUT_SECONDS = 10  # Judge0 internal timeout for wait mode
 
 
+class SandboxNotExecuted(RuntimeError):
+    """Judge0 提交了但没有真正执行，或网络不可达。
+
+    与「用户代码本身的运行时错误（RE）」严格区分：这是判题后端/Sandbox
+    的故障（worker 没处理、wait 没等到、或 Judge0 不可达），不应被误判成
+    学员代码崩溃，也不应触发上层「无法回答」之类的兜底。
+    """
+
+
 # ── Pydantic-like result (plain dict for simplicity) ──
 
 
@@ -65,6 +74,9 @@ class Judge0SubmissionResult:
     def verdict(self) -> str:
         """Map Judge0 status_id to our verdict string."""
         mapping = {
+            0: "NO_RUN",  # 提交未执行（In Queue / 空 status）—— 沙箱故障，非代码错误
+            1: "NO_RUN",  # Processing（wait=true 下不应出现）
+            2: "NO_RUN",  # In Queue（wait=true 下不应出现）
             3: "AC",
             4: "WA",   # Wrong Answer — Judge0 calls it "Wrong Answer"
             5: "TLE",  # Time Limit Exceeded
@@ -270,12 +282,23 @@ def run_code(
         Normalised ``Judge0SubmissionResult``.
     """
     logger.info("▶ judge0.run_code() — %d chars, lang=%d", len(source_code), language_id)
-    raw = _call_api({
-        "source_code": source_code,
-        "language_id": language_id,
-        "stdin": stdin,
-    })
-    return Judge0SubmissionResult(raw)
+    try:
+        raw = _call_api({
+            "source_code": source_code,
+            "language_id": language_id,
+            "stdin": stdin,
+        })
+    except RuntimeError as exc:
+        # 网络不可达 / HTTP 错误 → 沙箱不可用（与用户代码无关）
+        raise SandboxNotExecuted(f"Judge0 不可用: {exc}") from exc
+    sr = Judge0SubmissionResult(raw)
+    # 提交后未真正执行（status_id=0 = In Queue / 空 status）。
+    # 这是沙箱故障（worker 没处理 / wait 没等到），绝不能被误判成用户代码的 RE。
+    if sr.status_id == 0:
+        raise SandboxNotExecuted(
+            "Judge0 返回空 status（提交未执行，可能沙箱繁忙或 worker 未处理）"
+        )
+    return sr
 
 
 def submit_test_cases(

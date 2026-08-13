@@ -38,8 +38,8 @@ class CreateSessionRequest(BaseModel):
         description="easy / medium / hard",
     )
     mode: Optional[str] = Field(
-        default="practice",
-        description="practice / interview / debug_theatre",
+        default="agent",
+        description="agent（normal 模式 practice/interview/debug_theatre 已删除，统一 agent）",
     )
     leetcode_url: Optional[str] = Field(
         default=None,
@@ -58,7 +58,7 @@ class SessionStateResponse(BaseModel):
     session_id: str
     topic: str = ""
     difficulty: str = ""
-    mode: str = "practice"
+    mode: str = "agent"
     status: str
     phase: str = "solving"
     problem: Optional[dict] = None

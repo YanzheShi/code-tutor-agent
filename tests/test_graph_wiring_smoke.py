@@ -15,9 +15,18 @@
 ``compile_graph()`` 只在服务启动跑一次，所以函数层改动不会触发——本文件补上这条防线。
 
 2026-08-04 更新：经 scripts/verify_command_edge_conflict.py 实测确认，langgraph 1.2.7
-中 Command(goto) **不会覆盖**静态边（两者同时生效）。据此移除了
-judge→tutor_router / agent_judge→agent_tutor / update_profile→critic 三条静态边，
-update_profile_node 改为统一返回 Command(goto="critic_node")，相应测试见下方。
+中 Command(goto) **不会覆盖**静态边（两者同时生效）。据此规则：返回 Command(goto) 的
+节点一律不加静态出边，否则会双节点执行。
+
+2026-08-13 agent-only 重构：normal 模式节点（judge_node / tutor_node /
+constitutional_guard_node）与 sandbox/adversarial.py 全部删除，判题统一走
+agent_judge_node。agent_judge_node / agent_tutor_node / update_profile_node 改为
+返回纯 dict，路由改由图的条件边 / 静态边承担：
+  - agent_judge_node → 条件边 agent_judge_router（error/AC/WA 分支）
+  - update_profile_node → 静态边 critic_node（确定性单出口）
+  - agent_tutor_node → 静态边 wait_for_submit_node（确定性单出口）
+planner_node / generator_node / agent_dialog_node / critic_node 保留 Command(goto)
+（含分支/暂停/错误路径，改静态边会与错误/分支 Command 冲突）。
 
 运行:  uv run pytest tests/test_graph_wiring_smoke.py -q
 """
@@ -29,7 +38,7 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from code_tutor_agent.graph.graph import compile_graph
+from code_tutor_agent.graph.graph import _build_graph, compile_graph
 from code_tutor_agent.profile.node import update_profile_node
 from code_tutor_agent.schemas.state import SessionPhase, SessionState, last_phase, last_wins_list
 
@@ -80,44 +89,74 @@ def test_all_nodes_importable():
 
     modules = [
         "code_tutor_agent.nodes.generator",
-        "code_tutor_agent.nodes.judge",
         "code_tutor_agent.nodes.planner",
-        "code_tutor_agent.nodes.tutor",
         "code_tutor_agent.nodes.critic",
         "code_tutor_agent.nodes.wait_for_submit",
         "code_tutor_agent.profile.node",
         "code_tutor_agent.nodes.agent_dialog",
         "code_tutor_agent.nodes.agent_judge",
         "code_tutor_agent.nodes.agent_tutor",
-        "code_tutor_agent.nodes.constitutional_guard",
     ]
     for mod in modules:
         importlib.import_module(mod)
 
 
-def test_update_profile_node_routes_to_critic():
-    """两种模式统一返回 Command(goto="critic_node")。
+def test_update_profile_node_returns_plain_dict():
+    """update_profile_node 返回纯 dict（非 Command）；路由由图静态边承担。
 
-    回归点（2026-08-04）：langgraph 1.2.7 中 Command(goto) 不会覆盖静态边，
-    原「静态边 → critic_node + agent 模式 Command(goto=agent_tutor_node)」组合
-    导致 critic 与 agent_tutor 并行双执行。静态边已移除，路由统一走 Command。
-    同时覆盖 ``from langgraph.types import Command`` 的正确导入路径。
+    agent-only 重构（2026-08-13）：节点不再 return Command(goto="critic_node")，
+    改为返回 ``{}``，由 graph 静态边 ``update_profile_node → critic_node`` 路由。
+    这样确定性单出口节点与 Command 节点解耦，避免 2026-08-04 的双执行坑。
     """
     for mode in ("practice", "agent"):
         state = _make_state(mode)
         result = _invoke_update_profile(state)
-        assert isinstance(result, Command), f"{mode} 模式应返回 Command，实际: {result!r}"
-        assert result.goto == "critic_node", (
-            f"{mode} 模式应路由到 critic_node，实际 goto={getattr(result, 'goto', None)!r}"
-        )
+        assert isinstance(result, dict), f"{mode} 模式应返回 dict，实际: {result!r}"
+        assert "goto" not in result, "不应再含 goto（改由静态边路由）"
 
 
-def test_update_profile_node_routes_even_without_delta():
-    """profile_delta 为空时跳过写库，但仍必须路由到 critic_node（链路不断）。"""
-    state = SessionState(session_id="smoke-session", mode="practice")
-    result = _invoke_update_profile(state)
-    assert isinstance(result, Command)
-    assert result.goto == "critic_node"
+def test_update_profile_static_edge_routes_to_critic():
+    """编译后的图必须含静态边 update_profile_node → critic_node（链路不断）。
+
+    agent-only 重构（2026-08-13）：节点不再 return Command(goto)，改由图静态边路由。
+    这里直接 inspect builder 的静态边列表验证（langgraph 1.2.x 的
+    ``CompiledStateGraph.get_graph().edges`` 会把图折叠成 ``__start__→__end__``，
+    无法反映内部静态边，故改用未编译的 ``_build_graph().edges``，其为
+    ``(source, target)`` 元组列表）。
+    """
+    b = _build_graph()
+    edges = [tuple(e) for e in b.edges]
+    assert ("update_profile_node", "critic_node") in edges
+
+
+def test_agent_tutor_static_edge_routes_to_wait_for_submit():
+    """编译后的图必须含静态边 agent_tutor_node → wait_for_submit_node。"""
+    b = _build_graph()
+    edges = [tuple(e) for e in b.edges]
+    assert ("agent_tutor_node", "wait_for_submit_node") in edges
+
+
+def test_agent_only_node_set():
+    """agent-only 重构后，编译图应只含 9 个节点（含 __start__）；
+
+    normal 模式节点 judge_node / tutor_node / constitutional_guard_node 必须彻底消失。
+    """
+    g = compile_graph()
+    expected = {
+        "__start__",
+        "agent_dialog_node",
+        "agent_judge_node",
+        "agent_tutor_node",
+        "critic_node",
+        "generator_node",
+        "planner_node",
+        "update_profile_node",
+        "wait_for_submit_node",
+    }
+    actual = set(g.nodes.keys())
+    assert actual == expected, f"节点集不符:\n  期望={expected}\n  实际={actual}"
+    for gone in ("judge_node", "tutor_node", "constitutional_guard_node"):
+        assert gone not in actual, f"已删除节点不应残留: {gone}"
 
 
 def test_session_phase_dialog_exists():

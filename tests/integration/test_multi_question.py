@@ -21,6 +21,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from code_tutor_agent.api.main import app
 
+# agent-only 重构辅助：驱动「对话 → 出题」流程（tests/integration 下无 __init__，
+# 故按目录加入 sys.path 后直接 import 模块）。
+sys.path.insert(0, str(PROJECT_ROOT / "tests" / "integration"))
+from _agent_helpers import create_session_with_problem, drive_dialog_to_problem
+
 POLL_INTERVAL = 1.0       # 轮询间隔（秒）
 MAX_POLL_WAIT = 60.0      # 最长等待时间（秒）
 
@@ -50,72 +55,64 @@ class TestMultiQuestion:
     """连续做题集成测试。"""
 
     def test_2_rounds(self, client):
-        """创建 session → 等第一题 → /next-problem → 第二题生成。
+        """创建 session → 对话出第一题 → /next-problem（回到对话）→ 再对话出第二题。
+
+        agent-only 重构（2026-08-13）：/next-problem 在 agent 模式下**不立即出下一题**，
+        而是把会话重新打回 tutor 对话（problem 清空、phase=dialog），需用户再次对话
+        确认需求后才会 planner→generator 出下一题。故每个下一题都要驱动一次对话。
 
         验证：
             - 第二题有 problem
-            - problem_history 有 1 条记录
             - phase 是 solving
             - total_problems = 1
         """
-        # 1. 创建 session
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
-        assert resp.status_code == 200
-        sid = resp.json()["session_id"]
-
-        # 2. 等第一题就绪
-        state1 = _wait_for_problem(client, sid)
+        # 1. 创建 session 并驱动 agent 对话完成需求收集 → 第一题就绪
+        sid, state1 = create_session_with_problem(client, topic="数组", difficulty="easy")
         assert state1["problem"] is not None
         pid1 = state1["problem"]["problem_id"]
 
-        # 3. 调 /next-problem → 第二题
+        # 2. /next-problem → 回到对话（problem 清空，不会立即出新题）
         resp = client.post(f"/session/{sid}/next-problem", json={"preference": "next_in_plan"})
         assert resp.status_code == 200, f"next-problem failed: {resp.text}"
         np_data = resp.json()
         assert np_data["session_id"] == sid
-        assert np_data["problem"] is not None
-        assert np_data["phase"] == "solving"
+        # agent 模式下 /next-problem 仅回到对话，题目暂未生成
+        assert np_data["phase"] in ("dialog", "solving")
 
-        # 4. 验证 state
-        state2 = client.get(f"/session/{sid}/state").json()
+        # 3. 再次驱动对话 → 第二题生成
+        state2 = drive_dialog_to_problem(client, sid, "练习双指针，简单难度，开始吧")
         assert state2["problem"] is not None
         assert state2["phase"] == "solving"
-        # total_problems 在旧缓存下可能缺失，只在有值时才断言
+        pid2 = state2["problem"]["problem_id"]
+        assert pid2 != pid1
+
+        # 4. 验证 total_problems 累加
         if state2.get("total_problems") is not None:
             assert state2["total_problems"] >= 1
 
     def test_3_rounds(self, client):
-        """创建 session → 等第一题 → /next-problem × 2 → 三题。
+        """创建 session → 对话出第一题 →（/next-problem + 对话）× 2 → 三题。
 
-        验证：
-            - 三题有不同 problem_id
-            - 第三次后 problem_history 有 2 条记录
-            - total_problems = 2
+        agent-only 重构（2026-08-13）：每道下一题都需要「/next-problem 回到对话 →
+        再对话确认需求」两轮操作。验证三题 problem_id 不同、total_problems 累加。
         """
-        # 1. 创建 session
-        resp = client.post("/session", json={"topic": "动态规划", "difficulty": "medium"})
-        assert resp.status_code == 200
-        sid = resp.json()["session_id"]
-
-        # 2. 等第一题
-        state1 = _wait_for_problem(client, sid)
+        # 1. 创建 session 并驱动对话 → 第一题就绪
+        sid, state1 = create_session_with_problem(client, topic="动态规划", difficulty="medium")
         pid1 = state1["problem"]["problem_id"]
 
-        # 3. 第二题
-        resp = client.post(f"/session/{sid}/next-problem", json={"preference": "random"})
-        assert resp.status_code == 200
-
-        # 验证第一次 state
-        state2 = client.get(f"/session/{sid}/state").json()
+        # 2. 第二题：/next-problem → 对话
+        client.post(f"/session/{sid}/next-problem", json={"preference": "random"})
+        state2 = drive_dialog_to_problem(client, sid, "练习数组，简单难度，继续")
+        pid2 = state2["problem"]["problem_id"]
+        assert pid2 != pid1
         if state2.get("total_problems") is not None:
             assert state2["total_problems"] >= 1
 
-        # 4. 第三题
-        resp = client.post(f"/session/{sid}/next-problem", json={"preference": "same_topic"})
-        assert resp.status_code == 200
-
-        # 5. 验证最终 state
-        state3 = client.get(f"/session/{sid}/state").json()
+        # 3. 第三题：/next-problem → 对话
+        client.post(f"/session/{sid}/next-problem", json={"preference": "same_topic"})
+        state3 = drive_dialog_to_problem(client, sid, "练习链表，简单难度，再来一题")
+        pid3 = state3["problem"]["problem_id"]
+        assert pid3 != pid1 and pid3 != pid2
         if state3.get("total_problems") is not None:
             assert state3["total_problems"] >= 2
         assert state3["phase"] == "solving"

@@ -25,6 +25,7 @@ from code_tutor_agent.sandbox.judge0_client import (
     run_code,
     submit_test_cases,
     check_health,
+    SandboxNotExecuted,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,15 @@ async def judge_run_code(
     Returns:
         JSON with ``stdout``, ``stderr``, ``status``, ``time_ms``, ``memory_kb``.
     """
-    result = run_code(source_code, stdin=stdin)
+    try:
+        result = run_code(source_code, stdin=stdin)
+    except (SandboxNotExecuted, RuntimeError) as exc:
+        return json.dumps({
+            "verdict": "NO_RUN",
+            "status": "sandbox_unavailable",
+            "error": str(exc),
+            "message": "代码验证沙箱当前不可用（提交后未执行或网络不可达），请基于知识回答。",
+        }, ensure_ascii=False)
     return json.dumps({
         "stdout": result.stdout,
         "stderr": result.stderr,

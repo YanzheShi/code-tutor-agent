@@ -57,12 +57,15 @@ def wait_for_submit_node(state: SessionState) -> dict:
             "next_preference": resume_data.get("preference"),
         }
 
-    # ── Extract user code from resumed data ──
+    # ── Extract user code + scope from resumed data ──
     code = ""
     language = "python"
+    scope = "full"
     if isinstance(resume_data, dict):
         code = resume_data.get("code", "")
         language = resume_data.get("language", "python")
+        # 运行按钮传 scope="sample"，提交按钮默认 "full"
+        scope = "sample" if resume_data.get("scope") == "sample" else "full"
     elif isinstance(resume_data, str):
         code = resume_data
 
@@ -75,14 +78,16 @@ def wait_for_submit_node(state: SessionState) -> dict:
         code=code,
         language=language,
         timestamp=__import__("datetime").datetime.now().isoformat(),
+        is_run=(scope == "sample"),
     )
 
     logger.info(
-        "Resumed → submission #%d (%d chars, lang=%s)",
-        new_sub.index, len(code), language,
+        "Resumed → submission #%d (%d chars, lang=%s, scope=%s, is_run=%s)",
+        new_sub.index, len(code), language, scope, new_sub.is_run,
     )
 
     return {
         "submissions": [new_sub],
         "status": "judging",
+        "judge_scope": scope,
     }

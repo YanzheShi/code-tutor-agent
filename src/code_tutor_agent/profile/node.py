@@ -7,11 +7,9 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Literal
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.store.base import BaseStore
-from langgraph.types import Command
 
 from .schema import ProfileDelta, UserProfile
 from .scoring import apply_delta
@@ -40,7 +38,7 @@ def update_profile_node(
     *,
     store: BaseStore,
     config: RunnableConfig,
-) -> Command[Literal["critic_node"]]:
+) -> dict:
     """消费 session_state.profile_delta，写 store，然后统一路由到 critic_node。
 
     路由说明（2026-08-04 修复）：
@@ -91,5 +89,6 @@ def update_profile_node(
         except Exception:
             logger.warning("Failed to persist profile to SQLite (non-fatal)", exc_info=True)
 
-    # 无 delta 也要路由（保证链路不断）；有 delta 时上方已完成写入
-    return Command(goto="critic_node")
+    # 无 delta 也要路由（保证链路不断）；有 delta 时上方已完成写入。
+    # 不再 return Command(goto) —— 由 graph 的静态边 update_profile_node → critic_node 路由。
+    return {}

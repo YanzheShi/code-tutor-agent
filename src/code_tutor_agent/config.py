@@ -48,7 +48,7 @@ PURPOSE_CONFIGS = {
     # === Agent 模块 ===
     "dialog":               {"alias": "default", "temperature": 0.3},
     "dialog-stream":        {"alias": "default", "temperature": 0.7, "streaming": True},
-    "judge":                {"alias": "default", "temperature": 0.7},
+    "judge":                {"alias": "default", "temperature": 0.7, "max_tokens": 4096},
     # 这里
     "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 16384},
 

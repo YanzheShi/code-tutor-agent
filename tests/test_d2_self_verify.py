@@ -1,13 +1,17 @@
-"""D2 tests — self-verification loop + sandbox runner."""
+"""D2 tests — sandbox runner + static problem pool.
+
+架构变更（agent-only 重构，2026-08-13）：
+    ``sandbox/adversarial.py`` 及其 ``_build_adversarial_case`` 已随 normal 模式删除
+    （Agent 模式判题用出题阶段落库的边界用例，不再运行时生成对抗大用例）。
+    本文件移除依赖 ``_build_adversarial_case`` 的两个用例，保留 run_solution 与
+    static_pool 的纯逻辑校验。
+"""
 
 from __future__ import annotations
 
 import pytest
 
-from code_tutor_agent.sandbox.runner import (
-    _build_adversarial_case,
-    run_solution,
-)
+from code_tutor_agent.sandbox.runner import run_solution
 
 
 class TestSandboxRunner:
@@ -48,19 +52,6 @@ class Solution:
         for r in results:
             assert r.status == "Passed", f"TC #{r.test_case_id}: {r.detail}"
 
-    def test_brute_tles_on_large_input(self):
-        """Brute-force solution must TLE on a 50k-sized adversarial case."""
-        adv_case = _build_adversarial_case(
-            n=50000,
-            data_type="int",
-            scale_description="random distribution, target at end",
-        )
-        assert adv_case is not None
-        results = run_solution(self.BRUTE_CODE, [adv_case], timeout=1.5)
-        # With 50k elements and a 1s timeout, O(n²) should definitely TLE
-        if results:
-            assert results[0].status == "TLE", f"Expected TLE, got {results[0].status}"
-
     def test_brute_passes_small(self):
         """Brute-force solution must pass on small inputs."""
         results = run_solution(self.BRUTE_CODE, self.TEST_CASES)
@@ -84,13 +75,6 @@ class Solution:
 """
         results = run_solution(wrong_code, self.TEST_CASES)
         assert any(r.status == "Wrong Answer" for r in results)
-
-    def test_adversarial_builder_returns_dict(self):
-        """Adversarial case builder should return a valid test case dict."""
-        case = _build_adversarial_case(100, "int", "random")
-        assert case is not None
-        assert "input_args" in case
-        assert "expected_output" in case
 
 
 class TestStaticPool:

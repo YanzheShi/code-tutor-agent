@@ -19,6 +19,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from code_tutor_agent.api.main import app
 
+# agent-only 重构辅助：驱动「对话 → 出题」流程（tests/integration 下无 __init__，
+# 故按目录加入 sys.path 后直接 import 模块）。
+sys.path.insert(0, str(PROJECT_ROOT / "tests" / "integration"))
+from _agent_helpers import create_session_with_problem, drive_dialog_to_problem
+
 
 @pytest.fixture(scope="module")
 def client():
@@ -109,9 +114,8 @@ class TestProfileUpdateAfterJudge:
         before = client.get("/admin/profile/v2").json()
         before_prof_len = len(before.get("prof", {}))
 
-        # 创建 session 并提交
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
-        sid = resp.json()["session_id"]
+        # 创建 session 并驱动 agent 对话 → 题目就绪（agent-only 重构后必须先对话）
+        sid, _ = create_session_with_problem(client, topic="数组", difficulty="easy")
         client.post(
             f"/session/{sid}/submit",
             json={"code": "class Solution:\n    def solve(self):\n        return 42", "language": "python"},
@@ -131,6 +135,8 @@ class TestProfileUpdateAfterJudge:
 
         resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
         sid = resp.json()["session_id"]
+        # 驱动 agent 对话 → 题目就绪（agent-only 重构后必须先对话，否则 /submit 会失败）
+        drive_dialog_to_problem(client, sid, "我想练习数组，简单难度，直接开始吧")
         client.post(
             f"/session/{sid}/submit",
             json={"code": "class Solution:\n    def solve(self):\n        return 42", "language": "python"},
