@@ -140,6 +140,7 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
             description=static.get("description", ""),
             starter_code=static.get("starter_code", ""),
             visible_test_cases=static.get("test_cases", [])[:3],
+            constraints=static.get("constraints") or [],
             tag_primary="array_basics",
             prob_elo=1200,
         )

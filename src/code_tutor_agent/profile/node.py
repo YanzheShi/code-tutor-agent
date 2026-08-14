@@ -41,15 +41,6 @@ def update_profile_node(
 ) -> dict:
     """消费 session_state.profile_delta，写 store，然后统一路由到 critic_node。
 
-    路由说明（2026-08-04 修复）：
-    langgraph 1.2.7 中 Command(goto) **不会覆盖**静态边——两者同时生效
-    （见 scripts/verify_command_edge_conflict.py）。历史上本节点有一条
-    update_profile_node → critic_node 的静态边，agent 模式又返回
-    Command(goto="agent_tutor_node") 试图"覆盖"它，实际造成 critic_node 与
-    agent_tutor_node 并行双执行。现静态边已移除，两种模式统一经
-    Command(goto="critic_node") 路由；agent 模式 AC 的收尾（flush 历史 +
-    phase=reviewing + 暂停在 wait_for_submit）由 critic_node 的 AC 分支完成，
-    status="done" 由 agent_judge_node 的 AC 分支写入。
     """
     delta: dict | None = state.profile_delta
     if delta:

@@ -70,6 +70,9 @@ class ProblemMeta(BaseModel):
     starter_code: str = Field(default="", description="LeetCode-style template stub for the editor")
     visible_test_cases: list[dict] = Field(default_factory=list, description="Non-hidden test cases")
     description_html: str = Field(default="", description="Original HTML version of description")
+    # ── 题面展示字段（LLM 生成的题，约束/示例在独立字段，不混进 description）──
+    constraints: list[str] = Field(default_factory=list, description="输入参数限制，如 '1 <= nums[i] <= 10^4'")
+    examples: list[str] = Field(default_factory=list, description="原始示例文本（LLM 输出）")
 
     # ── Profile module fields ──
     tag_primary: str = Field(default="array_basics", description="Profile Tag enum value")

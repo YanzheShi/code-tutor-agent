@@ -218,6 +218,8 @@ def _translate_to_command(
         description_html=draft.description_html or draft.description,
         starter_code=starter,
         visible_test_cases=visible_tcs,
+        constraints=draft.constraints,
+        examples=draft.examples,
         novelty_score=9.0 if draft.from_leetcode else 7.0,
         tag_primary=tag_for(topic),
         prob_elo=elo_for(difficulty),

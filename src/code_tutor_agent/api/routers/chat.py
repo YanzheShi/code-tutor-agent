@@ -291,6 +291,13 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
                 # LeetCode 导入：用意图确认文案，避免误显「数组 方向、简单 难度」
                 # （intent.topic/difficulty 对 leetcode 来源本就为空，硬填会误导）
                 ready_msg = Message(role="tutor", content=intent.next_message)
+            elif intent.is_random:
+                # 随机出题：不向用户透露真实 topic/难度，保留惊喜感；
+                # topic/difficulty 仍写入 state，供后端按实际选择出题
+                ready_msg = Message(
+                    role="tutor",
+                    content="好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀",
+                )
             else:
                 # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
                 # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）

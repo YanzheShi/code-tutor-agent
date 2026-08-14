@@ -31,6 +31,14 @@ async def list_problems():
     ]}
 
 
+@router.get("/topics")
+async def list_topics():
+    """主题目录 — 前端出题选择器渲染按钮用（值即中文主题名，与后端生成链路一致）。"""
+    from code_tutor_agent.topics import TOPICS_RESPONSE
+
+    return TOPICS_RESPONSE
+
+
 @router.get("/problem/{problem_id}/submissions")
 async def get_problem_submissions(problem_id: int):
     """Get persistent submission history for a problem."""

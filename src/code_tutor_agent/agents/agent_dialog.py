@@ -54,6 +54,7 @@ class DialogIntent(BaseModel):
     topic: str = Field(default="", description="确定的知识点")
     difficulty: str = Field(default="", description="easy/medium/hard")
     is_ready: bool = Field(default=False, description="是否可以出题了")
+    is_random: bool = Field(default=False, description="用户是否让 AI 随机选题（topic/难度由 AI 决定，不向用户透露）")
     next_message: str = Field(default="", description="给用户的下一轮消息")
     # —— 工具调用扩展（由 agent 工具循环填充，LLM 结构化输出不会生成这些）——
     source: Literal["generated", "leetcode"] = Field(default="generated", description="题目来源")
@@ -79,8 +80,9 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
   - 用户说 "动态规划" 或 "DP" → topic 直接设为 "动态规划"，追问难度
   - 用户说 "随便" 或 "随机出题" → 这是关键场景：
     * 如果对话刚开始（1-2 轮），推荐几个方向让用户选
-    * 如果用户已经 2 轮以上表示无偏好，不要再追问！直接从用户画像弱项中选一个 topic，难度默认 medium，告知用户你的选择并标记 is_ready=true
-  - 用户说 "给我出题" 或 "出题吧" → 若 topic 已明确则追问难度，若 topic+难度都明确则 is_ready=true
+    * 如果用户已经 2 轮以上表示无偏好，不要再追问！直接从用户画像弱项中选一个 topic，难度默认 medium，标记 is_ready=true 和 is_random=true
+  - 用户说 "出题吧" 或 "给我出题" → 若 topic 已明确则追问难度，若 topic+难度都明确则 is_ready=true
+  - 用户明确说 "随机来一道"、"随便都行"、"由你决定" 等（topic/难度都交给 AI 决定）→ 直接选好 topic 和难度，is_ready=true 且 is_random=true
   - 用户 topic 明确后 → 追问难度："你想从 Easy 开始热身，还是直接挑战 Medium？"
   - 用户说 "难度无所谓" → 难度设为 medium，话题已明确则直接标记 is_ready=true
   - 用户主动指定 topic 和 difficulty（如 "简单动态规划"、"中等难度的数组题"）→ 直接设置 is_ready=true
@@ -94,8 +96,15 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 
 ## 何时标记 is_ready=true
 - topic 和 difficulty 都明确 → is_ready=true
-- 用户多次表示无偏好（2+ 轮"随便"）→ 自动选一个 topic+medium 难度 → is_ready=true
+- 用户多次表示无偏好（2+ 轮"随便"）→ 自动选一个 topic+medium 难度 → is_ready=true 且 is_random=true
 - 用户明确说"出题吧"/"给我出题"且 topic 和 difficulty 都已确定 → is_ready=true
+- 用户把 topic 和难度都交给 AI 决定（"随机出题"、"你决定"）→ is_ready=true 且 is_random=true
+
+## is_random=true 时的文案规则
+- 不要向用户透露你选的 topic 和难度！出题确认文案固定为：
+  "好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀"
+- 这是保留惊喜感的关键场景：topic 和 difficulty 字段照常填写实际选择（供后端出题），
+  但 next_message 只输出上述固定文案，绝不包含具体方向或难度。
 
 ## LeetCode 链接处理
 - 只要用户消息里出现 LeetCode 链接（leetcode.com 或 leetcode.cn 的 /problems/xxx），即视为用户想做这道具体题。
@@ -107,6 +116,7 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
   "topic": "确定的知识点或空字符串",
   "difficulty": "easy/medium/hard 或空字符串",
   "is_ready": true/false,
+  "is_random": true/false,
   "next_message": "给用户的下一轮对话消息（仅文本，不含JSON）"
 }}
 ```"""
@@ -286,9 +296,10 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
             "你是 AI 编程导师。根据以下对话，提取用户的选题意图。\n\n"
             f"## 对话历史\n{transcript}\n\n"
             "请严格输出如下 JSON（不要输出其他内容）：\n"
-            '{"topic": "知识点或空", "difficulty": "easy/medium/hard或空", "is_ready": false, "next_message": "你的回复"}\n\n'
+            '{"topic": "知识点或空", "difficulty": "easy/medium/hard或空", "is_ready": false, "is_random": false, "next_message": "你的回复"}\n\n'
             "规则：\n"
             '- 若用户说了具体方向（数组/链表/动态规划/二叉树等），topic 填入该方向\n'
+            '- 若用户说"随便/随机/你决定"（不指定 topic 和难度），topic 和 difficulty 由你直接选定并填入，is_ready=true，is_random=true，且 next_message 只能写"好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀"，不得透露你选的 topic 和难度\n'
             '- 若用户没有明确 topic，topic 留空 ，引导追问\n'
             '- 若 topic + difficulty 都明确，is_ready=true\n'
             '- next_message 是给用户的自然语言回复\n'
@@ -339,6 +350,18 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
                 is_ready=False,
                 next_message=f"明白了，你想练习 **{found_topic}** 方向！你想从 Easy（简单）开始热身，还是直接挑战 Medium（中等）？",
             )
+
+    # 兜底：用户把选题和难度都交给 AI（"随机/随便/你决定"）
+    if any(w in last_user_msg for w in ["随机", "随便", "都行", "你决定", "你来定", "由你"]):
+        topic = _pick_auto_topic(profile_summary)
+        diff = "medium"
+        return DialogIntent(
+            topic=topic,
+            difficulty=diff,
+            is_ready=True,
+            is_random=True,
+            next_message="好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀",
+        )
 
     logger.warning("All fallback methods failed — returning generic prompt")
     return DialogIntent(

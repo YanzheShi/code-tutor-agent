@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../../types/session';
 import Markdown from '../Markdown';
+import DifficultyTopicSelector, { type DiffValue, diffLabel } from './DifficultyTopicSelector';
 
 /**
  * AgentChat — 左面板的 Agent 对话组件。
@@ -13,19 +14,49 @@ import Markdown from '../Markdown';
  *   onSend: 用户发送消息的回调，接收输入文本
  *   disabled: 是否禁用输入（出题中/已完成对话）
  */
+export type DiffValue = 'easy' | 'medium' | 'hard' | 'random';
+
 export default function AgentChat({
   messages,
   onSend,
   disabled = false,
   inputPlaceholder = '回复 AI 导师...',
+  showSelector = false,
 }: {
   messages: Message[];
   onSend: (text: string) => void;
   disabled?: boolean;
   inputPlaceholder?: string;
+  showSelector?: boolean;
 }) {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [selDifficulty, setSelDifficulty] = useState<DiffValue | null>(null);
+  const [selTopic, setSelTopic] = useState<string | null>(null);
+
+  // 把选择拼成自然语言首条消息，交给现有 AI 对话链路（方案 A：后端零改动）
+  const handleStart = () => {
+    if (!selDifficulty || !selTopic) return;
+    let text: string;
+    if (selDifficulty === 'random' && selTopic === 'random') {
+      text = '请随机给我出一道算法题，难度和主题都由你决定。';
+    } else if (selDifficulty === 'random') {
+      text = `请出一道主题关于「${selTopic}」的算法题，难度随机。`;
+    } else if (selTopic === 'random') {
+      text = `请出一道${diffLabel(selDifficulty)}难度的算法题，主题随机。`;
+    } else {
+      text = `请出一道${diffLabel(selDifficulty)}难度、主题关于「${selTopic}」的算法题。`;
+    }
+    onSend(text);
+    setSelDifficulty(null);
+    setSelTopic(null);
+  };
+
+  // 「解析题目」：直接发送解析指令，立即有可见响应
+  // （走现有对话链路，agent_dialog 会从消息里抽 URL 触发导入；不建新会话，后端零改动）
+  const handleParseLeetcode = (url: string) => {
+    onSend(`请解析 LeetCode 题目：${url}`);
+  };
 
   // 自动滚动到最新消息
   useEffect(() => {
@@ -67,15 +98,28 @@ export default function AgentChat({
       </div>
 
       {/* 输入框 */}
-      <div className="border-t border-ct-border p-3">
-        <textarea
-          ref={inputRef}
-          rows={2}
-          placeholder={disabled ? '对话已完成...' : inputPlaceholder}
-          disabled={disabled}
-          onKeyDown={handleKeyDown}
-          className="w-full rounded-lg border border-ct-border bg-ct-input px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40 resize-none"
-        />
+      <div className="border-t border-ct-border p-0">
+        {showSelector && (
+          <DifficultyTopicSelector
+            difficulty={selDifficulty}
+            topic={selTopic}
+            onPickDifficulty={setSelDifficulty}
+            onPickTopic={setSelTopic}
+            onStart={handleStart}
+            onParseLeetcode={handleParseLeetcode}
+            disabled={disabled}
+          />
+        )}
+        <div className="p-3">
+          <textarea
+            ref={inputRef}
+            rows={2}
+            placeholder={disabled ? '对话已完成...' : inputPlaceholder}
+            disabled={disabled}
+            onKeyDown={handleKeyDown}
+            className="w-full rounded-lg border border-ct-border bg-ct-input px-3 py-2 text-sm text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent disabled:opacity-40 resize-none"
+          />
+        </div>
       </div>
     </div>
   );

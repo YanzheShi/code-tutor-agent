@@ -6,6 +6,7 @@ import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
 import { useProgressSSE } from './useProgressSSE';
 import { API_BASE } from '../api/config';
+import { useEditTrace } from './useEditTrace';
 
 const BASE = API_BASE;
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin';
@@ -34,6 +35,24 @@ function savePersisted(p: PersistedSession) {
   try { localStorage.setItem(RESTORE_KEY, JSON.stringify(p)); } catch { /* ignore */ }
 }
 function clearPersisted() { try { localStorage.removeItem(RESTORE_KEY); } catch { /* ignore */ } }
+
+// ── 编辑器草稿缓存（根治“刷新吞代码”）──
+// 按 sessionId 维度把用户当前编辑器内容落盘，刷新重挂载后用草稿回填编辑器，
+// 避免只用题目模板 starter_code 覆盖用户未提交的代码。
+const DRAFT_PREFIX = 'code-tutor:draft:';
+function loadDraft(sid: string): string | null {
+  try {
+    const raw = localStorage.getItem(DRAFT_PREFIX + sid);
+    return raw === null ? null : raw;
+  } catch { return null; }
+}
+function saveDraft(sid: string, code: string) {
+  try { localStorage.setItem(DRAFT_PREFIX + sid, code); } catch { /* ignore */ }
+}
+function clearDraft(sid: string | null) {
+  if (!sid) return;
+  try { localStorage.removeItem(DRAFT_PREFIX + sid); } catch { /* ignore */ }
+}
 // 页面生命周期内只读取一次 localStorage（模块级缓存，避免每次渲染都读）
 let _cachedPersist: PersistedSession | null | undefined;
 function getInitialPersist(): PersistedSession | null {
@@ -49,6 +68,8 @@ export function useSession() {
   );
 
   const [sessionId, setSessionId] = useState<string | null>(initial?.sessionId ?? null);
+  // 编辑轨迹采集（仅前端采集 + 落本地文件，不做后端处理）
+  const editTrace = useEditTrace(sessionId);
   const [mode, setMode] = useState<string>(initial?.mode || 'practice');
 
   // 持久化：main 屏且有 sessionId 时落盘；其余情况（welcome/loading/error/admin）清掉，
@@ -86,6 +107,18 @@ export function useSession() {
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   // ── 状态同步 ──
+  // 编辑器初始化：优先用持久化草稿，否则题目模板，再兜底默认模板。
+  // editorInitialized 守卫保证每个会话只初始化一次，避免重复覆盖用户代码。
+  const initEditor = useCallback((problem: ProblemMeta | null, sid: string | null) => {
+    if (editorInitialized.current || !problem) return;
+    const starter = problem.starter_code || '';
+    const draft = sid ? loadDraft(sid) : null;
+    if (draft !== null) setEditorCode(draft);
+    else if (starter) setEditorCode(starter);
+    else setEditorCode('class Solution:\n    def solution(self):\n        pass\n');
+    editorInitialized.current = true;
+  }, []);
+
   function applySessionState(resp: SessionStateResp, fillEditor = false) {
     setSessionId(resp.session_id); setProblem(resp.problem);
     if (resp.mode) setMode(resp.mode);
@@ -95,10 +128,7 @@ export function useSession() {
     setJudgeReport(resp.last_review_payload as JudgeReport | null);
     setSubmissions((resp.submissions || []) as Submission[]);
     if ((resp as any).last_run_results) setRunResults((resp as any).last_run_results);
-    if (fillEditor && resp.problem?.starter_code && !editorInitialized.current) {
-      setEditorCode(resp.problem.starter_code);
-      editorInitialized.current = true;
-    }
+    if (fillEditor && resp.problem) initEditor(resp.problem, resp.session_id);
   }
 
   // ── SSE 实时进度（替代 setInterval 轮询 /state） ──
@@ -110,11 +140,6 @@ export function useSession() {
       onDone: (state: any) => {
         applySessionState(state, true);
         if (state.problem) {
-          // 题目就绪：补全默认模板、切到题面/编辑器
-          if (!state.problem.starter_code && !editorInitialized.current) {
-            setEditorCode('class Solution:\n    def solution(self):\n        pass\n');
-            editorInitialized.current = true;
-          }
           setActiveTabs({ left: 'desc', right: 'code' });
         }
         setProgressMsgs([]);
@@ -128,6 +153,14 @@ export function useSession() {
   }, [subscribeProgress, applySessionState]);
 
   useEffect(() => () => { closeProgress(); }, [closeProgress]);
+
+  // 草稿自动持久化：编辑器初始化完成后，用户每次改动防抖写入（按 sessionId）。
+  // 初始化阶段（editorInitialized=false）不写，避免把空串/模板覆盖真实草稿。
+  useEffect(() => {
+    if (!editorInitialized.current || !sessionId) return;
+    const t = setTimeout(() => saveDraft(sessionId, editorCode), 300);
+    return () => clearTimeout(t);
+  }, [editorCode, sessionId]);
 
   // 重挂载恢复：若初始即 main（来自持久化），重新拉取会话状态，避免刷新后“空做题页”。
   // 题目仍在生成则继续监听进度；否则已可在做题页等待提交。
@@ -187,6 +220,7 @@ export function useSession() {
   const handleSubmit = useCallback(async () => {
     if (!sessionId || submittingFlag) return;
     const sid = sessionId; const code = editorCode;
+    editTrace.mark('submit'); // 提交锚点：强制记一条当前代码快照并落盘
     setSubmittingFlag(true); setRunResults(null);
     try {
       const resp = await submitCode(sid, code);
@@ -213,6 +247,7 @@ export function useSession() {
   const handleRun = useCallback(async () => {
     if (!sessionId || running || !editorCode.trim()) return;
     const sid = sessionId; const code = editorCode;
+    editTrace.mark('run'); // 运行锚点：强制记一条当前代码快照
     setRunning(true); setRunResults(null); setActiveTabs(prev => ({ ...prev, right: 'run' }));
     try {
       const resp = await runCode(sid, code);
@@ -226,6 +261,9 @@ export function useSession() {
         let summary: string;
         if (pass === total) {
           summary = `✅ **运行结果**：样例 ${pass}/${total} 全部通过！点「提交」跑完整用例试试吧。`;
+          // 运行全过 = 本地自测通过，清掉上次提交遗留的非 AC 判题短报（如 WA 的
+          // 「答案不对，再检查一下逻辑」），避免与「✅ 全部通过」同时出现造成误导。
+          setLatestVerdict(null);
         } else {
           const fails = resp.results
             .filter(r => !r.passed)
@@ -281,6 +319,7 @@ export function useSession() {
       setProblem(null);
       setPhase('dialog');
       setEditorCode('');
+      clearDraft(sessionId);
       editorInitialized.current = false;
       if (data?.tutor_messages?.length) setTutorMessages(data.tutor_messages as Message[]);
       setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
@@ -311,7 +350,9 @@ export function useSession() {
         if (data.problem) {
           setProblem(data.problem as ProblemMeta);
           setPhase(data.phase || 'solving');
-          setEditorCode((data.problem as any).starter_code || '');
+          clearDraft(sessionId);
+          editorInitialized.current = false;
+          initEditor(data.problem as ProblemMeta, sessionId);
           // Agent 模式保留后端返回的 tutor_messages，不清空
           if (mode === 'agent' && data.tutor_messages?.length) {
             setTutorMessages(data.tutor_messages as Message[]);
@@ -321,7 +362,6 @@ export function useSession() {
           setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
           setRunResults(null); setSubmissions([]);
           setProgressMsgs([]);
-          editorInitialized.current = false;
           setNextProblemLoading(false);
           closeProgress();
           return;
@@ -361,6 +401,7 @@ export function useSession() {
     }
 
     // 其余（dialog 阶段的「← 返回」等）→ 回主页
+    clearDraft(sessionId);
     setScreen('welcome'); setSessionId(null); setProblem(null); setEditorCode('');
     setTutorMessages([]); setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
     setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');
@@ -373,13 +414,15 @@ export function useSession() {
 
   // ── 始终回到欢迎页（不受 phase 影响） ──
   const handleBackToWelcome = useCallback(() => {
+    clearDraft(sessionId);
+    closeProgress();
     setScreen('welcome'); setSessionId(null); setProblem(null); setEditorCode('');
     setTutorMessages([]); setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
     setErrorMsg(''); setProgressMsgs([]); setRunResults(null); setSubmissions([]); setReferenceCode('');
     setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
     setPhase('solving'); setStatus(''); setNextProblemLoading(false);
-  }, []);
+  }, [closeProgress, sessionId]);
 
   return {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
@@ -393,6 +436,8 @@ export function useSession() {
     setTutorMessages, setRunResults, setProgressMsgs,
     onStart: handleStart, onStartExisting: handleStartExisting,
     onSubmit: handleSubmit,
+    flushEditTrace: editTrace.flush,
+    markEditTrace: editTrace.mark,
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
     onBackToWelcome: handleBackToWelcome,
     onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,

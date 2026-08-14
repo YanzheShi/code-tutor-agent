@@ -9,6 +9,8 @@ export type ProblemMeta = {
   difficulty: string;
   starter_code: string;
   visible_test_cases: Array<{ input_args: string[]; expected_output: string; explanation: string }>;
+  constraints?: string[];
+  examples?: string[];
   novelty_score?: number;
 };
 

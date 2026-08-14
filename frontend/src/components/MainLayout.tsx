@@ -243,7 +243,7 @@ export default function MainLayout(props: MainLayoutProps) {
                 <TabButton label="Agent 对话" active={true} onClick={() => {}} />
               </div>
               <div className="flex-1 overflow-hidden relative">
-                <AgentChat messages={tutorMessages} onSend={onAgentSend} disabled={!!problem || isGenerating || (isDialogPhase && progressMsgs.length > 0)} />
+                <AgentChat messages={tutorMessages} onSend={onAgentSend} showSelector disabled={!!problem || isGenerating || (isDialogPhase && progressMsgs.length > 0)} />
                 {(isGenerating || (isDialogPhase && progressMsgs.length > 0)) && (
                   <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 border-t border-ct-border bg-ct-surface px-4 py-2 text-xs text-ct-muted">
                     <div className="h-3 w-3 animate-spin rounded-full border-2 border-ct-accent border-t-transparent" />
