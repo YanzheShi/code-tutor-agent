@@ -457,12 +457,34 @@ def extract_signature_from_solution(code: str) -> str:
     return sig_line
 
 
+def _inject_img_referrerpolicy(html: str) -> str:
+    """给所有 <img> 标签注入 referrerpolicy="no-referrer"。
+
+    LeetCode 题面图片托管在阿里云 OSS，带 Referer 白名单防盗链：
+    前端页面（localhost/127.0.0.1）加载时浏览器自动携带本地 Referer → 403 裂图。
+    注入后图片请求不再携带 Referer，OSS 放行（实测无 Referer → 200）。
+    已带 referrerpolicy 的标签跳过，避免重复注入。
+    """
+    if not html or "<img" not in html:
+        return html
+
+    def _add(m: "re.Match") -> str:
+        tag = m.group(0)
+        if "referrerpolicy=" in tag:
+            return tag
+        if tag.rstrip().endswith("/>"):
+            return tag[:-2] + ' referrerpolicy="no-referrer" />'
+        return tag[:-1] + ' referrerpolicy="no-referrer">'
+
+    return re.sub(r"<img\b[^>]*>", _add, html)
+
+
 def problem_to_api_dict(p: 'LeetCodeProblem') -> dict:
     """Convert to the dict shape expected by the API response."""
     return {
         "title": p.title,
         "description": p.description,
-        "description_html": p.content_html or "",
+        "description_html": _inject_img_referrerpolicy(p.content_html or ""),
         "difficulty": p.difficulty.lower(),
         "examples": p.examples,
         "constraints": p.constraints,
