@@ -220,18 +220,28 @@ def _build_harness(code: str, test_cases: list[dict], function_signature: str | 
         params, return_type = parse_signature(function_signature)
         param_types = [t for _, t in params]
 
-    tc_json = json.dumps(test_cases)
+    # 解析签名，得到 (参数类型列表, 返回类型)，用于按类型还原/序列化
+    param_types: list[str] = []
+    return_type = ""
+    if function_signature:
+        params, return_type = parse_signature(function_signature)
+        param_types = [t for _, t in params]
+
     struct_src = struct_convert.HARNESS_STRUCT_SRC
+    tc_json = json.dumps(test_cases)
     param_types_json = json.dumps(param_types)
     return_type_json = json.dumps(return_type)
 
-    return f"""\
+    harness = f"""\
 {INJECT_PROLOGUE}
 {struct_src}
 import ast, json, sys, time, inspect
 import logging
 
 logger = logging.getLogger(__name__)
+
+_USER_CODE_START = __USER_START__
+_USER_CODE_END = __USER_END__
 
 
 # --- User / reference code ---
@@ -323,7 +333,31 @@ for idx, tc in enumerate(test_cases):
     except Exception as exc:
         logger.error("Exception: %s", exc)
         elapsed = (time.perf_counter() - start) * 1000
-        print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Runtime Error", "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": "", "actual_output": ""}}))
+        # LeetCode 风格 RE 详情：异常类型 + 消息 + 用户代码帧行号
+        _tb_frames = []
+        try:
+            import traceback as _tb
+            for _fname, _lineno, _func, _text in _tb.extract_tb(exc.__traceback__):
+                if _USER_CODE_START <= _lineno <= _USER_CODE_END:
+                    _tb_frames.append(
+                        (_text.strip() if _text else "")
+                        + "\\nLine "
+                        + str(_lineno - _USER_CODE_START + 1)
+                        + " in "
+                        + _func
+                        + " (Solution.py)"
+                    )
+        except Exception:
+            pass
+        _detail = type(exc).__name__ + ": " + str(exc)
+        if _tb_frames:
+            _detail += "\\n" + "\\n".join(_tb_frames)
+        print('RESULT: ' + json.dumps({{"test_case_id": idx, "status": "Runtime Error", "detail": _detail[:500], "runtime_ms": round(elapsed, 2), "input_args": tc['input_args'], "expected_output": "", "actual_output": ""}}))
 """
+
+    # 用户代码在 harness 中的行号范围：RE 时据此截取用户代码帧（LeetCode 风格行号）
+    user_start = harness.split("# --- User / reference code ---", 1)[0].count("\n") + 2
+    user_end = user_start + code.count("\n")
+    return harness.replace("__USER_START__", str(user_start)).replace("__USER_END__", str(user_end))
 
 

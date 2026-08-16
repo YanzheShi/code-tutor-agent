@@ -101,6 +101,7 @@ class RunResult(BaseModel):
     detail: str = ""
     input_args: list[str] = Field(default_factory=list)
     expected: str = ""
+    explanation: str = ""
     runtime_ms: float = 0.0
     memory_kb: float = 0.0
 

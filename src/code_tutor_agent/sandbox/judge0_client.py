@@ -135,7 +135,11 @@ def _build_test_case_harness(
             method_names.append(m.group(1))
     method_order_json = json.dumps(method_names)
 
+    # Judge0 的 Python 3.8.1 不支持 PEP 585 泛型注解（list[int] 等）。
+    # 加 from __future__ import annotations 让注解延迟为字符串，
+    # 用户代码即可在 3.8 沙箱中正常执行（_cta_coerce_arg 纯字符串匹配，不依赖注解求值）。
     return f"""\
+from __future__ import annotations
 {INJECT_PROLOGUE}
 {struct_src}
 import ast, json, sys, time, inspect
@@ -232,6 +236,21 @@ for idx, tc in enumerate(test_cases):
             "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2)
         }}))
         """
+
+
+def _remap_source_lines(text: str, user_start: int, user_end: int) -> str:
+    """把 Judge0 harness 内行号映射回用户原始代码行号（纯偏移）。
+
+    用户代码嵌入 harness 后，traceback / SyntaxError 中的行号是
+    harness 文件的行号。仅当行号落在用户代码范围内（user_start..user_end）
+    才做偏移（n - user_start + 1），harness 自身辅助代码的行号保持原样。
+    """
+    def _sub(m: "re.Match[str]") -> str:
+        n = int(m.group(1))
+        if user_start <= n <= user_end:
+            return f'File "script.py", line {n - user_start + 1}'
+        return m.group(0)
+    return re.sub(r'File "script\.py", line (\d+)', _sub, text)
 
 
 def _call_api(submission: dict) -> dict:
@@ -359,6 +378,10 @@ def submit_test_cases(
                       8: "Runtime Error", 12: "Runtime Error", 13: "Runtime Error", 14: "Runtime Error"}
         verdict = status_map.get(sr.status_id, "Runtime Error")
         detail = sr.compile_output or sr.stderr or sr.message or sr.status_desc
+        # 行号从 harness 映射回用户原始代码行号（纯偏移）
+        user_start = harness.split("# --- User / solution code ---", 1)[0].count("\n") + 1
+        user_end = user_start + source_code.count("\n")
+        detail = _remap_source_lines(detail, user_start, user_end)
         return [
             {"test_case_id": i, "status": verdict, "detail": detail[:200], "runtime_ms": sr.runtime_ms()}
             for i in range(n)

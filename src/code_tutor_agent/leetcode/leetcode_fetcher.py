@@ -529,6 +529,7 @@ def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> lis
             lines = ex.strip().split("\n")
             input_lines = []
             output_line = ""
+            explanation = ""
             capturing = False
             for line in lines:
                 s = line.strip()
@@ -541,6 +542,11 @@ def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> lis
                 elif s.startswith("输出") or s.startswith("Output"):
                     capturing = False
                     output_line = s
+                elif s.startswith("解释") or s.startswith("Explanation") or s.startswith("Explain"):
+                    capturing = False
+                    explanation = re.sub(
+                        r"^(?:解释|Explanation|Explain)\s*[:：]\s*", "", s
+                    ).strip()
                 elif capturing:
                     input_lines.append(s)
 
@@ -560,7 +566,7 @@ def _parse_examples_to_test_cases(examples: list[str], starter_code: str) -> lis
             test_cases.append({
                 "input_args": input_args,
                 "expected_output": output_val,
-                "explanation": f"LeetCode 示例 {len(test_cases) + 1}",
+                "explanation": explanation or f"LeetCode 示例 {len(test_cases) + 1}",
                 "is_hidden": False,
             })
         return test_cases

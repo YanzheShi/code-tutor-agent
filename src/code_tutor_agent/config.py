@@ -68,6 +68,9 @@ PURPOSE_CONFIGS = {
     "adversarial-eval":     {"alias": "default", "temperature": 0.3},
     "adversarial-eval-low": {"alias": "default", "temperature": 0.2},
 
+    # === 编辑轨迹分析（错误模式画像 feeder，见 docs/error-mode-tracking-design.md）===
+    "edit-trace":           {"alias": "default", "temperature": 0.1},
+
     # === 基准测试 ===
     "benchmark":            {"alias": "secondary", "temperature": 0.5},
 }

@@ -53,6 +53,7 @@ def _to_run_results(results: list, test_cases: list) -> list[dict]:
             "input_args": list(getattr(r, "input_args", None)
                                or (tc.get("input_args", []) if isinstance(tc, dict) else [])),
             "expected": tc.get("expected_output", "") if isinstance(tc, dict) else "",
+            "explanation": tc.get("explanation", "") if isinstance(tc, dict) else "",
             "runtime_ms": r.runtime_ms,
             "memory_kb": r.memory_kb,
         })
@@ -115,7 +116,7 @@ def _resolve_function_signature(problem_dict: Any) -> str:
     return func_sig
 
 
-def _build_base_result(raw_results: list) -> JudgeResult:
+def _build_base_result(raw_results: list, test_cases: list | None = None) -> JudgeResult:
     """由执行结果构造 base JudgeResult：首个失败用例（结构化）或 AC 汇总文案。"""
     _status_map = {
         "Passed": "AC",
@@ -126,6 +127,7 @@ def _build_base_result(raw_results: list) -> JudgeResult:
     }
     first_fail = next((r for r in raw_results if r.status != "Passed"), None)
     if first_fail is not None:
+        _tc = test_cases[first_fail.test_case_id] if test_cases and 0 <= first_fail.test_case_id < len(test_cases) else {}
         return JudgeResult(
             status=_status_map.get(first_fail.status, "WA"),
             phase="base",
@@ -135,6 +137,7 @@ def _build_base_result(raw_results: list) -> JudgeResult:
             input_args=list(first_fail.input_args or []),
             expected_output=first_fail.expected_output or "",
             actual_output=first_fail.actual_output or "",
+            explanation=_tc.get("explanation", "") if isinstance(_tc, dict) else "",
         )
     return JudgeResult(
         status="AC",
@@ -192,6 +195,7 @@ def _apply_side_effects(
     is_run: bool,
     feedback_msg: str,
     update: dict,
+    code: str = "",
 ) -> None:
     """应用画像写入、sample 诊断与路由 status，原地修改 ``update``。
 
@@ -208,6 +212,36 @@ def _apply_side_effects(
             update_profile_on_result(topic=topic, verdict=analysis.verdict)
         except Exception:
             logger.warning("Agent v1 profile update failed (non-fatal)", exc_info=True)
+
+        # ── 错误模式画像（error-mode-tracking 特性，fire-and-forget）──
+        # 仅真实提交触发；AC 也跑（捕捉"提交前自查修复"的弱项），非 AC 额外给
+        # 判题失败补充 feeder ×1.3。分析在守护线程后台进行，不阻塞判题返回。
+        try:
+            from code_tutor_agent.profile.edit_trace_analyzer import (
+                fire_and_forget_error_mode_analysis,
+                judge_failure_to_tags,
+            )
+            prob = state.problem
+            if isinstance(prob, dict):
+                topic = prob.get("topic", "") or "未知"
+                description = prob.get("description", "") or ""
+            else:
+                topic = getattr(prob, "topic", "") or "未知"
+                description = getattr(prob, "description", "") or ""
+            verdict = analysis.verdict
+            judge_tags = None
+            if verdict != "AC":
+                judge_tags = judge_failure_to_tags(verdict)
+            fire_and_forget_error_mode_analysis(
+                state.session_id,
+                topic=topic,
+                description=description,
+                final_code=code,
+                verdict=verdict,
+                judge_failure_tags=judge_tags,
+            )
+        except Exception:
+            logger.warning("error-mode fire-and-forget hook failed (non-fatal)", exc_info=True)
 
     # ── 运行（sample scope）：写诊断 last_run_results，必要时给轻提示 ──
     if state.judge_scope == "sample":
@@ -283,7 +317,7 @@ def agent_judge_node(state: SessionState) -> dict:
     # 注意：submissions 通道是 operator.add reducer——绝不能把完整列表放进 update 返回，
     # 只能原地 append（checkpointer 在步末按通道当前值落库），否则提交数翻倍。
     if state.submissions and not is_run:
-        state.submissions[-1].judge_results.append(_build_base_result(raw_results))
+        state.submissions[-1].judge_results.append(_build_base_result(raw_results, test_cases))
 
     # ── 判题分析（sample 跳过 LLM / full 走 LLM）──
     analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
@@ -306,5 +340,5 @@ def agent_judge_node(state: SessionState) -> dict:
         + [{"role": "tutor", "content": feedback_msg}],
     }
 
-    _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update)
+    _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update, code=code)
     return update

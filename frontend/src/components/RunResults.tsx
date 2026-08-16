@@ -26,6 +26,7 @@ export default function RunResults({ results, running }: { results: RunResult[] 
           {r.input_args && r.input_args.length > 0 && (
             <div className="text-ct-muted mb-1">输入: {r.input_args.join('  ')}</div>
           )}
+          {r.explanation && <div className="text-ct-muted mb-1">{r.explanation}</div>}
           {r.detail && <div className="text-ct-muted mb-1">{r.detail}</div>}
           <div className="text-ct-muted">期望: {r.expected}</div>
         </div>

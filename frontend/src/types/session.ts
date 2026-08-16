@@ -67,6 +67,7 @@ export type RunResult = {
   detail: string;
   input_args: string[];
   expected: string;
+  explanation?: string;
   runtime_ms: number;
   memory_kb: number;
 };
@@ -98,6 +99,7 @@ export type JudgeResult = {
   input_args?: string[];
   expected_output?: string;
   actual_output?: string;
+  explanation?: string;
 };
 
 /** 失败用例对比数据（从最后一条 submission 的 base 阶段取） */
@@ -105,4 +107,6 @@ export type FailedCase = {
   input_args: string[];
   expected_output: string;
   actual_output: string;
+  explanation?: string;
+  detail?: string;
 };

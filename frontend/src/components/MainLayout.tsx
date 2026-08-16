@@ -59,6 +59,8 @@ export type MainLayoutProps = {
   onNext: () => void;
   onBackToWelcome: () => void;
   onAgentSend: (text: string) => void;
+  analyzingTrace?: boolean;
+  onAnalyzeTrace?: () => void;
 }
 
 export default function MainLayout(props: MainLayoutProps) {
@@ -70,6 +72,7 @@ export default function MainLayout(props: MainLayoutProps) {
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
     onSetTutorMessages, onSetRunResults, onSetProgressMsgs,
     onRun, onSubmit, onChat, onNext, onBackToWelcome, onAgentSend,
+  analyzingTrace = false, onAnalyzeTrace,
   } = props;
 
   const isLoading = running || submittingFlag;
@@ -93,7 +96,7 @@ export default function MainLayout(props: MainLayoutProps) {
     const expected = base.expected_output || '';
     const actual = base.actual_output || '';
     if (!inputArgs.length && !expected && !actual) return null;
-    return { input_args: inputArgs, expected_output: expected, actual_output: actual };
+    return { input_args: inputArgs, expected_output: expected, actual_output: actual, explanation: base.explanation || '', detail: base.detail || '' };
   }, [submissions, latestVerdict]);
 
   const panelTabs = {
@@ -179,6 +182,13 @@ export default function MainLayout(props: MainLayoutProps) {
             <div ref={chatEndRef} />
           </div>
           <div className="border-t border-ct-border p-3 flex gap-2">
+            {latestVerdict === 'AC' && (
+              <button onClick={onAnalyzeTrace} disabled={analyzingTrace}
+                className="shrink-0 self-end rounded border border-ct-accent/50 px-3 py-2 text-xs text-ct-accent hover:bg-ct-accent/10 disabled:opacity-50"
+                title="分析你本次做题的编辑轨迹（独立复盘，不写入能力画像）">
+                {analyzingTrace ? '分析中…' : '📊 轨迹分析'}
+              </button>
+            )}
             <textarea value={chatInput} onChange={e => onSetChatInput(e.target.value)}
               placeholder="向导师提问..."
               rows={2}

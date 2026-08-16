@@ -72,6 +72,7 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
               return (
                 <div className="rounded border border-ct-warn/30 bg-ct-warn-bg p-2 mb-2 text-xs space-y-1">
                   <span className="font-semibold text-ct-warn">首个失败用例对比</span>
+                  {fail?.explanation && <div><span className="text-ct-muted">说明: </span><span className="text-ct-text">{fail.explanation}</span></div>}
                   {hasInput && <div><span className="text-ct-muted">输入: </span><code className="text-ct-text">{JSON.stringify(fail!.input_args)}</code></div>}
                   {hasExpected && <div><span className="text-ct-muted">期望: </span><code className="text-ct-success">{fail!.expected_output}</code></div>}
                   {hasActual && <div><span className="text-ct-muted">实际: </span><code className="text-ct-error">{fail!.actual_output}</code></div>}

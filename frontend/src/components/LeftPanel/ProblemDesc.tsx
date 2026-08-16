@@ -31,21 +31,6 @@ export default function ProblemDesc({ problem }: { problem: ProblemMeta }) {
         </div>
       )}
 
-      {/* 约束条件（参数限制） — LLM 生成题在独立字段，不混进描述 */}
-      {(problem.constraints ?? []).length > 0 && (
-        <div className="space-y-1.5">
-          <h3 className="text-sm font-semibold text-ct-text">约束条件</h3>
-          <ul className="space-y-1 text-sm leading-relaxed text-ct-text">
-            {(problem.constraints ?? []).map((c, i) => (
-              <li key={i} className="flex gap-2">
-                <span className="text-ct-muted">•</span>
-                <code className="rounded bg-ct-hover px-1 py-0.5 text-xs">{c}</code>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
       {/* 可见测试用例 */}
       {(problem.visible_test_cases ?? []).length > 0 && (
         <div className="space-y-2">
@@ -72,6 +57,21 @@ export default function ProblemDesc({ problem }: { problem: ProblemMeta }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 约束条件（参数限制） — 放在示例下面 */}
+      {(problem.constraints ?? []).length > 0 && (
+        <div className="space-y-1.5">
+          <h3 className="text-sm font-semibold text-ct-text">约束条件</h3>
+          <ul className="space-y-1 text-sm leading-relaxed text-ct-text">
+            {(problem.constraints ?? []).map((c, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-ct-muted">•</span>
+                <code className="rounded bg-ct-hover px-1 py-0.5 text-xs">{c}</code>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </div>

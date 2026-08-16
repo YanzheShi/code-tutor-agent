@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 from langchain_core.tracers.context import collect_runs
+from pydantic import BaseModel, Field
 
 from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.observability import build_run_config, record_verdict_feedback
@@ -25,7 +26,11 @@ from code_tutor_agent.db.database import (
     delete_session_activity,
     get_problem_by_id,
     get_stale_sessions,
+    get_submissions_by_session,
+    get_trace_analysis,
+    save_edit_trace,
     save_submission,
+    save_trace_analysis,
     touch_session,
 )
 from code_tutor_agent.progress import _generation_progress
@@ -283,6 +288,32 @@ async def submit_code(sid: str, body: SubmitRequest):
     # 应允许通过 Command(resume) 续跑判题（前端「继续提交不同解法」）。
     # 仅当 graph 真正终止（无待执行节点）时才拒绝提交。
     _next = list(state.next or [])
+    # ── dialog 兜底：旧会话卡在 dialog+problem（graph 停在 END、无挂起中断）──
+    # 此时 Command(resume=...) 会空转（无 interrupt 可恢复），提交永远只回开场白。
+    # 修复：先置 agent_dialog_complete 并用 invoke(None) 重跑 graph，
+    # 经 agent_dialog_node(complete) → planner_node(problem 已加载) 真正暂停到
+    # wait_for_submit_node 的 interrupt，再走下方正常 resume 判题。
+    if (
+        state.values.get("status") == "dialog"
+        and state.values.get("problem")
+        and "wait_for_submit_node" not in _next
+    ):
+        logger.warning(
+            "submit: session %s stuck in dialog with problem — forwarding to wait_for_submit",
+            sid,
+        )
+        graph.update_state(config, {"agent_dialog_complete": True}, as_node="agent_dialog_node")
+        # 注意：invoke(None) 在 checkpoint next=()（无挂起任务）时是空操作，
+        # 不会重跑 graph——必须带输入重跑。输入来自旧 checkpoint 会覆盖
+        # update_state 的值，所以 complete 要直接写进输入，才会从 __start__ 经
+        # agent_dialog_node(complete) → planner_node(problem 已加载) → wait_for_submit 暂停。
+        _resume_input = SessionState(**state.values).model_dump()
+        _resume_input["agent_dialog_complete"] = True
+        await asyncio.to_thread(graph.invoke, _resume_input, config)
+        state = graph.get_state(config)
+        _next = list(state.next or [])
+        if "wait_for_submit_node" not in _next:
+            raise HTTPException(409, "会话状态异常，无法判题，请重新开始会话")
     if state.values.get("status") == "done" and "wait_for_submit_node" not in _next:
         raise HTTPException(400, "Session is already done")
 
@@ -352,6 +383,73 @@ async def submit_code(sid: str, body: SubmitRequest):
         tutor_message=tutor_msg,
         hint_level=values.get("hint_level", 0),
     )
+
+
+class EditTraceRequest(BaseModel):
+    """前端实时采集的编辑轨迹事件批量上传体。"""
+    events: list[dict] = Field(default_factory=list, description="编辑轨迹事件列表(edit/idle/run/submit)")
+
+
+@router.post("/{sid}/edit-trace")
+async def save_edit_trace_endpoint(sid: str, body: EditTraceRequest):
+    """接收前端实时采集的编辑轨迹事件（UPSERT 累加），供提交时错误模式分析使用。
+
+    仅落库，不在此触发 LLM 分析——分析在判题节点（agent_judge）fire-and-forget 触发，
+    读取本表全量事件后做增量融合（见 docs/error-mode-tracking-design.md）。
+    """
+    if not body.events:
+        return {"ok": True, "session_id": sid, "events": 0}
+    try:
+        save_edit_trace(sid, "default", body.events)
+    except Exception as exc:
+        logger.error("save_edit_trace endpoint failed for %s: %s", sid, exc)
+        raise HTTPException(500, "failed to persist edit trace")
+    return {"ok": True, "session_id": sid, "events": len(body.events)}
+
+
+# ── 独立轨迹分析（纯展示，不回灌画像；用户 AC 后手动触发）──
+
+
+@router.post("/{sid}/analyze")
+async def analyze_trace_endpoint(sid: str):
+    """触发一次独立的做题轨迹分析（基于已采集的 edit_traces + 最终提交代码）。
+
+    与错误模式画像解耦：结果只做展示，绝不写入 profile / memory。
+    final_code / topic / description 优先从本题 AC 提交 + 题目库反查，缺失则留空。
+    """
+    final_code = ""
+    topic = ""
+    description = ""
+    try:
+        subs = get_submissions_by_session(sid) or []
+        if subs:
+            ac = next((s for s in subs if s.get("verdict") == "AC"), subs[-1])
+            final_code = ac.get("code") or ""
+            pid = ac.get("problem_id")
+            if pid:
+                prob = get_problem_by_id(pid)
+                if prob:
+                    topic = prob.topic or ""
+                    description = prob.description or ""
+    except Exception as exc:
+        logger.warning("analyze_trace_endpoint: gather context failed for %s: %s", sid, exc)
+
+    from code_tutor_agent.profile.trace_insight import analyze_trace_standalone
+
+    result = analyze_trace_standalone(sid, topic=topic, description=description, final_code=final_code)
+    result_dict = result.model_dump()
+    try:
+        save_trace_analysis(sid, result_dict)
+    except Exception as exc:
+        logger.warning("analyze_trace_endpoint: cache failed for %s: %s", sid, exc)
+    return {"ok": True, "session_id": sid, "analysis": result_dict}
+
+
+@router.get("/{sid}/analysis")
+async def get_trace_analysis_endpoint(sid: str):
+    """读取已缓存的独立轨迹分析结论（无则返回 analysis=null）。"""
+    data = get_trace_analysis(sid)
+    return {"session_id": sid, "analysis": data}
 
 
 @router.get("/{sid}/state", response_model=SessionStateResponse)
@@ -539,6 +637,11 @@ async def create_session_with_existing(problem_id: int):
         "mode": "agent", "topic": meta.topic, "difficulty": meta.difficulty,
         "submissions": [], "hint_level": 0, "tutor_messages": [],
         "last_verdict": None, "error_message": "",
+        # 绕过 agent 对话：题目已就绪，graph 应从 __start__ 直接经
+        # agent_dialog_node(complete) → planner_node(problem 已加载) 走到
+        # wait_for_submit_node 的 interrupt 暂停，否则会话停在 dialog 状态，
+        # 提交/运行会因没有挂起中断而空转（历史缺陷，见修复记录）。
+        "agent_dialog_complete": True,
     }
     initial = SessionState(**initial_dict)
     graph.invoke(initial.model_dump(), config)

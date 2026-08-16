@@ -111,13 +111,17 @@ export function useEditTrace(sessionId: string | null) {
     if (pending.current.length === 0) return;
     const events = pending.current;
     pending.current = [];
-    // fire-and-forget：spike 阶段不阻塞交互
-    fetch('/__edit_trace', {
+    // fire-and-forget：实时上报到后端接收 API（UPSERT 累加落 edit_traces 表）。
+    // 注意：目标从 vite dev 中间件 /__edit_trace 改为真实后端 /session/{id}/edit-trace，
+    // 由 vite proxy 转发到后端 8765，生产环境同域直连。
+    fetch(`/session/${sessionId}/edit-trace`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId, events }),
-    }).catch(() => {
-      /* 忽略上报失败 */
+      body: JSON.stringify({ events }),
+    }).catch((e) => {
+      // 静默失败会让人误以为"画像没数据=没弱项"。轨迹是 6 维错误画像的唯一
+      // 多维来源，丢失即画像退化，因此至少打一条可见日志便于排查。
+      console.warn('[edit-trace] 轨迹上报失败（已丢弃 %d 条事件）:', events.length, e);
     });
   }, [sessionId]);
 
@@ -150,6 +154,13 @@ export function useEditTrace(sessionId: string | null) {
 
   useEffect(() => {
     if (!sessionId) return;
+
+    // 新会话解冻：terminal 是组件级 ref，同一页面实例内跨会话存活。
+    // 若沿用旧会话的"提交后冻结"，新会话的轨迹采集会被永久静默丢弃
+    // （mark 不记快照、flush 空 → 零上传 → 后端 edit_traces 无记录）。
+    // 冻结只对"提交时所在会话"有意义，会话切换必须重置。
+    terminal.current = false;
+    pauseStart.current = null;
 
     // 停顿计时器触发：仅标记"停顿已开始"（记录起点），不 emit、不清零 delta、不重置累计改动（A）。
     // 真正的 idle 事件在停顿结束时（下次敲键 / 提交 / 卸载）才发出，idleMs 为真实时长（D）。

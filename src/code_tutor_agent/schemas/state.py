@@ -107,6 +107,7 @@ class JudgeResult(BaseModel):
     input_args: list[str] = Field(default_factory=list, description="Input args of the first failing test case")
     expected_output: str = Field(default="", description="Expected output of the first failing test case")
     actual_output: str = Field(default="", description="Actual output of the first failing test case")
+    explanation: str = Field(default="", description="该用例的语义说明（测试用例自带 explanation）")
 
 
 class Submission(BaseModel):

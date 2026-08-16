@@ -112,3 +112,4 @@ class DBProfile(BaseModel):
     forget_days: int = Field(default=0, ge=0, description="距离上次做题天数")
     common_errors: list[str] = Field(default_factory=list, description="常见错误")
     attempts: int = Field(default=0, ge=0, description="做过多少题")
+    error_modes: dict = Field(default_factory=dict, description="错误模式画像(6维结构化)")

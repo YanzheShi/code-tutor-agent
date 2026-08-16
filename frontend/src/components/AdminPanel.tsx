@@ -3,13 +3,95 @@
  * Three sections:
  *   题库管理 — CRUD problems
  *   提交管理 — browse all submissions
- *   查看画像 — user proficiency profile
+ *   查看画像 — user proficiency profile (radar + per-topic detail)
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
 
 const BASE = API_BASE;
+
+/* ── 错误模式 6 维（与后端 weakness.py 同步）── */
+const ERROR_MODE_DIMS = [
+  { key: 'correctness', label: '正确性 & 边界', icon: '🎯',
+    desc: '边界条件、空值/None 处理、索引越位、类型转换等正确性陷阱' },
+  { key: 'datastruct', label: '数据结构操作', icon: '🗂️',
+    desc: '数组/链表/树/图/哈希的增删改查、遍历顺序与指针操作' },
+  { key: 'perf', label: '复杂度 & 性能', icon: '⚡',
+    desc: '时间/空间复杂度分析、TLE/OOM 风险与优化策略选择' },
+  { key: 'algo', label: '算法思维', icon: '🧠',
+    desc: '问题建模、状态转移、贪心/DP/图论等算法范式运用' },
+  { key: 'impl', label: '实现质量 & 鲁棒性', icon: '🔧',
+    desc: '代码可读性、命名规范、异常处理、输入校验与防御编程' },
+  { key: 'debug', label: '自测 & 调试', icon: '🔍',
+    desc: '自测用例构造、边界场景覆盖、调试效率与错误定位能力' },
+] as const;
+
+type ErrorModeInfo = { count: number; severity: number; last_seen?: string; evidence?: string };
+type ErrorModes = Record<string, Record<string, ErrorModeInfo>>;
+
+/** 从 error_modes 计算每个维度的"能力分"(0~10) */
+function dimScores(modes: ErrorModes): number[] {
+  return ERROR_MODE_DIMS.map(d => {
+    const tags = modes[d.key];
+    if (!tags || Object.keys(tags).length === 0) return 10;
+    const maxSev = Math.max(...Object.values(tags).map(t => t.severity));
+    return Math.round((1 - maxSev * 0.7) * 10 * 10) / 10;
+  });
+}
+
+/* ── 纯 SVG 六维雷达图（管理后台版）──
+   嵌入 flex 行内（右侧还有总体指标），viewBox 用适中的宽扁尺寸，
+   标签完整容纳、与数值拉开空隙、对齐按点的水平方向判断。 */
+function RadarChart({ scores }: { scores: number[] }) {
+  const W = 460;
+  const H = 380;
+  const cx = W / 2, cy = H / 2, r = 120, labelDist = r + 40;
+  const angleStep = (Math.PI * 2) / 6;
+
+  const gridPolys = Array.from({ length: 5 }, (_, li) => {
+    const lr = r * ((li + 1) / 5);
+    return Array.from({ length: 6 }, (_, i) => {
+      const a = -Math.PI / 2 + i * angleStep;
+      return [cx + lr * Math.cos(a), cy + lr * Math.sin(a)];
+    });
+  });
+
+  const dataPoints = scores.map((s, i) => {
+    const a = -Math.PI / 2 + i * angleStep;
+    const sr = r * (Math.max(0, Math.min(s, 10)) / 10);
+    return [cx + sr * Math.cos(a), cy + sr * Math.sin(a)];
+  });
+
+  const labels = ERROR_MODE_DIMS.map((d, i) => {
+    const a = -Math.PI / 2 + i * angleStep;
+    const lx = cx + labelDist * Math.cos(a);
+    const ly = cy + labelDist * Math.sin(a);
+    const align = lx > cx + 0.5 ? 'start' : lx < cx - 0.5 ? 'end' : 'middle' as const;
+    return { x: lx, y: ly, align, label: d.label.replace(/ &.*/, '') };
+  });
+
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  const polyS = (pts: number[][]) => pts.map(p => p.join(',')).join(' ');
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto max-w-[460px]" role="img">
+      {gridPolys.map((gp, i) => <polygon key={i} points={polyS(gp)} fill="none" stroke="var(--ct-border)" strokeWidth={0.7} />)}
+      {Array.from({ length: 6 }, (_, i) => {
+        const a = -Math.PI / 2 + i * angleStep;
+        return <line key={i} x1={cx} y1={cy} x2={cx + r * Math.cos(a)} y2={cy + r * Math.sin(a)} stroke="var(--ct-border)" strokeWidth={0.7} />;
+      })}
+      <polygon points={polyS(dataPoints)} fill="var(--ct-accent)" fillOpacity={0.14} stroke="var(--ct-accent)" strokeWidth={1.8} strokeLinejoin="round" />
+      {dataPoints.map((p, i) => <g key={i}>
+        <circle cx={p[0]} cy={p[1]} r={4.5} fill="var(--ct-accent)" stroke="#fff" strokeWidth={1.1} />
+        <text x={p[0]} y={p[1] - 13} textAnchor="middle" fontSize={11} fontWeight={600} fill="var(--ct-text)">{scores[i].toFixed(1)}</text>
+      </g>)}
+      {labels.map((l, i) => <text key={i} x={l.x} y={l.y} textAnchor={l.align as 'start' | 'end' | 'middle'} dominantBaseline="central" fontSize={11} fontWeight={500} fill="var(--ct-muted)">{l.label}</text>)}
+      <text x={cx} y={cy - 2} textAnchor="middle" fontSize={22} fontWeight={700} fill="var(--ct-accent)">{avg.toFixed(1)}</text>
+      <text x={cx} y={cy + 14} textAnchor="middle" fontSize={10} fill="var(--ct-muted)">均分</text>
+    </svg>
+  );
+}
 
 // ── Types ──
 
@@ -64,6 +146,10 @@ function AdminProfileView() {
       .catch(() => { setProfile(null); setProfileV2(null); setLoading(false); });
   }, []);
 
+  // hooks 必须在 early return 之前调用，保持调用顺序稳定
+  const modes = (profile?.error_modes ?? {}) as ErrorModes;
+  const scores = useMemo(() => dimScores(modes), [modes]);
+
   if (loading) return <div className="flex flex-1 items-center justify-center"><span className="text-sm text-ct-muted">加载画像中…</span></div>;
   if (!profile) return <div className="flex flex-1 items-center justify-center"><span className="text-sm text-ct-muted">暂无画像数据</span></div>;
 
@@ -72,44 +158,71 @@ function AdminProfileView() {
       <div className={'h-2 rounded-full ' + color} style={{ width: Math.max(0, Math.round(val * 100)) + '%' }} />
     </div>
   );
+
+  // V2 per-topic data
   const v2Prof = profileV2?.prof as Record<string, number> | undefined;
   const tagNames = (profileV2?.tag_names ?? {}) as Record<string, string>;
   const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
 
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* 上半：雷达图 + 总体指标 */}
       <section className="rounded-xl border border-ct-border bg-ct-surface p-5 space-y-4">
-        <h3 className="text-sm font-semibold text-ct-text">总体指标</h3>
-        <div className="grid grid-cols-2 gap-6">
-          <div>
-            <div className="flex justify-between mb-1 text-sm">
-              <span className="text-ct-muted">综合熟练度</span>
-              <span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span>
+        <h3 className="text-sm font-semibold text-ct-text">能力画像总览</h3>
+        <div className="flex gap-6 items-start">
+          {/* 左：雷达图 */}
+          <RadarChart scores={scores} />
+          {/* 右：总体指标 */}
+          <div className="flex-1 space-y-3 min-w-[200px]">
+            <div>
+              <div className="flex justify-between mb-1 text-sm"><span className="text-ct-muted">综合熟练度</span><span className="text-ct-text font-mono">{((profile.proficiency as number) * 100).toFixed(0)}%</span></div>
+              {bar(profile.proficiency as number, 'bg-ct-accent')}
             </div>
-            {bar(profile.proficiency as number, 'bg-ct-accent')}
-          </div>
-          <div>
-            <div className="flex justify-between mb-1 text-sm">
-              <span className="text-ct-muted">稳定性</span>
-              <span className="text-ct-text font-mono">{((profile.stability as number) * 100).toFixed(0)}%</span>
+            <div>
+              <div className="flex justify-between mb-1 text-sm"><span className="text-ct-muted">稳定性</span><span className="text-ct-text font-mono">{((profile.stability as number) * 100).toFixed(0)}%</span></div>
+              {bar(profile.stability as number, 'bg-ct-success')}
             </div>
-            {bar(profile.stability as number, 'bg-ct-success')}
+            <div className="grid grid-cols-3 gap-3 pt-1">
+              <div><span className="text-ct-muted text-xs">做题数</span><p className="text-ct-text font-mono text-lg">{profile.attempts as number}</p></div>
+              <div><span className="text-ct-muted text-xs">距上次</span><p className="text-ct-text font-mono text-lg">{profile.forget_days as number} 天</p></div>
+              <div><span className="text-ct-muted text-xs">AC率</span><p className="text-ct-text font-mono text-lg">{((profile.ac_rate as number ?? 0) * 100).toFixed(0)}%</p></div>
+            </div>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-4 pt-1">
-          <div><span className="text-ct-muted text-xs">做题数</span><p className="text-ct-text font-mono text-lg">{profile.attempts as number}</p></div>
-          <div><span className="text-ct-muted text-xs">距离上次</span><p className="text-ct-text font-mono text-lg">{profile.forget_days as number} 天</p></div>
-          <div><span className="text-ct-muted text-xs">AC率</span><p className="text-ct-text font-mono text-lg">{((profile.ac_rate as number ?? 0) * 100).toFixed(0)}%</p></div>
-        </div>
-        {((profile.common_errors as string[])?.length ?? 0) > 0 && (
-          <div><span className="text-ct-muted text-xs block mb-1">常见错误</span>
-            <div className="flex flex-wrap gap-1">{(profile.common_errors as string[]).map((e, i) => (
-              <span key={i} className="rounded bg-ct-error-bg px-2 py-0.5 text-xs text-ct-error">{e}</span>
-            ))}</div>
+
+        {/* 6 维度弱项明细（紧凑行） */}
+        {ERROR_MODE_DIMS.some(d => modes[d.key] && Object.keys(modes[d.key]).length > 0) && (
+          <div className="pt-2 border-t border-ct-border/60">
+            <span className="text-ct-muted text-xs block mb-2">错误模式明细</span>
+            <div className="grid grid-cols-3 gap-x-4 gap-y-2">
+              {ERROR_MODE_DIMS.map(d => {
+                const tags = modes[d.key];
+                if (!tags || Object.keys(tags).length === 0) return (
+                  <div key={d.key} className="flex items-center gap-1.5"><span className="text-xs">{d.icon}</span><span className="text-xs text-ct-success font-medium">无弱项</span></div>
+                );
+                const topTags = Object.entries(tags)
+                  .sort((a, b) => b[1].count * b[1].severity - a[1].count * a[1].severity)
+                  .slice(0, 2);
+                return (
+                  <div key={d.key}>
+                    <div className="text-[11px] text-ct-muted mb-0.5">{d.label}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {topTags.map(([tag, info]) => (
+                        <span key={tag} className="rounded-full bg-ct-warn-bg px-1.5 py-0.5 text-[10px] font-medium text-ct-warn"
+                          title={`命中 ${info.count} · sev ${(info.severity*100).toFixed(0)}%`}>
+                          {tag} {(info.severity * 100).toFixed(0)}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
       </section>
 
+      {/* 下半：各知识点熟练度（管理后台专属） */}
       {tagEntries.length > 0 && (
         <section className="rounded-xl border border-ct-border bg-ct-surface p-5 space-y-3">
           <h3 className="text-sm font-semibold text-ct-text">各知识点熟练度（{tagEntries.length} 个）</h3>

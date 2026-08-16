@@ -72,3 +72,10 @@ export async function getReferenceCode(sid: string): Promise<{ code: string; tit
   if (!r.ok) throw new Error(`getReference failed: ${r.status}`);
   return r.json();
 }
+
+export async function analyzeTrace(sid: string): Promise<any> {
+  const r = await fetch(`${BASE}/session/${sid}/analyze`, { method: 'POST' });
+  if (!r.ok) throw new Error(`analyzeTrace failed: ${r.status}`);
+  const data = await r.json();
+  return data.analysis;
+}

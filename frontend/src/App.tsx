@@ -54,6 +54,7 @@ export default function App() {
     onSetProgressMsgs: s.setProgressMsgs,
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
         onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
+    analyzingTrace: s.analyzingTrace, onAnalyzeTrace: s.onAnalyzeTrace,
   };
   return <MainLayout {...mainProps} />;
 }

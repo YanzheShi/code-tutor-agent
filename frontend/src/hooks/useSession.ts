@@ -1,6 +1,6 @@
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createSession, getState, runCode, submitCode, getReferenceCode } from '../api/session';
+import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace } from '../api/session';
 import type { Message, ProblemMeta, RunResult, SessionStateResp, Submission } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
@@ -60,6 +60,42 @@ function getInitialPersist(): PersistedSession | null {
   return _cachedPersist;
 }
 
+// ── 独立轨迹分析：把后端结构化结论渲染成导师对话里的 markdown ──
+// 与能力画像解耦，仅展示。字段来自 profile/trace_insight.TraceAnalysisResult。
+function formatTraceAnalysis(a: any): string {
+  const lines: string[] = ['## 📊 你的做题轨迹分析'];
+  if (a?.summary) lines.push(`> ${a.summary}`);
+
+  if (a?.change_path) {
+    lines.push('', '**代码是怎么写出来的**', a.change_path);
+  }
+  if (a?.thinking_process) {
+    lines.push('', '**推断的解题思维**', a.thinking_process);
+  }
+
+  const tags: any[] = a?.weakness_tags || [];
+  if (tags.length) {
+    lines.push('', '**暴露的薄弱点**');
+    for (const t of tags) {
+      const sev = typeof t.severity === 'number' ? t.severity.toFixed(1) : '?';
+      lines.push(`- ${t.tag || '薄弱点'}（严重度 ${sev}）${t.evidence ? `：${t.evidence}` : ''}`);
+    }
+  }
+
+  const tips: any[] = a?.interview_tips || [];
+  if (tips.length) {
+    lines.push('', '**面试备考建议**');
+    for (const t of tips) {
+      lines.push(`- ${t.point || '建议'}${t.reason ? `：${t.reason}` : ''}`);
+    }
+  }
+
+  if (!a?.change_path && !a?.thinking_process && !tags.length && !tips.length) {
+    lines.push('', '本次轨迹未暴露明显薄弱点，保持节奏继续练习吧 💪');
+  }
+  return lines.join('\n');
+}
+
 export function useSession() {
   const initial = getInitialPersist();
   // 只恢复 main 屏（做题页）；loading/error/admin 刷新后回 welcome 更安全
@@ -92,6 +128,7 @@ export function useSession() {
   const [runResults, setRunResults] = useState<RunResult[] | null>(null);
   const [running, setRunning] = useState(false);
   const [submittingFlag, setSubmittingFlag] = useState(false);
+  const [analyzingTrace, setAnalyzingTrace] = useState(false);
   const [activeTabs, setActiveTabs] = useState<{ left: TabId; right: TabId }>({ left: 'desc', right: 'code' });
   const [tabPanel, setTabPanel] = useState<Record<TabId, 'left' | 'right'>>({ ...DEFAULT_TAB_PANEL });
   const [splitRatio, setSplitRatio] = useState(50);
@@ -274,7 +311,13 @@ export function useSession() {
         setTutorMessages(prev => [...prev, { role: 'tutor', content: summary }]);
         setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
       }
-    } catch (e) { setErrorMsg(String(e)); }
+    } catch (e) {
+      setErrorMsg(String(e));
+      // 运行失败必须可见：后端 400（如会话未就绪）此前只写 errorMsg，
+      // 而 errorMsg 仅在 error 屏展示，做题页静默无反馈=「点了没反应」。
+      setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ 运行失败：${String(e)}` }]);
+      setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+    }
     finally { setRunning(false); }
   }, [sessionId, editorCode, running, setTutorMessages]);
 
@@ -306,6 +349,42 @@ export function useSession() {
       setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat error)' }; return next; });
     }
   }, [chatInput, sessionId, readStream]);
+
+  // ── 独立轨迹分析（AC 后手动触发，结果展示在导师对话里，不回灌画像）──
+  const handleAnalyzeTrace = useCallback(async () => {
+    if (!sessionId || analyzingTrace) return;
+    setAnalyzingTrace(true);
+    const placeholder = '⏳ 正在分析你的做题轨迹…';
+    setTutorMessages(prev => [...prev, { role: 'tutor', content: placeholder, metadata: { kind: 'trace-analysis-loading' } }]);
+    setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+    try {
+      const result = await analyzeTrace(sessionId);
+      const md = formatTraceAnalysis(result);
+      setTutorMessages(prev => {
+        const next = [...prev];
+        let idx = -1;
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].metadata?.kind === 'trace-analysis-loading') { idx = i; break; }
+        }
+        const msg: Message = { role: 'tutor', content: md, metadata: { kind: 'trace-analysis' } };
+        if (idx >= 0) next[idx] = msg; else next.push(msg);
+        return next;
+      });
+    } catch {
+      setTutorMessages(prev => {
+        const next = [...prev];
+        let idx = -1;
+        for (let i = next.length - 1; i >= 0; i--) {
+          if (next[i].metadata?.kind === 'trace-analysis-loading') { idx = i; break; }
+        }
+        const msg: Message = { role: 'tutor', content: '⚠️ 轨迹分析失败了，稍后再试一次吧。', metadata: { kind: 'trace-analysis-error' } };
+        if (idx >= 0) next[idx] = msg; else next.push(msg);
+        return next;
+      });
+    } finally {
+      setAnalyzingTrace(false);
+    }
+  }, [sessionId, analyzingTrace, setTutorMessages]);
 
   // ── 下一题 / 新会话 ──
   const handleNext = useCallback(async () => {
@@ -427,7 +506,7 @@ export function useSession() {
   return {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
-    running, submittingFlag, activeTabs, tabPanel, splitRatio, chatInput,
+    running, submittingFlag, analyzingTrace, activeTabs, tabPanel, splitRatio, chatInput,
     sessionId, status, isDialogPhase: mode === 'agent' && !problem && !nextProblemLoading,
     isGenerating: mode === 'agent' && status === 'awaiting_problem',
     isAC: latestVerdict === 'AC', isDone: latestVerdict === 'AC',
@@ -439,6 +518,7 @@ export function useSession() {
     flushEditTrace: editTrace.flush,
     markEditTrace: editTrace.mark,
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
+    onAnalyzeTrace: handleAnalyzeTrace,
     onBackToWelcome: handleBackToWelcome,
     onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,
     setScreen,

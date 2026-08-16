@@ -109,6 +109,25 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
+    # ── 编辑轨迹（前端实时采集，按 session 聚合；供提交时错误模式分析）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS edit_traces (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT DEFAULT 'default',
+            events_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 独立轨迹分析结论（纯展示，不回灌画像；按 session 缓存）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trace_analysis (
+            session_id TEXT PRIMARY KEY,
+            result_json TEXT NOT NULL DEFAULT '{}',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     try:
         cursor.execute("ALTER TABLE problems DROP COLUMN solution")
     except sqlite3.OperationalError:
@@ -631,6 +650,112 @@ def update_profile_on_result(
     logger.info("update_profile(%s) → verdict=%s, proficiency=%.2f, attempts=%d",
                 topic, verdict, profile.proficiency, profile.attempts)
     return profile
+
+
+# ── 编辑轨迹 + 错误模式画像（error-mode-tracking 特性）──
+
+
+def save_edit_trace(session_id: str, user_id: str, events: list[dict]) -> None:
+    """累计保存某会话的编辑轨迹事件（UPSERT + 追加）。
+
+    frontend 每次 flush 只发送自上次 flush 以来的增量事件；后端读旧 →
+    追加 → 写回，保证多次 flush 的事件不丢。整个读改写在一个连接事务内完成。
+    """
+    def _do(cursor):
+        row = cursor.execute(
+            "SELECT events_json FROM edit_traces WHERE session_id = ?", (session_id,)
+        ).fetchone()
+        if row:
+            old = json.loads(row["events_json"] or "[]")
+            merged = old + list(events)
+            cursor.execute(
+                "UPDATE edit_traces SET events_json = ?, user_id = ?, updated_at = CURRENT_TIMESTAMP "
+                "WHERE session_id = ?",
+                (json.dumps(merged, ensure_ascii=False), user_id, session_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO edit_traces (session_id, user_id, events_json) VALUES (?, ?, ?)",
+                (session_id, user_id, json.dumps(list(events), ensure_ascii=False)),
+            )
+    try:
+        _with_conn(_do)
+        logger.info("save_edit_trace() — session=%s, +%d events", session_id, len(events))
+    except Exception as exc:
+        logger.error("save_edit_trace(%s) failed: %s", session_id, exc)
+        raise
+
+
+def get_edit_trace(session_id: str) -> list[dict]:
+    """读取某会话的编辑轨迹事件列表。无记录 / 出错均返回 []。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT events_json FROM edit_traces WHERE session_id = ?", (session_id,)
+        ).fetchone())
+        if not row:
+            return []
+        return json.loads(row["events_json"] or "[]")
+    except Exception as exc:
+        logger.error("get_edit_trace(%s) failed: %s", session_id, exc)
+        return []
+
+
+def save_trace_analysis(session_id: str, result: dict) -> None:
+    """缓存某会话的独立轨迹分析结论（UPSERT，按 session 维度）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO trace_analysis (session_id, result_json) VALUES (?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET "
+            "result_json = excluded.result_json, created_at = CURRENT_TIMESTAMP",
+            (session_id, json.dumps(result, ensure_ascii=False)),
+        ))
+        logger.info("save_trace_analysis() — session=%s", session_id)
+    except Exception as exc:
+        logger.error("save_trace_analysis(%s) failed: %s", session_id, exc)
+        raise
+
+
+def get_trace_analysis(session_id: str) -> Optional[dict]:
+    """读取某会话已缓存的轨迹分析结论。无记录 / 出错均返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT result_json FROM trace_analysis WHERE session_id = ?", (session_id,)
+        ).fetchone())
+        if not row:
+            return None
+        return json.loads(row["result_json"] or "{}")
+    except Exception as exc:
+        logger.error("get_trace_analysis(%s) failed: %s", session_id, exc)
+        return None
+
+
+def apply_error_mode_deltas(
+    user_id: str,
+    deltas: list,
+    verdict_boost: bool = False,
+) -> dict:
+    """把错误模式增量合并进用户的 DBProfile.error_modes（命中衰减 + 加权合并 + 封顶）。
+
+    Args:
+        user_id: 画像所属用户（单用户模式为 "default"）。错误模式画像挂在
+            DBProfile 上（V1 全局层），所以按 user_id 而非 session_id 写入。
+        deltas: list[ErrorModeDelta]（来自编辑轨迹分析或判题失败补充 feeder）。
+        verdict_boost: True 时对 deltas 整体 ×1.3 再合并（判题失败补充 feeder）。
+
+    Returns:
+        合并后的 error_modes dict。
+    """
+    from code_tutor_agent.profile.weakness import apply_deltas, boost_verdict_deltas
+
+    profile = get_profile(user_id)
+    if verdict_boost:
+        deltas = boost_verdict_deltas(deltas)
+    new_modes = apply_deltas(profile.error_modes, deltas)
+    profile.error_modes = new_modes
+    save_profile(profile, user_id)
+    logger.info("apply_error_mode_deltas() — user=%s, dims=%d, verdict_boost=%s",
+                user_id, len(new_modes), verdict_boost)
+    return new_modes
 
 
 # ── User profile v2 (per-tag, from profile module) ──
