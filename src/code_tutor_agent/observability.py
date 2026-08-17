@@ -78,6 +78,24 @@ except Exception:  # pragma: no cover - 启动期绝不因可观测层崩溃
     pass
 
 
+# ── Token 用量回调(零侵入采集;懒加载避免循环导入)──
+_TOKEN_HANDLER = None
+
+
+def _token_handler():
+    """返回(缓存)TokenUsageCallbackHandler 单例,挂到 graph.invoke 的 config 上。"""
+    global _TOKEN_HANDLER
+    if _TOKEN_HANDLER is None:
+        try:
+            from code_tutor_agent.token_usage.callback import TokenUsageCallbackHandler
+
+            _TOKEN_HANDLER = TokenUsageCallbackHandler()
+        except Exception as exc:  # 采集层故障绝不影响主流程
+            logger.warning("[observability] token handler init failed (ignored): %s", exc)
+            return None
+    return _TOKEN_HANDLER
+
+
 # ── run config 构造 ──────────────────────────────────────────────────────────
 def build_run_config(
     sid: str,
@@ -113,6 +131,9 @@ def build_run_config(
         "metadata": metadata,
         "tags": tags,
     }
+    handler = _token_handler()
+    if handler is not None:
+        config["callbacks"] = [handler]
     if run_name is not None:
         config["run_name"] = run_name
     return config

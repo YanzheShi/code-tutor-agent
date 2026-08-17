@@ -148,6 +148,51 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
+    # ── Token 用量明细(成本计量,见 docs/token-cost-control-design.md)──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            session_id TEXT DEFAULT '',
+            user_id TEXT DEFAULT 'default',
+            purpose TEXT NOT NULL,
+            model_alias TEXT DEFAULT '',
+            model_name TEXT DEFAULT '',
+            mode TEXT DEFAULT '',
+            topic TEXT DEFAULT '',
+            difficulty TEXT DEFAULT '',
+            problem_id INTEGER DEFAULT 0,
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            cache_creation_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            total_tokens INTEGER DEFAULT 0,
+            cost REAL DEFAULT 0.0,
+            latency_ms INTEGER DEFAULT 0,
+            run_id TEXT DEFAULT ''
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_purpose ON token_usage(purpose)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_token_usage_session ON token_usage(session_id)")
+
+    # ── Token 用量按 日期×purpose×model×user 预聚合(报表免全表扫)──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS token_usage_daily (
+            day TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            model_alias TEXT NOT NULL,
+            user_id TEXT NOT NULL DEFAULT 'default',
+            call_count INTEGER DEFAULT 0,
+            prompt_tokens INTEGER DEFAULT 0,
+            completion_tokens INTEGER DEFAULT 0,
+            cache_creation_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            cost REAL DEFAULT 0.0,
+            PRIMARY KEY (day, purpose, model_alias, user_id)
+        )
+    """)
+
 
 # ── helpers ──
 
@@ -898,3 +943,436 @@ def save_user_memory(memory: dict, user_id: str = MEMORY_USER_ID) -> None:
                     user_id, len(memory.get("behavior", [])), len(memory.get("observations", [])))
     except Exception as exc:
         logger.warning("save_user_memory(%s) failed: %s", user_id, exc)
+
+
+# ── Token 用量(成本计量,见 docs/token-cost-control-design.md)──
+
+from datetime import datetime, timedelta  # noqa: E402  (本文件末尾聚合查询专用)
+
+_DATE_FMT = "%Y-%m-%d"
+
+
+def _parse_date(d: str) -> datetime:
+    return datetime.strptime(d, _DATE_FMT)
+
+
+def _fmt_date(dt: datetime) -> str:
+    return dt.strftime(_DATE_FMT)
+
+
+def _date_n_days_ago(n: int) -> str:
+    return _fmt_date(datetime.now() - timedelta(days=n))
+
+
+def _days_between(f: str | None, t: str | None) -> int:
+    if not f or not t:
+        return 30
+    return max(1, (_parse_date(t) - _parse_date(f)).days + 1)
+
+
+def _shift_period(f: str, t: str, days: int) -> tuple[str, str]:
+    """返回等长的前一个周期 [from, to](按天)。"""
+    ft, tt = _parse_date(f), _parse_date(t)
+    prev_to = ft - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=days - 1)
+    return _fmt_date(prev_from), _fmt_date(prev_to)
+
+
+def _ts_filter(from_date: str | None, to_date: str | None,
+               model_alias: str | None = None) -> tuple[list[str], list]:
+    where, params = [], []
+    if from_date:
+        where.append("ts >= ?")
+        params.append(from_date)
+    if to_date:
+        where.append("ts <= ?")
+        params.append(to_date + " 23:59:59")
+    # 模型筛选:"全部" 为空,传具体 alias 则限定
+    if model_alias and model_alias != "全部":
+        where.append("model_alias = ?")
+        params.append(model_alias)
+    return where, params
+
+
+def insert_token_usage_batch(rows: list[tuple]) -> None:
+    """批量写入 token_usage 明细(由异步 sink 调用)。
+
+    ``ts`` 显式写入**本地**时间,与回调里的 ``ts_day``、查询用的
+    ``_fmt_date(datetime.now())`` 保持同一时区基准(CURRENT_TIMESTAMP 是 UTC,
+    跨时区会与「今日」过滤错配)。
+    """
+    if not rows:
+        return
+    try:
+        _with_conn(lambda cursor: cursor.executemany(
+            "INSERT INTO token_usage "
+            "(ts,session_id,user_id,purpose,model_alias,model_name,mode,topic,difficulty,problem_id,"
+            "prompt_tokens,completion_tokens,cache_creation_tokens,cache_read_tokens,total_tokens,cost,latency_ms,run_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(_local_ts(),) + row for row in rows],
+        ))
+    except Exception as exc:  # 落库失败绝不抛回主流程
+        logger.error("insert_token_usage_batch() failed: %s", exc)
+
+
+def _local_ts() -> str:
+    """本地当前时间戳(YYYY-MM-DD HH:MM:SS),供 token 明细落库统一时区。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def upsert_token_usage_daily_batch(rows: list[tuple]) -> None:
+    """按 (day,purpose,model_alias,user_id) UPSERT 预聚合。"""
+    if not rows:
+        return
+    try:
+        _with_conn(lambda cursor: cursor.executemany(
+            "INSERT INTO token_usage_daily "
+            "(day,purpose,model_alias,user_id,call_count,prompt_tokens,completion_tokens,"
+            "cache_creation_tokens,cache_read_tokens,cost) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(day,purpose,model_alias,user_id) DO UPDATE SET "
+            "call_count=call_count+excluded.call_count, "
+            "prompt_tokens=prompt_tokens+excluded.prompt_tokens, "
+            "completion_tokens=completion_tokens+excluded.completion_tokens, "
+            "cache_creation_tokens=cache_creation_tokens+excluded.cache_creation_tokens, "
+            "cache_read_tokens=cache_read_tokens+excluded.cache_read_tokens, "
+            "cost=cost+excluded.cost",
+            rows,
+        ))
+    except Exception as exc:
+        logger.error("upsert_token_usage_daily_batch() failed: %s", exc)
+
+
+def _period_totals(from_date: str | None, to_date: str | None,
+                   model_alias: str | None = None) -> dict:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = ("SELECT COALESCE(SUM(cost),0), COALESCE(SUM(1),0), COALESCE(SUM(prompt_tokens),0), "
+           "COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cache_creation_tokens),0), "
+           "COALESCE(SUM(cache_read_tokens),0) FROM token_usage")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    row = _with_conn(lambda c: c.execute(sql, params).fetchone())
+    return {
+        "cost": float(row[0] or 0), "calls": int(row[1] or 0),
+        "prompt": int(row[2] or 0), "completion": int(row[3] or 0),
+        "cache_creation": int(row[4] or 0), "cache_read": int(row[5] or 0),
+    }
+
+
+def _purpose_totals(from_date: str | None, to_date: str | None,
+                    model_alias: str | None = None) -> dict:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = ("SELECT purpose, COALESCE(SUM(cost),0), COALESCE(SUM(1),0), "
+           "COALESCE(SUM(prompt_tokens),0), COALESCE(SUM(completion_tokens),0), "
+           "COALESCE(SUM(cache_creation_tokens),0), COALESCE(SUM(cache_read_tokens),0) "
+           "FROM token_usage")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY purpose"
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    out: dict = {}
+    for r in rows:
+        out[r[0]] = {
+            "cost": float(r[1] or 0), "calls": int(r[2] or 0),
+            "prompt": int(r[3] or 0), "completion": int(r[4] or 0),
+            "cache_creation": int(r[5] or 0), "cache_read": int(r[6] or 0),
+        }
+    return out
+
+
+def _daily_cost_series(from_date: str | None, to_date: str | None,
+                       model_alias: str | None = None) -> list[dict]:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = "SELECT substr(ts,1,10) AS day, COALESCE(SUM(cost),0) FROM token_usage"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY day ORDER BY day"
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    return [{"day": r[0], "cost": round(float(r[1]), 4)} for r in rows]
+
+
+def _daily_token_series(from_date: str | None, to_date: str | None,
+                        model_alias: str | None = None) -> list[dict]:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = ("SELECT substr(ts,1,10) AS day, COALESCE(SUM(prompt_tokens),0), "
+           "COALESCE(SUM(completion_tokens),0), COALESCE(SUM(cache_read_tokens),0), "
+           "COALESCE(SUM(cache_creation_tokens),0) FROM token_usage")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY day ORDER BY day"
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    return [{"day": r[0], "prompt": int(r[1]), "completion": int(r[2]),
+             "cache_read": int(r[3]), "cache_creation": int(r[4])} for r in rows]
+
+
+def _token_by_purpose(from_date: str | None, to_date: str | None,
+                      model_alias: str | None = None) -> list[dict]:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = ("SELECT purpose, COALESCE(SUM(prompt_tokens),0) + COALESCE(SUM(completion_tokens),0) "
+           "FROM token_usage")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY purpose ORDER BY 2 DESC"
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    return [{"purpose": r[0], "tokens": int(r[1] or 0)} for r in rows]
+
+
+def _cost_by_purpose(from_date: str | None, to_date: str | None,
+                     model_alias: str | None = None) -> list[dict]:
+    where, params = _ts_filter(from_date, to_date, model_alias)
+    sql = "SELECT purpose, COALESCE(SUM(cost),0) FROM token_usage"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY purpose ORDER BY 2 DESC"
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    return [{"purpose": r[0], "cost": round(float(r[1]), 4)} for r in rows]
+
+
+def query_token_overview(from_date: str | None, to_date: str | None,
+                         model_alias: str | None = None) -> dict:
+    """概览:KPI + 成本/Tokene 趋势 + 各模块成本/Token 占比 + Top5。
+
+    KPI 与趋势、占比均跟随所选范围与模型联动;KPI 环比对比的是
+    **上一等长周期**(近30天对比再往前30天,今日对比昨日)。
+    """
+    from code_tutor_agent.token_usage.cost import cache_hit_rate
+
+    if not from_date:
+        from_date = _date_n_days_ago(30)
+    if not to_date:
+        to_date = _fmt_date(datetime.now())
+
+    # ── KPI:当前区间 + 上一等长区间(与范围/模型联动)──
+    d0 = datetime.strptime(from_date, "%Y-%m-%d")
+    d1 = datetime.strptime(to_date, "%Y-%m-%d")
+    duration = max((d1 - d0).days + 1, 1)
+    prev_end = d0 - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=duration - 1)
+
+    cur = _period_totals(from_date, to_date, model_alias)
+    prev = _period_totals(_fmt_date(prev_start), _fmt_date(prev_end), model_alias)
+
+    hit_cur = cache_hit_rate(cur)
+    hit_prev = cache_hit_rate(prev)
+
+    def _delta(a: float, b: float) -> float:
+        return round((a - b) / b * 100, 1) if b else 0.0
+
+    def _tokens(t: dict) -> float:
+        return t["prompt"] + t["completion"]
+
+    avg_day_cost = cur["cost"] / duration
+    avg_prev_day_cost = prev["cost"] / duration
+
+    kpis = [
+        {"label": "总成本", "value": round(cur["cost"], 2),
+         "delta": _delta(cur["cost"], prev["cost"])},
+        {"label": "总调用", "value": cur["calls"],
+         "delta": _delta(cur["calls"], prev["calls"])},
+        {"label": "缓存命中率", "value": round(hit_cur * 100, 1),
+         "delta": round((hit_cur - hit_prev) * 100, 1)},
+        {"label": "预估月费", "value": round(avg_day_cost * 30, 2),
+         "delta": _delta(avg_day_cost, avg_prev_day_cost)},
+        {"label": "总 Token", "value": _tokens(cur),
+         "delta": _delta(_tokens(cur), _tokens(prev))},
+        {"label": "输入 Token", "value": cur["prompt"],
+         "delta": _delta(cur["prompt"], prev["prompt"])},
+        {"label": "输出 Token", "value": cur["completion"],
+         "delta": _delta(cur["completion"], prev["completion"])},
+        {"label": "缓存读", "value": cur["cache_read"],
+         "delta": _delta(cur["cache_read"], prev["cache_read"])},
+        {"label": "缓存写", "value": cur["cache_creation"],
+         "delta": _delta(cur["cache_creation"], prev["cache_creation"])},
+    ]
+
+    # ── 趋势 / 占比 / Top5:随筛选范围 + 模型 ──
+    trend = _daily_cost_series(from_date, to_date, model_alias)
+    token_trend = _daily_token_series(from_date, to_date, model_alias)
+    share = _cost_by_purpose(from_date, to_date, model_alias)
+    total = sum(x["cost"] for x in share) or 1.0
+    module_share = [
+        {"purpose": x["purpose"], "cost": x["cost"], "pct": round(x["cost"] / total * 100, 1)}
+        for x in share
+    ]
+    t_share = _token_by_purpose(from_date, to_date, model_alias)
+    t_total = sum(x["tokens"] for x in t_share) or 1
+    module_token_share = [
+        {"purpose": x["purpose"], "tokens": x["tokens"], "pct": round(x["tokens"] / t_total * 100, 1)}
+        for x in t_share
+    ]
+    top = sorted(share, key=lambda x: -x["cost"])[:5]
+    return {
+        "kpis": kpis, "trend": trend, "tokenTrend": token_trend,
+        "moduleShare": module_share, "moduleTokenShare": module_token_share,
+        "topPurposes": top, "totalCost": round(cur["cost"], 2),
+        "totalCalls": cur["calls"],
+        "range": {"from": from_date, "to": to_date, "model": model_alias or "全部"},
+    }
+
+
+def query_token_purposes(from_date: str | None, to_date: str | None,
+                         model_alias: str | None = None) -> list[dict]:
+    """按业务用途统计(含环比)。"""
+    from code_tutor_agent.token_usage.cost import cache_hit_rate, category_of
+
+    if not from_date:
+        from_date = _date_n_days_ago(30)
+    if not to_date:
+        to_date = _fmt_date(datetime.now())
+
+    cur = _purpose_totals(from_date, to_date, model_alias)
+    days = _days_between(from_date, to_date)
+    pf, pt = _shift_period(from_date, to_date, days)
+    prev = _purpose_totals(pf, pt, model_alias)
+
+    rows = []
+    for p, agg in cur.items():
+        rec = {
+            "prompt_tokens": agg["prompt"], "completion_tokens": agg["completion"],
+            "cache_creation_tokens": agg["cache_creation"], "cache_read_tokens": agg["cache_read"],
+        }
+        hit = round(cache_hit_rate(rec) * 100, 1)
+        prev_cost = prev.get(p, {}).get("cost", 0.0) or 0.0
+        delta = round((agg["cost"] - prev_cost) / prev_cost * 100, 1) if prev_cost else 0.0
+        rows.append({
+            "purpose": p, "category": category_of(p), "calls": agg["calls"],
+            "promptK": round(agg["prompt"] / 1000, 1), "completionK": round(agg["completion"] / 1000, 1),
+            "cacheReadK": round(agg["cache_read"] / 1000, 1), "hit": hit,
+            "cost": round(agg["cost"], 2), "delta": delta,
+        })
+    rows.sort(key=lambda x: -x["cost"])
+    return rows
+
+
+def query_token_cache(from_date: str | None, to_date: str | None,
+                      model_alias: str | None = None) -> list[dict]:
+    """各用途缓存命中率 + 失效诊断。"""
+    from code_tutor_agent.token_usage.cost import cache_hit_rate, category_of
+
+    if not from_date:
+        from_date = _date_n_days_ago(30)
+    if not to_date:
+        to_date = _fmt_date(datetime.now())
+
+    cur = _purpose_totals(from_date, to_date, model_alias)
+    rows = []
+    for p, agg in cur.items():
+        rec = {
+            "prompt_tokens": agg["prompt"], "completion_tokens": agg["completion"],
+            "cache_creation_tokens": agg["cache_creation"], "cache_read_tokens": agg["cache_read"],
+        }
+        hit = round(cache_hit_rate(rec) * 100, 1)
+        tip = None
+        if hit < 40:
+            tip = (
+                "system prompt 过短且用户对话前置，前缀不稳定 → 把固定评分 rubric / 抽取 schema 移到 prompt 最前"
+                if p == "memory-extract" else
+                "判题 system prompt 含动态题目正文，建议拆为「固定评分规则(前)+题目(后)」两截"
+                if p == "judge" else
+                "工具调用链中用户代码 / 执行结果置于 prompt 前部，固定 tool schema 与规则应前置、动态输入后置"
+                if p == "tutor-eval" else
+                "编辑轨迹把用户代码 / diff 变化量放在最前，固定追踪规则应前置、动态轨迹内容后置"
+                if p == "edit-trace" else
+                "前缀不稳定，建议将固定内容(system prompt / 规则)前置、动态内容(用户代码 / 题目 / 对话)后置"
+            )
+        rows.append({"purpose": p, "category": category_of(p), "hit": hit, "tip": tip})
+    rows.sort(key=lambda x: -x["hit"])
+    return rows
+
+
+def query_token_budget() -> dict:
+    """预算使用 + 预警事件(单用户:平台日 + 用户日 + 单 Session 三层)。"""
+    from code_tutor_agent.config import get_token_daily_budget, get_token_session_budget, get_token_user_daily_budget
+
+    today = _fmt_date(datetime.now())
+    today_tot = _period_totals(today, today)
+    used = today_tot["cost"]
+    daily_limit = get_token_daily_budget()
+    user_daily_limit = get_token_user_daily_budget()
+
+    row = _with_conn(lambda c: c.execute(
+        "SELECT session_id, COALESCE(SUM(cost),0) FROM token_usage WHERE ts >= ? "
+        "GROUP BY session_id ORDER BY 2 DESC LIMIT 1",
+        (today,),
+    ).fetchone())
+    max_sid = row[0] if row else ""
+    max_session = float(row[1]) if row else 0.0
+    session_limit = get_token_session_budget()
+
+    budgets = [
+        {"name": "你的日预算（总额）", "used": round(used, 2), "limit": daily_limit},
+        {"name": "用户日预算（每人）", "used": round(used, 2), "limit": user_daily_limit},
+        {"name": "单 Session 预算", "used": round(max_session, 2), "limit": session_limit},
+    ]
+
+    cache_rows = query_token_cache(today, today)
+    cur = _purpose_totals(today, today)
+    pf, pt = _shift_period(today, today, 1)
+    prev = _purpose_totals(pf, pt)
+
+    alerts = []
+    if daily_limit and used >= 0.9 * daily_limit:
+        alerts.append({
+            "level": "error",
+            "title": f"今日成本已用 {round(used / daily_limit * 100)}% 日预算",
+            "detail": "阈值超限后将告警并在 get_llm 入口熔断，出题降级至 static_pool",
+        })
+    if max_sid and session_limit and max_session >= 0.9 * session_limit:
+        alerts.append({
+            "level": "error",
+            "title": f"Session {max_sid} 累计 ¥{max_session:.1f} / ¥{session_limit:.1f}（{round(max_session / session_limit * 100)}%）",
+            "detail": "下次出题将触发降级至 static_pool",
+        })
+    for r in cache_rows:
+        if r["hit"] < 40:
+            alerts.append({
+                "level": "warn",
+                "title": f"{r['purpose']} 缓存命中率仅 {r['hit']}%",
+                "detail": "前缀重排后预计节省输入成本",
+            })
+    for p, agg in cur.items():
+        prev_cost = prev.get(p, {}).get("cost", 0.0) or 0.0
+        if prev_cost and agg["cost"] >= prev_cost * 1.1:
+            d = round((agg["cost"] - prev_cost) / prev_cost * 100, 1)
+            alerts.append({
+                "level": "warn",
+                "title": f"{p} 用途成本环比 +{d}%",
+                "detail": "检查 max_tokens / temperature 是否可下调",
+            })
+    return {"budgets": budgets, "alerts": alerts}
+
+
+def query_token_usage_recent(limit: int = 100, from_date: str | None = None,
+                              to_date: str | None = None) -> list[dict]:
+    """调用明细(token_usage 明细表),按时间倒序。"""
+    where, params = _ts_filter(from_date, to_date)
+    sql = ("SELECT ts, session_id, purpose, model_alias, prompt_tokens, completion_tokens, "
+           "cache_read_tokens, cost, latency_ms FROM token_usage")
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY ts DESC LIMIT ?"
+    params.append(int(limit))
+    rows = _with_conn(lambda c: c.execute(sql, params).fetchall())
+    return [{
+        "ts": r[0], "session_id": r[1], "purpose": r[2], "model_alias": r[3],
+        "prompt_tokens": r[4], "completion_tokens": r[5], "cache_read_tokens": r[6],
+        "cost": round(float(r[7]), 4), "latency_ms": r[8],
+    } for r in rows]
+
+
+def export_token_usage_csv(from_date: str | None = None, to_date: str | None = None,
+                           limit: int = 5000) -> str:
+    """导出调用明细为 CSV 字符串。"""
+    import csv
+    import io
+
+    rows = query_token_usage_recent(limit=limit, from_date=from_date, to_date=to_date)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["ts", "session_id", "purpose", "model_alias",
+                "prompt_tokens", "completion_tokens", "cache_read_tokens", "cost", "latency_ms"])
+    for r in rows:
+        w.writerow([r["ts"], r["session_id"], r["purpose"], r["model_alias"],
+                    r["prompt_tokens"], r["completion_tokens"], r["cache_read_tokens"],
+                    r["cost"], r["latency_ms"]])
+    return buf.getvalue()

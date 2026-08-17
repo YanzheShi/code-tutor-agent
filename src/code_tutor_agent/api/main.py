@@ -25,6 +25,7 @@ from code_tutor_agent.api.routers import (
     problems,
     run,
     session,
+    token,
 )
 from code_tutor_agent.progress import _generation_progress
 
@@ -123,6 +124,7 @@ app.include_router(run.router, prefix="/session", tags=["run"])
 app.include_router(chat.router, prefix="/session", tags=["chat"])
 app.include_router(problems.router, tags=["problems"])
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(token.router, prefix="/admin/token", tags=["token"])
 
 
 @app.get("/health")

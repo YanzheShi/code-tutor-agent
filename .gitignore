@@ -21,31 +21,19 @@ node_modules/
 *.db-wal
 *.db-shm
 *.sqlite
-
-# === IDE ===
-.idea/
-.vscode/
-*.swp
-*.swo
-.claude/
-
-# === 工具缓存 ===
-.ruff_cache/
-.pytest_cache/
-
-# === 项目运行时产物 ===
-chroma_db/              # 向量库（代码默认路径）
+chroma_db/
 data/chroma_db/
 data/chroma/
-data/vault/             # 个人笔记，不进 git
-data/db/                # SQLite 数据库文件
+data/vault/
+data/db/
 data/*.db
-data/checkpoints/       # LangGraph checkpointer
-data/edit-traces/        # 前端编辑轨迹采集落地（spike 期调试用）
-logs/                   # 运行日志
-models/                 # reranker 模型 ~1.1GB
-eval/results/           # 评测结果
-# 运行时状态文件
+data/checkpoints/
+data/edit-traces/
+logs/
+models/
+eval/results/
+
+# === 运行时状态文件 ===
 current_problem.json
 awaiting_problem
 awaiting_submit
@@ -62,23 +50,48 @@ notebooks/.ipynb_checkpoints/
 .DS_Store
 Thumbs.db
 
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+
 # === Agent / 工具本地数据（不进 git）===
-# agent 运行时安装的 skills 等（含大量 .agents/skills/*）
+.claude/
 .agents/
 .agent/
-# codebuddy 计划 / 本地数据
 .codebuddy/
 .workbuddy/
 
-# === 运行时日志 / 测试 dump（优化清理）===
+# === 运行时日志 / 测试 dump ===
 clear_log.txt
 *_output.txt
 *_tests.txt
 *_summary.txt
 *_full.log
+excalidraw.log
 
-# === 数据库时间戳备份（code_tutor.db.bak_YYYYMMDD_HHMMSS）===
+# === 数据库时间戳备份（code_tutor.db.bak_*）===
 *.bak_*
 
 # === 临时源码 ===
 src/code_tutor_agent/agents/_tmp_*.py
+
+# === 本地杂项（个人/调试/工具产物，不进 git）===
+learning-logs/
+_trash/
+debug/
+tmp.py
+a.json
+excalidraw-mcp-1.0.0.tgz
+scripts/tb_results.json
+
+# === 设计文档 / 流程图（本地评审用，不进 git）===
+docs/
+*.mmd
+*.mermaid
+
+# === IDE / 工具本地项目文件 ===
+*.srctrlbm
+*.srctrldb
+*.srctrlprj

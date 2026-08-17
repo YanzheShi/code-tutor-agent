@@ -10,6 +10,7 @@ Reads from .env:
 """
 
 import os
+
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
 
@@ -49,6 +50,8 @@ PURPOSE_CONFIGS = {
     "dialog":               {"alias": "default", "temperature": 0.3},
     "dialog-stream":        {"alias": "default", "temperature": 0.7, "streaming": True},
     "judge":                {"alias": "default", "temperature": 0.7, "max_tokens": 4096},
+    # 详细题解(agent_problem._get_solution_llm)
+    "tutor":                {"alias": "default", "temperature": 0.4},
     # 这里
     "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 16384},
 
@@ -118,6 +121,19 @@ def get_llm(purpose: str, **kwargs):
             f"请检查 .env 文件中的环境变量"
         )
 
+    # 注入 purpose / model 元数据:供 TokenUsageCallbackHandler 在 on_llm_end
+    # 零侵入地归因(无需改动任何 agent 代码)。
+    #
+    # 注意:必须走**构造参数** `metadata=`(模型实例属性),而不是 `with_config`。
+    # 业务代码拿到模型后还会 `bind_tools` / `with_structured_output`,
+    # 这两个调用会**丢弃** `with_config` 绑定的 config(返回新实例,config 归零),
+    # 只有模型实例自带的 `self.metadata` 会随 bind/结构化包装存活,并在每次
+    # LLM 运行时与 graph 级 config metadata 合并进 on_llm_start 的回调上下文。
+    config["metadata"] = {
+        "purpose": purpose,
+        "model_alias": alias,
+        "model_name": config.get("model", "") or "",
+    }
     return init_chat_model(**config)
 
 
@@ -150,3 +166,29 @@ def get_cleanup_interval_minutes() -> int:
     从环境变量 SESSION_CLEANUP_INTERVAL_MINUTES 读取，默认 60（1 小时）。
     """
     return int(os.getenv("SESSION_CLEANUP_INTERVAL_MINUTES", "60"))
+
+
+# ── Token 成本预算阈值（单用户实例）──
+def _budget_env(name: str, default: str) -> float:
+    """读预算环境变量;空值视为未设置(回退默认),避免 .env 留空导致 float('') 崩溃。"""
+    raw = os.getenv(name)
+    return float(raw) if raw and raw.strip() else float(default)
+
+
+def get_token_daily_budget() -> float:
+    """你的日预算（总额），单位元。默认 50.0。超限触发告警/熔断。"""
+    return _budget_env("TOKEN_DAILY_BUDGET", "50.0")
+
+
+def get_token_session_budget() -> float:
+    """单 Session 预算，单位元。默认 5.0。超限触发出题降级至 static_pool。"""
+    return _budget_env("TOKEN_SESSION_BUDGET", "5.0")
+
+
+def get_token_user_daily_budget() -> float:
+    """用户日预算(第三层:按用户配额),单位元。默认 20.0。超限触发告警/熔断。
+
+    三层预算:平台日预算(总额) / 用户日预算(按人配额) / 单 Session 预算。
+    单用户实例下,用户日预算用于演示层级语义,与平台日预算解耦可独立配置。
+    """
+    return _budget_env("TOKEN_USER_DAILY_BUDGET", "20.0")

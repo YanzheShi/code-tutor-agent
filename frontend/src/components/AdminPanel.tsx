@@ -1,13 +1,15 @@
 /** Admin panel — password-protected management.
  *
- * Three sections:
+ * Four sections:
  *   题库管理 — CRUD problems
  *   提交管理 — browse all submissions
  *   查看画像 — user proficiency profile (radar + per-topic detail)
+ *   成本中心 — token 用量 / 成本 / 缓存命中统计
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
+import CostCenter from './CostCenter';
 
 const BASE = API_BASE;
 
@@ -116,7 +118,7 @@ interface AdminSubmission {
   verdict: string; code: string; created_at: string;
 }
 
-type AdminSection = 'questions' | 'submissions' | 'profile';
+type AdminSection = 'questions' | 'submissions' | 'profile' | 'cost';
 type AdminTab = 'list' | 'view' | 'edit';
 
 const diffColorMap: Record<string, string> = {
@@ -380,6 +382,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     { id: 'questions', label: '题库管理', icon: '📚' },
     { id: 'submissions', label: '提交管理', icon: '📝' },
     { id: 'profile', label: '查看画像', icon: '📊' },
+    { id: 'cost', label: '成本中心', icon: '💸' },
   ];
 
   // ── Questions view (non-list) ──
@@ -562,6 +565,9 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
 
       {/* Profile */}
       {section === 'profile' && <AdminProfileView />}
+
+      {/* Cost center */}
+      {section === 'cost' && <CostCenter adminToken={adminToken ?? ''} />}
     </div>
   );
 }

@@ -133,6 +133,16 @@ class AdminPasswordRequest(BaseModel):
     password: Optional[str] = Field(default="", description="Admin password")
 
 
+class TokenStatsRequest(BaseModel):
+    """Token 成本统计请求(需管理员密码)。"""
+
+    password: Optional[str] = Field(default="", description="Admin password")
+    from_date: Optional[str] = Field(default=None, description="起始日期 YYYY-MM-DD")
+    to_date: Optional[str] = Field(default=None, description="结束日期 YYYY-MM-DD")
+    model_alias: Optional[str] = Field(default=None, description="模型筛选(default/secondary/全部,空=全部)")
+    limit: int = Field(default=100, description="调用明细返回条数上限")
+
+
 class AdminProblemOut(BaseModel):
     """Full problem representation for admin listing."""
     id: int

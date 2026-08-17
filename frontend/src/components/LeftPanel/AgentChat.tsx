@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../../types/session';
 import Markdown from '../Markdown';
-import DifficultyTopicSelector, { type DiffValue, diffLabel } from './DifficultyTopicSelector';
+import DifficultyTopicSelector, { diffLabel } from './DifficultyTopicSelector';
 
 /**
  * AgentChat — 左面板的 Agent 对话组件。
