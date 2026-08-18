@@ -1,33 +1,33 @@
 # ──────────────────────────────────────────────────────────
 #  Code Tutor Agent — docker-compose (项目根目录执行)
 #
-#  新增内容：Judge0 判题沙箱全家桶（适配WSL2镜像模式localhost互通）
-#
-#  用法:
-#     # 首次启动（会初始化PG/Redis，约30s）
+#  判题沙箱 Judge0 通过 profile 按需启用（默认不启动，省资源）：
+#     # 默认（self 判题后端，不启动 Judge0）：
 #     docker compose -f docker/docker-compose.yml up -d
-#     # 查看Judge0启动日志
-#     docker logs cta-judge0 -f
-#     # 验证Judge0是否就绪
+#     # 需要 Judge0 多语言沙箱时，加 --profile judge0：
+#     docker compose -f docker/docker-compose.yml --profile judge0 up -d
+#     # 验证 Judge0 是否就绪：
 #     curl http://localhost:2358/languages
 #
-#  环境变量（需在项目根.env中添加）:
-#     # Judge0基础配置
+#  环境变量（需在项目根.env中添加）：
+#     # Judge0基础配置（仅 --profile judge0 时需要）
 #     JUDGE0_REDIS_PASSWORD=ct_redis_pwd
 #     JUDGE0_POSTGRES_PASSWORD=ct_pg_pwd
 #     JUDGE0_MEM_LIMIT=512000000       # 512MB，对抗校验必调
 #     JUDGE0_CPU_TIME_LIMIT=5          # 5秒超时，对齐现有TIMEOUT_SECONDS
 #     # 判题后端切换开关（backend代码中使用）
 #     JUDGE_BACKEND=self                # 用现有subprocess runner（默认，调试稳定）
-#     # JUDGE_BACKEND=judge0            # 用Judge0沙箱（多语言/生产用）
+#     # JUDGE_BACKEND=judge0            # 用Judge0沙箱（多语言/生产用，需 --profile judge0）
 # ──────────────────────────────────────────────────────────
 
 services:
-  # ── Judge0 依赖：PostgreSQL ──
+  # ── Judge0 依赖：PostgreSQL（profile: judge0 按需启用）──
   judge0-db:
     image: postgres:15-alpine
     container_name: cta-judge0-db
     restart: unless-stopped
+    profiles:
+      - judge0
     environment:
       POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD:-ct_pg_pwd}
       POSTGRES_USER: postgres
@@ -42,11 +42,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Judge0 依赖：Redis ──
+  # ── Judge0 依赖：Redis（profile: judge0 按需启用）──
   judge0-redis:
     image: redis:7-alpine
     container_name: cta-judge0-redis
     restart: unless-stopped
+    profiles:
+      - judge0
     command: redis-server --requirepass ${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd} --appendonly yes
     volumes:
       - judge0_redis_data:/data
@@ -58,11 +60,13 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Judge0 判题沙箱引擎 ──
+  # ── Judge0 判题沙箱引擎（profile: judge0 按需启用）──
   judge0:
     image: judge0/judge0:1.13.1
     container_name: cta-judge0
     restart: unless-stopped
+    profiles:
+      - judge0
     depends_on:
       judge0-db:
         condition: service_healthy
@@ -104,7 +108,7 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      # 开发时挂载源码实现 hot-reload
+      # 开发时挂载源码（配合 UVICORN_RELOAD 热重载后端进程）
       - ../src:/app/src
       - ../data:/app/data
     env_file:
@@ -114,15 +118,12 @@ services:
     environment:
       - UVICORN_RELOAD=true
       - TZ=Asia/Shanghai
-      # 新增：Judge0连接配置（compose内部用服务名通信）
+      # Judge0连接配置（compose内部用服务名通信；仅 --profile judge0 时生效）
       - JUDGE0_URL=http://judge0:2358
-      # 新增：判题后端切换开关（从.env读取，默认用现有runner）
+      # 判题后端切换开关（从.env读取，默认用现有runner）
       - JUDGE_BACKEND=${JUDGE_BACKEND:-self}
-      # 新增：CORS允许的前端来源（默认3000=compose前端端口，可被.env覆盖）
+      # CORS允许的前端来源（默认3000=compose前端端口，可被.env覆盖）
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
-    depends_on:
-      judge0:
-        condition: service_healthy
     networks:
       - cta-network
     healthcheck:
@@ -131,7 +132,9 @@ services:
       timeout: 5s
       retries: 3
 
-  # ── 前端 Dev Server ──
+  # ── 前端（nginx 静态服务）──
+  # 注意：默认模式未传 VITE_API_BASE，前端编译时 fallback 为 http://localhost:8765，
+  # 直接打后端、绕开本 nginx 反向代理；要走 nginx 代理需在构建时传 VITE_API_BASE=/。
   frontend:
     build:
       context: ..
@@ -148,7 +151,7 @@ services:
     networks:
       - cta-network
 
-# 持久化卷（存储Judge0的数据库和缓存数据，重启不丢失）
+# 持久化卷（存储Judge0的数据库和缓存数据，重启不丢失；仅 --profile judge0 时使用）
 volumes:
   judge0_postgres_data:
     driver: local
