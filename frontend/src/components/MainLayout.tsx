@@ -3,6 +3,7 @@ import ProblemDesc from './LeftPanel/ProblemDesc';
 import AgentChat from './LeftPanel/AgentChat';
 import CodeEditor from './LeftPanel/CodeEditor';
 import MessageList from './RightPanel/MessageList';
+import MsgItem from './RightPanel/MsgItem';
 import ReviewCard from './RightPanel/ReviewCard';
 import SubmissionHistory from './SubmissionHistory';
 import RunResults from './RunResults';
@@ -11,11 +12,11 @@ import { useMemo } from 'react';
 import type { Message, ProblemMeta, RunResult, Submission, FailedCase } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 
-type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history';
+type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history' | 'trace';
 
 const TAB_LABELS: Record<TabId, string> = {
   desc: '题目描述', history: '提交记录', reference: '参考代码',
-  code: '代码', run: '运行', tutor: '导师', 'agent-history': '导师对话',
+  code: '代码', run: '运行', tutor: '导师', 'agent-history': '导师对话', trace: '轨迹分析',
 };
 
 export type MainLayoutProps = {
@@ -61,6 +62,13 @@ export type MainLayoutProps = {
   onAgentSend: (text: string) => void;
   analyzingTrace?: boolean;
   onAnalyzeTrace?: () => void;
+  traceFailed?: boolean;
+  traceAnalysis?: any | null;
+  traceMessages?: Message[];
+  traceAsking?: boolean;
+  traceInput?: string;
+  onSetTraceInput?: (v: string) => void;
+  onTraceAsk?: (text: string) => void;
 }
 
 export default function MainLayout(props: MainLayoutProps) {
@@ -73,6 +81,9 @@ export default function MainLayout(props: MainLayoutProps) {
     onSetTutorMessages, onSetRunResults, onSetProgressMsgs,
     onRun, onSubmit, onChat, onNext, onBackToWelcome, onAgentSend,
   analyzingTrace = false, onAnalyzeTrace,
+  traceFailed = false,
+  traceAnalysis = null, traceMessages = [], traceAsking = false, traceInput = '',
+  onSetTraceInput = () => {}, onTraceAsk = () => {},
   } = props;
 
   const isLoading = running || submittingFlag;
@@ -203,6 +214,44 @@ export default function MainLayout(props: MainLayoutProps) {
       return (
         <div className="flex-1 overflow-hidden">
           <AgentChat messages={tutorMessages} onSend={() => {}} disabled={true} />
+        </div>
+      );
+    case 'trace':
+      return (
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {analyzingTrace && <p className="text-sm text-ct-muted">⏳ 正在分析你的做题轨迹…</p>}
+            {!analyzingTrace && traceMessages.length === 0 && (
+              <div className="flex h-full items-center justify-center">
+                <button onClick={onAnalyzeTrace} disabled={analyzingTrace}
+                  className="rounded border border-ct-accent/50 px-4 py-2 text-sm text-ct-accent hover:bg-ct-accent/10 disabled:opacity-50"
+                  title="分析你本次做题的编辑轨迹（独立复盘，不写入能力画像）">
+                  📊 分析本次做题轨迹
+                </button>
+              </div>
+            )}
+            {traceMessages.map((m, i) => <MsgItem key={i} msg={m} />)}
+            {traceFailed && !analyzingTrace && (
+              <div className="flex justify-center pt-2">
+                <button onClick={onAnalyzeTrace}
+                  className="rounded border border-ct-accent/50 px-4 py-2 text-sm text-ct-accent hover:bg-ct-accent/10"
+                  title="重新分析本次做题轨迹">
+                  🔄 重试轨迹分析
+                </button>
+              </div>
+            )}
+          </div>
+          {traceAnalysis && (
+            <div className="border-t border-ct-border p-3 flex gap-2">
+              <textarea value={traceInput} onChange={e => onSetTraceInput(e.target.value)}
+                placeholder="对分析追问，比如「为什么卡了 200 秒？」"
+                rows={2}
+                className="flex-1 rounded border border-ct-border bg-ct-input px-3 py-2 text-xs text-ct-text placeholder-ct-muted outline-none focus:border-ct-accent resize-none"
+                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onTraceAsk(traceInput); } }} />
+              <button onClick={() => onTraceAsk(traceInput)} disabled={!traceInput.trim() || traceAsking}
+                className="rounded bg-ct-accent px-3 py-2 text-xs text-white disabled:opacity-40">追问</button>
+            </div>
+          )}
         </div>
       );
     default:

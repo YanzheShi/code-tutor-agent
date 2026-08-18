@@ -26,11 +26,12 @@ export function useSSE() {
     message: string,
     onToken: (token: string) => void,
     onDone?: () => void,
+    code?: string,
   ): Promise<boolean> => {
     const resp = await fetch(`${BASE}/session/${sid}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify({ message, ...(code != null && code.trim() ? { code } : {}) }),
     });
     if (!resp.ok || !resp.body) return false;
 

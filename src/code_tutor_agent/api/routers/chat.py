@@ -215,6 +215,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
     message = (body or {}).get("message", "").strip()
     if not message:
         raise HTTPException(400, "Message is empty")
+    code = (body or {}).get("code")
 
     values = state.values
     mode = values.get("mode", "")
@@ -236,7 +237,7 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         return _handle_agent_dialog_stream(sid, config, graph, values, message, background_tasks)
 
     # 其余一律走常规辅导聊天（直接 LLM 流式 + 工具循环）
-    return _handle_normal_chat_stream(sid, config, graph, values, message)
+    return _handle_normal_chat_stream(sid, config, graph, values, message, code=code)
 
 
 def _handle_agent_dialog_stream(sid, config, graph, values, message, background_tasks) -> StreamingResponse:
@@ -347,7 +348,7 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
     )
 
 
-def _handle_normal_chat_stream(sid, config, graph, values, message) -> StreamingResponse:
+def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = "") -> StreamingResponse:
     """常规辅导聊天分支：直接 LLM 流式输出 + 工具循环（现场跑代码验证）。
 
     所有非 agent-dialog 聊天统一走直接 LLM 流式输出。
@@ -380,9 +381,20 @@ def _handle_normal_chat_stream(sid, config, graph, values, message) -> Streaming
     system = _build_system_prompt(_phase, _verdict)
 
     async def normal_chat_stream():
+        # 用户当前编辑器代码（未提交）：只读注入 prompt，不写 state / 画像 / 轨迹。
+        # 长度上限防止 token 浪费；导师应把它当「实时草稿」而非最终版本。
+        _code_context = ""
+        if code and code.strip():
+            _code_limit = 4000
+            if len(code) > _code_limit:
+                _code_context = code[:_code_limit] + "\n# …（代码过长，已截断）"
+            else:
+                _code_context = code
         user_prompt = (
             f"算法题：{title}\n\n"
             f"题面：\n{desc}\n\n"
+            f"用户当前编辑器代码（未提交，仅供实时参考，可能不完整或运行失败）：\n"
+            f"```python\n{_code_context or '（编辑器为空）'}\n```\n\n"
             f"用户最近的运行与判题结果（客观事实，请优先依据此定位具体错误）：\n"
             f"{_results_context}\n\n"
             f"近期对话：\n{_chat_context}\n\n"

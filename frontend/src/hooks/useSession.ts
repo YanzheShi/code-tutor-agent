@@ -1,6 +1,6 @@
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace } from '../api/session';
+import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, summarizeTrace, fetchTraceAnalysis } from '../api/session';
 import type { Message, ProblemMeta, RunResult, SessionStateResp, Submission } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
@@ -10,11 +10,11 @@ import { useEditTrace } from './useEditTrace';
 
 const BASE = API_BASE;
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin';
-export type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history';
+export type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history' | 'trace';
 
 export const DEFAULT_TAB_PANEL: Record<TabId, 'left' | 'right'> = {
   desc: 'left', history: 'left', reference: 'left',
-  code: 'right', run: 'right', tutor: 'right', 'agent-history': 'left',
+  code: 'right', run: 'right', tutor: 'right', 'agent-history': 'left', trace: 'right',
 };
 
 // ── 会话恢复（根治“自动回主页”bug）──
@@ -61,13 +61,19 @@ function getInitialPersist(): PersistedSession | null {
 }
 
 // ── 独立轨迹分析：把后端结构化结论渲染成导师对话里的 markdown ──
-// 与能力画像解耦，仅展示。字段来自 profile/trace_insight.TraceAnalysisResult。
+// 与能力画像解耦，仅展示。字段来自 trace/schemas.AnalysisResult。
 function formatTraceAnalysis(a: any): string {
   const lines: string[] = ['## 📊 你的做题轨迹分析'];
   if (a?.summary) lines.push(`> ${a.summary}`);
 
-  if (a?.change_path) {
-    lines.push('', '**代码是怎么写出来的**', a.change_path);
+  const path: any[] = a?.change_path || [];
+  if (path.length) {
+    lines.push('', '**代码是怎么写出来的**');
+    for (const p of path) {
+      const trigger = p.trigger && p.trigger !== 'self' ? `（触发：${p.trigger}）` : '';
+      const note = p.note ? ` ${p.note}` : '';
+      lines.push(`- 步骤${p.step ?? ''}：${p.action || '—'}${trigger}${note}`);
+    }
   }
   if (a?.thinking_process) {
     lines.push('', '**推断的解题思维**', a.thinking_process);
@@ -90,7 +96,7 @@ function formatTraceAnalysis(a: any): string {
     }
   }
 
-  if (!a?.change_path && !a?.thinking_process && !tags.length && !tips.length) {
+  if (!path.length && !a?.thinking_process && !tags.length && !tips.length) {
     lines.push('', '本次轨迹未暴露明显薄弱点，保持节奏继续练习吧 💪');
   }
   return lines.join('\n');
@@ -104,8 +110,11 @@ export function useSession() {
   );
 
   const [sessionId, setSessionId] = useState<string | null>(initial?.sessionId ?? null);
+  // 当前题 problem_id / 导师对话 → 供 useEditTrace 计算 dialogue_before（对话相关性）
+  const problemIdRef = useRef<string | null>(null);
+  const tutorMessagesRef = useRef<Message[]>([]);
   // 编辑轨迹采集（仅前端采集 + 落本地文件，不做后端处理）
-  const editTrace = useEditTrace(sessionId);
+  const editTrace = useEditTrace(sessionId, { problemIdRef, tutorMessagesRef });
   const [mode, setMode] = useState<string>(initial?.mode || 'practice');
 
   // 持久化：main 屏且有 sessionId 时落盘；其余情况（welcome/loading/error/admin）清掉，
@@ -118,6 +127,9 @@ export function useSession() {
   const [problem, setProblem] = useState<ProblemMeta | null>(null);
   const [editorCode, setEditorCode] = useState('');
   const [tutorMessages, setTutorMessages] = useState<Message[]>([]);
+  // 同步最新导师对话 / 当前题到 ref，供 useEditTrace 计算 dialogue_before（无需 re-attach 编辑器）
+  useEffect(() => { tutorMessagesRef.current = tutorMessages; }, [tutorMessages]);
+  useEffect(() => { problemIdRef.current = problem ? String(problem.problem_id) : null; }, [problem]);
   const [hintLevel, setHintLevel] = useState(0);
   const [latestVerdict, setLatestVerdict] = useState<string | null>(null);
   const [judgeReport, setJudgeReport] = useState<JudgeReport | null>(null);
@@ -129,6 +141,12 @@ export function useSession() {
   const [running, setRunning] = useState(false);
   const [submittingFlag, setSubmittingFlag] = useState(false);
   const [analyzingTrace, setAnalyzingTrace] = useState(false);
+  // 独立轨迹分析 Tab 状态（与主辅导上下文/画像解耦，仅展示 + 多轮复盘）
+  const [traceAnalysis, setTraceAnalysis] = useState<any>(null); // 首轮结构化结论
+  const [traceMessages, setTraceMessages] = useState<Message[]>([]); // 分析 Tab 内多轮对话（含首轮结论）
+  const [traceAsking, setTraceAsking] = useState(false); // 多轮追问 loading
+  const [traceInput, setTraceInput] = useState(''); // 多轮追问输入框
+  const [traceFailed, setTraceFailed] = useState(false); // 首轮分析失败（展示重试按钮）
   const [activeTabs, setActiveTabs] = useState<{ left: TabId; right: TabId }>({ left: 'desc', right: 'code' });
   const [tabPanel, setTabPanel] = useState<Record<TabId, 'left' | 'right'>>({ ...DEFAULT_TAB_PANEL });
   const [splitRatio, setSplitRatio] = useState(50);
@@ -343,48 +361,93 @@ export function useSession() {
     try {
       const ok = await readStream(sessionId, msg, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor' as const, content: (last.content || '') + token }; return next; });
-      });
+      }, undefined, editorCode);
       if (!ok) setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat not available)' }; return next; });
     } catch {
       setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat error)' }; return next; });
     }
-  }, [chatInput, sessionId, readStream]);
+  }, [chatInput, sessionId, readStream, editorCode]);
 
-  // ── 独立轨迹分析（AC 后手动触发，结果展示在导师对话里，不回灌画像）──
+  // ── 独立轨迹分析（AC 后手动触发，结果展示在「轨迹分析」Tab，不回灌画像）──
   const handleAnalyzeTrace = useCallback(async () => {
     if (!sessionId || analyzingTrace) return;
+    const pid = problemIdRef.current ?? 'default';
     setAnalyzingTrace(true);
-    const placeholder = '⏳ 正在分析你的做题轨迹…';
-    setTutorMessages(prev => [...prev, { role: 'tutor', content: placeholder, metadata: { kind: 'trace-analysis-loading' } }]);
-    setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+    setTraceFailed(false);
+    setTraceMessages([]); // 重试时清掉上一次的失败提示
+    setActiveTabs(prev => ({ ...prev, right: 'trace' })); // 切到轨迹分析 Tab
     try {
-      const result = await analyzeTrace(sessionId);
-      const md = formatTraceAnalysis(result);
-      setTutorMessages(prev => {
-        const next = [...prev];
-        let idx = -1;
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].metadata?.kind === 'trace-analysis-loading') { idx = i; break; }
-        }
-        const msg: Message = { role: 'tutor', content: md, metadata: { kind: 'trace-analysis' } };
-        if (idx >= 0) next[idx] = msg; else next.push(msg);
-        return next;
-      });
+      const result = await analyzeTrace(sessionId, pid);
+      setTraceAnalysis(result);
+      // 首轮结论以一条 tutor 消息入分析 Tab 对话区，便于多轮追问上下文
+      setTraceMessages([{ role: 'tutor', content: formatTraceAnalysis(result) }]);
     } catch {
-      setTutorMessages(prev => {
-        const next = [...prev];
-        let idx = -1;
-        for (let i = next.length - 1; i >= 0; i--) {
-          if (next[i].metadata?.kind === 'trace-analysis-loading') { idx = i; break; }
-        }
-        const msg: Message = { role: 'tutor', content: '⚠️ 轨迹分析失败了，稍后再试一次吧。', metadata: { kind: 'trace-analysis-error' } };
-        if (idx >= 0) next[idx] = msg; else next.push(msg);
-        return next;
-      });
+      setTraceFailed(true);
+      setTraceMessages(prev => [...prev, { role: 'tutor', content: '⚠️ 轨迹分析失败了，稍后再试一次吧。' }]);
     } finally {
       setAnalyzingTrace(false);
     }
-  }, [sessionId, analyzingTrace, setTutorMessages]);
+  }, [sessionId, analyzingTrace]);
+
+  // ── 轨迹分析多轮追问（独立分析线程 append，不回灌画像）──
+  const handleTraceAsk = useCallback(async (text: string) => {
+    if (!sessionId || !text.trim() || traceAsking) return;
+    const pid = problemIdRef.current ?? 'default';
+    const question = text.trim();
+    setTraceAsking(true);
+    setTraceMessages(prev => [...prev, { role: 'user', content: question }, { role: 'tutor', content: '' }]);
+    setTraceInput('');
+    try {
+      const reply = await analyzeTrace(sessionId, pid, question);
+      setTraceMessages(prev => {
+        const next = [...prev];
+        if (next.length) next[next.length - 1] = { role: 'tutor', content: reply ?? '' };
+        return next;
+      });
+    } catch {
+      setTraceMessages(prev => {
+        const next = [...prev];
+        if (next.length) next[next.length - 1] = { role: 'tutor', content: '⚠️ 追问失败，请稍后再试。' };
+        return next;
+      });
+    } finally {
+      setTraceAsking(false);
+    }
+  }, [sessionId, traceAsking]);
+
+  // ── 轨迹分析 Tab 恢复（刷新后经 GET /analysis 拉回首轮结论 + 追问历史）──
+  // 每次切到该 Tab（且 pid 变化）才拉取一次，避免重复请求；无首轮结论则维持空态。
+  const lastTraceFetchPid = useRef<string | null>(null);
+  const tracePid = problem ? String(problem.problem_id) : 'default';
+  useEffect(() => {
+    if (!sessionId || activeTabs.right !== 'trace') return;
+    if (lastTraceFetchPid.current === tracePid) return;
+    lastTraceFetchPid.current = tracePid;
+    (async () => {
+      try {
+        const data = await fetchTraceAnalysis(sessionId, tracePid);
+        if (!data?.analysis) return;
+        setTraceAnalysis(data.analysis);
+        const msgs: Message[] = [{ role: 'tutor', content: formatTraceAnalysis(data.analysis) }];
+        for (const m of data.messages ?? []) {
+          msgs.push({ role: m.role === 'user' ? 'user' : 'tutor', content: m.content ?? '' });
+        }
+        setTraceMessages(msgs);
+      } catch {
+        /* 恢复失败不阻塞主流程 */
+      }
+    })();
+  }, [sessionId, activeTabs.right, tracePid]);
+
+  // ── 过渡压缩（API）：把当前题分析线程压成摘要并归档，返回 TraceSummary（不注入主聊天，由调用方注入）──
+  const summarizeAndInject = useCallback(async (pid: string, action: string): Promise<any> => {
+    if (!sessionId) return null;
+    try {
+      return await summarizeTrace(sessionId, pid, action);
+    } catch {
+      return null; // 摘要失败不影响过渡主流程
+    }
+  }, [sessionId]);
 
   // ── 下一题 / 新会话 ──
   const handleNext = useCallback(async () => {
@@ -458,16 +521,39 @@ export function useSession() {
       setNextProblemLoading(false);
     };
 
+    // 过渡动作映射（用于轨迹分析摘要归档标记）：AC 后继续=continue；做题中放弃=abandon；其余换题=change
+    const transitionAction = latestVerdict === 'AC' ? 'continue'
+      : phase === 'solving' ? 'abandon'
+      : 'change';
+
+    // 过渡统一入口：若本题做过轨迹分析，先压缩成摘要（双落点：归档 + 主聊天可见卡），
+    // 再切题/重入对话。summarize 期间 nextProblemLoading=true 禁用按钮防并发。
+    const doTransition = async (preference: string) => {
+      let summary: any = null;
+      if (problem && traceAnalysis && sessionId) {
+        setNextProblemLoading(true);
+        summary = await summarizeAndInject(String(problem.problem_id), transitionAction);
+        // 本题分析状态清空（pid 变化后锚点由 useEditTrace 自动重置）
+        setTraceAnalysis(null); setTraceMessages([]); setTraceInput(''); setTraceFailed(false);
+        lastTraceFetchPid.current = null; // 允许下次切 Tab 重新拉取（同 pid 也不跳过）
+      }
+      await callNextProblem(preference);
+      // 过渡后把摘要卡补进主聊天（callNextProblem 可能已重置 tutorMessages，故此处兜底注入）
+      if (summary && (summary.summary_text || (summary.bullets && summary.bullets.length))) {
+        setTutorMessages(prev => [...prev, { role: 'tutor', content: '', metadata: { kind: 'trace-summary', summary } }]);
+      }
+    };
+
     // AC → 已完成：统一重入出题对话（先沟通后出题），不再按模式直接出题
     if (latestVerdict === 'AC' && sessionId) {
-      await callNextProblem('continue_dialog');
+      await doTransition('continue_dialog');
       return;
     }
 
     // solving → 放弃确认
     if (phase === 'solving' && sessionId) {
       const ok = window.confirm('当前代码还没提交，确定放弃这题去下一题？');
-      if (ok) { await callNextProblem('continue_dialog'); }
+      if (ok) { await doTransition('continue_dialog'); }
       return;
     }
 
@@ -475,7 +561,7 @@ export function useSession() {
     // 不要回主页。原默认分支会直接 setScreen('welcome')，导致「换一题」把用户踢回首页
     // 且全程无后端请求（日志无变化）。
     if (sessionId && phase !== 'dialog') {
-      await callNextProblem('continue_dialog');
+      await doTransition('continue_dialog');
       return;
     }
 
@@ -487,7 +573,7 @@ export function useSession() {
     setMode('practice'); setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
     setPhase('solving');
-  }, [phase, latestVerdict, sessionId, mode]);
+  }, [phase, latestVerdict, sessionId, mode, problem, traceAnalysis, summarizeAndInject]);
 
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
 
@@ -507,18 +593,19 @@ export function useSession() {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
     judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
     running, submittingFlag, analyzingTrace, activeTabs, tabPanel, splitRatio, chatInput,
+    traceAnalysis, traceMessages, traceAsking, traceInput, traceFailed,
     sessionId, status, isDialogPhase: mode === 'agent' && !problem && !nextProblemLoading,
     isGenerating: mode === 'agent' && status === 'awaiting_problem',
     isAC: latestVerdict === 'AC', isDone: latestVerdict === 'AC',
     dragging, dragTab, chatEndRef, editorInitialized,
     setEditorCode, setActiveTabs, setTabPanel, setSplitRatio, setChatInput,
-    setTutorMessages, setRunResults, setProgressMsgs,
+    setTutorMessages, setRunResults, setProgressMsgs, setTraceInput,
     onStart: handleStart, onStartExisting: handleStartExisting,
     onSubmit: handleSubmit,
     flushEditTrace: editTrace.flush,
     markEditTrace: editTrace.mark,
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
-    onAnalyzeTrace: handleAnalyzeTrace,
+    onAnalyzeTrace: handleAnalyzeTrace, onTraceAsk: handleTraceAsk,
     onBackToWelcome: handleBackToWelcome,
     onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,
     setScreen,

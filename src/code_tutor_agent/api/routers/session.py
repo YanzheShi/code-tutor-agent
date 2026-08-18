@@ -8,7 +8,7 @@ import os
 import sqlite3
 import time
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
@@ -28,10 +28,19 @@ from code_tutor_agent.db.database import (
     get_stale_sessions,
     get_submissions_by_session,
     get_trace_analysis,
+    get_analysis_result,
+    get_trace_summary,
     save_edit_trace,
     save_submission,
     save_trace_analysis,
     touch_session,
+)
+from code_tutor_agent.trace import (
+    archive_thread,
+    continue_analysis,
+    first_round_analysis,
+    list_thread_for_display,
+    summarize_thread,
 )
 from code_tutor_agent.progress import _generation_progress
 from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
@@ -388,68 +397,128 @@ async def submit_code(sid: str, body: SubmitRequest):
 class EditTraceRequest(BaseModel):
     """前端实时采集的编辑轨迹事件批量上传体。"""
     events: list[dict] = Field(default_factory=list, description="编辑轨迹事件列表(edit/idle/run/submit)")
+    problem_id: Optional[str] = None  # 前端当前题；逐事件携带时优先用事件内 problem_id
 
 
 @router.post("/{sid}/edit-trace")
 async def save_edit_trace_endpoint(sid: str, body: EditTraceRequest):
-    """接收前端实时采集的编辑轨迹事件（UPSERT 累加），供提交时错误模式分析使用。
+    """接收前端实时采集的编辑轨迹事件（UPSERT 累加），供轨迹分析按题隔离读取。
 
-    仅落库，不在此触发 LLM 分析——分析在判题节点（agent_judge）fire-and-forget 触发，
-    读取本表全量事件后做增量融合（见 docs/error-mode-tracking-design.md）。
+    仅落库，不在此触发 LLM 分析。每个事件内部写入 problem_id（events_json 聚合存储，
+    不另加表列）：前端逐事件携带则保留，缺失用请求体 problem_id 兜底（回退 "default"），
+    避免换题瞬间串题。
     """
     if not body.events:
         return {"ok": True, "session_id": sid, "events": 0}
     try:
-        save_edit_trace(sid, "default", body.events)
+        pid = body.problem_id or "default"
+        events: list[dict] = []
+        for e in body.events:
+            if not isinstance(e, dict):
+                continue
+            if not e.get("problem_id"):
+                e = {**e, "problem_id": pid}
+            events.append(e)
+        save_edit_trace(sid, "default", events, problem_id=pid)
     except Exception as exc:
         logger.error("save_edit_trace endpoint failed for %s: %s", sid, exc)
         raise HTTPException(500, "failed to persist edit trace")
-    return {"ok": True, "session_id": sid, "events": len(body.events)}
+    return {"ok": True, "session_id": sid, "events": len(events)}
 
 
 # ── 独立轨迹分析（纯展示，不回灌画像；用户 AC 后手动触发）──
 
 
+class AnalyzeRequest(BaseModel):
+    """轨迹分析请求体。无 message = 首轮结构化分析；有 message = 多轮继续。"""
+
+    problem_id: str = "default"
+    message: Optional[str] = None
+
+
 @router.post("/{sid}/analyze")
-async def analyze_trace_endpoint(sid: str):
-    """触发一次独立的做题轨迹分析（基于已采集的 edit_traces + 最终提交代码）。
+async def analyze_trace_endpoint(sid: str, body: Optional[AnalyzeRequest] = None):
+    """触发/继续一次独立的做题轨迹分析（按题隔离、独立线程、不回灌画像）。
 
-    与错误模式画像解耦：结果只做展示，绝不写入 profile / memory。
-    final_code / topic / description 优先从本题 AC 提交 + 题目库反查，缺失则留空。
+    - 无 message：首轮结构化分析（读按题过滤的 edit_traces + 题目完整描述 + 终码）。
+    - 有 message：在同题分析线程追加追问，返回自由文本回复。
+    body 可选：旧前端无 body 调用（problem_id="default" 退化为全量事件分析）仍可工作。
     """
-    final_code = ""
-    topic = ""
-    description = ""
+    body = body or AnalyzeRequest()
+    # 从会话状态取当前题 ProblemMeta（完整描述 + 约束 + 示例），供分析 LLM 使用
+    problem_meta = None
     try:
-        subs = get_submissions_by_session(sid) or []
-        if subs:
-            ac = next((s for s in subs if s.get("verdict") == "AC"), subs[-1])
-            final_code = ac.get("code") or ""
-            pid = ac.get("problem_id")
-            if pid:
-                prob = get_problem_by_id(pid)
-                if prob:
-                    topic = prob.topic or ""
-                    description = prob.description or ""
-    except Exception as exc:
-        logger.warning("analyze_trace_endpoint: gather context failed for %s: %s", sid, exc)
-
-    from code_tutor_agent.profile.trace_insight import analyze_trace_standalone
-
-    result = analyze_trace_standalone(sid, topic=topic, description=description, final_code=final_code)
-    result_dict = result.model_dump()
+        graph = get_graph()
+        st = graph.get_state(build_run_config(sid, run_name="analyze"))
+        problem_meta = st.values.get("problem")
+    except Exception:
+        problem_meta = None
     try:
-        save_trace_analysis(sid, result_dict)
+        if body.message:
+            reply = continue_analysis(sid, body.problem_id, body.message)
+            return {"ok": True, "session_id": sid, "problem_id": body.problem_id, "reply": reply}
+        result = first_round_analysis(sid, body.problem_id, problem_meta=problem_meta)
+        return {
+            "ok": True,
+            "session_id": sid,
+            "problem_id": body.problem_id,
+            "analysis": result.model_dump(),
+        }
     except Exception as exc:
-        logger.warning("analyze_trace_endpoint: cache failed for %s: %s", sid, exc)
-    return {"ok": True, "session_id": sid, "analysis": result_dict}
+        logger.error("analyze_trace_endpoint failed for %s: %s", sid, exc)
+        raise HTTPException(500, "trace analysis failed")
 
 
 @router.get("/{sid}/analysis")
-async def get_trace_analysis_endpoint(sid: str):
-    """读取已缓存的独立轨迹分析结论（无则返回 analysis=null）。"""
-    data = get_trace_analysis(sid)
-    return {"session_id": sid, "analysis": data}
+async def get_trace_analysis_endpoint(sid: str, problem_id: str = "default"):
+    """读取某题已缓存的轨迹分析首轮结论 + 多轮追问线程（无则 analysis=null）。
+
+    前端刷新后据此恢复「轨迹分析」Tab（首轮结论 + 追问历史）。
+    """
+    data = (
+        get_analysis_result(sid, problem_id)
+        if problem_id and problem_id != "default"
+        else get_trace_analysis(sid)
+    )
+    messages = (
+        list_thread_for_display(sid, problem_id)
+        if problem_id and problem_id != "default"
+        else []
+    )
+    return {
+        "session_id": sid,
+        "problem_id": problem_id,
+        "analysis": data,
+        "messages": messages,
+    }
+
+
+class AnalyzeSummarizeRequest(BaseModel):
+    """过渡压缩请求体。"""
+
+    problem_id: str = "default"
+    transition_action: str = "continue"  # continue | next | change | abandon
+
+
+@router.post("/{sid}/analyze/summarize")
+async def summarize_trace_endpoint(sid: str, body: AnalyzeSummarizeRequest):
+    """过渡时把当前题分析线程压缩成摘要（双落点源），并归档线程。
+
+    返回 TraceSummary；前端据此渲染可见卡，并可注入下一题导师上下文（trajectory_summary）。
+    """
+    try:
+        summary = summarize_thread(sid, body.problem_id, body.transition_action)
+        archive_thread(sid, body.problem_id)
+        return {
+            "ok": True,
+            "session_id": sid,
+            "problem_id": body.problem_id,
+            "transition_action": body.transition_action,
+            "summary": summary.model_dump(),
+        }
+    except Exception as exc:
+        logger.error("summarize_trace_endpoint failed for %s: %s", sid, exc)
+        raise HTTPException(500, "trace summarize failed")
 
 
 @router.get("/{sid}/state", response_model=SessionStateResponse)
@@ -731,6 +800,30 @@ async def next_problem(sid: str, body: NextProblemReq):
             new_summary = f"{cross_context}\n\n## 上一题对话要点\n{dialogue_summary}" if cross_context else dialogue_summary
         else:
             new_summary = cross_context or None
+
+        # ── 3.5 追加上一题轨迹分析摘要（双落点：让下一题导师感知薄弱点）──
+        # 过渡时前端已 POST /analyze/summarize 把上一题分析线程压成 TraceSummary 落库，
+        # 此处读取并追加专属段落到 context_summary（与 build_cross_problem_context 复用同管线）。
+        # 注意：只作导师侧只读上下文，不回灌 profile / memory；线程 transcript 已被归档。
+        # SessionState 无顶层 problem_id 字段，取当前 problem（update_state 前仍是旧题）的 id。
+        try:
+            _prev_prob = vals.get("problem")
+            prev_pid = getattr(_prev_prob, "problem_id", None) if _prev_prob else None
+            if prev_pid is not None:
+                ts = get_trace_summary(sid, str(prev_pid))
+                if ts:
+                    st_text = ts.get("summary_text") or ""
+                    st_bullets = ts.get("bullets") or []
+                    if st_text or st_bullets:
+                        seg = ["## 上一题轨迹分析摘要（仅供导师参考，勿直接复述给用户）"]
+                        if st_text:
+                            seg.append(st_text)
+                        if st_bullets:
+                            seg.append("要点：" + " ｜ ".join(str(b) for b in st_bullets))
+                        trace_seg = "\n".join(seg)
+                        new_summary = (new_summary + "\n\n" + trace_seg) if new_summary else trace_seg
+        except Exception as exc:
+            logger.warning("failed to load trace summary for next-problem: %s", exc)
 
         # ── 4. 构造"下一题"引导消息，重置对话 ──
         # 根据上一题的 verdict 选择不同措辞

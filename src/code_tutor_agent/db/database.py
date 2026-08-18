@@ -87,6 +87,7 @@ def _init_db_tables(cursor) -> None:
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
         "ALTER TABLE submissions ADD COLUMN session_id TEXT DEFAULT ''",
+        "ALTER TABLE edit_traces ADD COLUMN problem_id TEXT NOT NULL DEFAULT 'default'",
     ]:
         try:
             cursor.execute(col_sql)
@@ -115,6 +116,7 @@ def _init_db_tables(cursor) -> None:
             session_id TEXT PRIMARY KEY,
             user_id TEXT DEFAULT 'default',
             events_json TEXT NOT NULL DEFAULT '[]',
+            problem_id TEXT NOT NULL DEFAULT 'default',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -125,6 +127,44 @@ def _init_db_tables(cursor) -> None:
             session_id TEXT PRIMARY KEY,
             result_json TEXT NOT NULL DEFAULT '{}',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # ── 轨迹分析（按题隔离，多轮线程首轮结构化结论；不回灌画像）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS analysis_results (
+            session_id TEXT NOT NULL,
+            problem_id TEXT NOT NULL DEFAULT 'default',
+            result_json TEXT NOT NULL DEFAULT '{}',
+            model TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (session_id, problem_id)
+        )
+    """)
+
+    # ── 轨迹分析过渡摘要（双落点：可见卡 + 历史回看；按 pid 覆盖取最新）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trace_summaries (
+            session_id TEXT NOT NULL,
+            problem_id TEXT NOT NULL DEFAULT 'default',
+            transition_action TEXT DEFAULT '',
+            summary_json TEXT NOT NULL DEFAULT '{}',
+            token_est INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (session_id, problem_id)
+        )
+    """)
+
+    # ── 轨迹分析多轮线程（按题隔离，持久化消息历史；不回灌画像）──
+    # 替代进程内 dict：服务重启后多轮追问与过渡压缩仍可读回线程 transcript。
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trace_threads (
+            session_id TEXT NOT NULL,
+            problem_id TEXT NOT NULL DEFAULT 'default',
+            messages_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (session_id, problem_id)
         )
     """)
 
@@ -700,11 +740,13 @@ def update_profile_on_result(
 # ── 编辑轨迹 + 错误模式画像（error-mode-tracking 特性）──
 
 
-def save_edit_trace(session_id: str, user_id: str, events: list[dict]) -> None:
+def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_id: str = "default") -> None:
     """累计保存某会话的编辑轨迹事件（UPSERT + 追加）。
 
     frontend 每次 flush 只发送自上次 flush 以来的增量事件；后端读旧 →
     追加 → 写回，保证多次 flush 的事件不丢。整个读改写在一个连接事务内完成。
+    problem_id 为请求体级别的兜底值，写进 edit_traces.problem_id 列
+    （事件内嵌的 problem_id 才是按题过滤的精确依据）。
     """
     def _do(cursor):
         row = cursor.execute(
@@ -714,14 +756,14 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict]) -> None:
             old = json.loads(row["events_json"] or "[]")
             merged = old + list(events)
             cursor.execute(
-                "UPDATE edit_traces SET events_json = ?, user_id = ?, updated_at = CURRENT_TIMESTAMP "
+                "UPDATE edit_traces SET events_json = ?, user_id = ?, problem_id = ?, updated_at = CURRENT_TIMESTAMP "
                 "WHERE session_id = ?",
-                (json.dumps(merged, ensure_ascii=False), user_id, session_id),
+                (json.dumps(merged, ensure_ascii=False), user_id, problem_id, session_id),
             )
         else:
             cursor.execute(
-                "INSERT INTO edit_traces (session_id, user_id, events_json) VALUES (?, ?, ?)",
-                (session_id, user_id, json.dumps(list(events), ensure_ascii=False)),
+                "INSERT INTO edit_traces (session_id, user_id, events_json, problem_id) VALUES (?, ?, ?, ?)",
+                (session_id, user_id, json.dumps(list(events), ensure_ascii=False), problem_id),
             )
     try:
         _with_conn(_do)
@@ -771,6 +813,138 @@ def get_trace_analysis(session_id: str) -> Optional[dict]:
         return json.loads(row["result_json"] or "{}")
     except Exception as exc:
         logger.error("get_trace_analysis(%s) failed: %s", session_id, exc)
+        return None
+
+
+def get_edit_trace_by_problem(session_id: str, problem_id: Optional[str] = None) -> list[dict]:
+    """读取某会话的编辑轨迹事件，按 problem_id 过滤。
+
+    problem_id 为 None / "default" 时返回全部事件（兼容尚未带 problem_id 的旧数据）。
+    优先按事件内嵌 problem_id 精确过滤；旧数据事件无内嵌 pid 时，
+    回退到 edit_traces.problem_id 列（会话级 pid 匹配则返回全量）。
+    """
+    events = get_edit_trace(session_id)
+    if not problem_id or problem_id == "default":
+        return events
+    matched = [e for e in events if e.get("problem_id") == problem_id]
+    if matched:
+        return matched
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT problem_id FROM edit_traces WHERE session_id = ?", (session_id,)
+        ).fetchone())
+        if row and row[0] == problem_id:
+            return events
+    except Exception as exc:
+        logger.error("get_edit_trace_by_problem(%s) column fallback failed: %s", session_id, exc)
+    return []
+
+
+def save_trace_thread(session_id: str, problem_id: str, messages: list[dict]) -> None:
+    """持久化某题分析线程的消息列表（UPSERT，按 (session, problem) 维度）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO trace_threads (session_id, problem_id, messages_json, updated_at) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
+            "messages_json = excluded.messages_json, updated_at = CURRENT_TIMESTAMP",
+            (session_id, problem_id, json.dumps(messages, ensure_ascii=False)),
+        ))
+        logger.info("save_trace_thread() — session=%s pid=%s msgs=%d", session_id, problem_id, len(messages))
+    except Exception as exc:
+        logger.error("save_trace_thread(%s,%s) failed: %s", session_id, problem_id, exc)
+        raise
+
+
+def get_trace_thread(session_id: str, problem_id: str) -> Optional[list[dict]]:
+    """读取某题分析线程的消息列表。无记录 / 出错均返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT messages_json FROM trace_threads WHERE session_id = ? AND problem_id = ?",
+            (session_id, problem_id),
+        ).fetchone())
+        if not row:
+            return None
+        return json.loads(row["messages_json"] or "[]")
+    except Exception as exc:
+        logger.error("get_trace_thread(%s,%s) failed: %s", session_id, problem_id, exc)
+        return None
+
+
+def delete_trace_thread(session_id: str, problem_id: str) -> None:
+    """删除某题分析线程（过渡归档时调用）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "DELETE FROM trace_threads WHERE session_id = ? AND problem_id = ?",
+            (session_id, problem_id),
+        ))
+        logger.info("delete_trace_thread() — session=%s pid=%s", session_id, problem_id)
+    except Exception as exc:
+        logger.error("delete_trace_thread(%s,%s) failed: %s", session_id, problem_id, exc)
+
+
+def save_analysis_result(session_id: str, problem_id: str, result: dict, model: str = "") -> None:
+    """缓存某题的轨迹分析首轮结构化结论（UPSERT，按 (session, problem) 维度）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO analysis_results (session_id, problem_id, result_json, model, updated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
+            "result_json = excluded.result_json, model = excluded.model, updated_at = CURRENT_TIMESTAMP",
+            (session_id, problem_id, json.dumps(result, ensure_ascii=False), model),
+        ))
+        logger.info("save_analysis_result() — session=%s pid=%s", session_id, problem_id)
+    except Exception as exc:
+        logger.error("save_analysis_result(%s,%s) failed: %s", session_id, problem_id, exc)
+        raise
+
+
+def get_analysis_result(session_id: str, problem_id: str) -> Optional[dict]:
+    """读取某题已缓存的轨迹分析首轮结论。无记录 / 出错均返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT result_json FROM analysis_results WHERE session_id = ? AND problem_id = ?",
+            (session_id, problem_id),
+        ).fetchone())
+        if not row:
+            return None
+        return json.loads(row["result_json"] or "{}")
+    except Exception as exc:
+        logger.error("get_analysis_result(%s,%s) failed: %s", session_id, problem_id, exc)
+        return None
+
+
+def save_trace_summary(
+    session_id: str, problem_id: str, transition_action: str, summary: dict, token_est: int = 0
+) -> None:
+    """缓存某题的过渡摘要（UPSERT，按 (session, problem) 覆盖取最新）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "INSERT INTO trace_summaries (session_id, problem_id, transition_action, summary_json, token_est) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
+            "transition_action = excluded.transition_action, summary_json = excluded.summary_json, "
+            "token_est = excluded.token_est, created_at = CURRENT_TIMESTAMP",
+            (session_id, problem_id, transition_action, json.dumps(summary, ensure_ascii=False), token_est),
+        ))
+        logger.info("save_trace_summary() — session=%s pid=%s action=%s", session_id, problem_id, transition_action)
+    except Exception as exc:
+        logger.error("save_trace_summary(%s,%s) failed: %s", session_id, problem_id, exc)
+        raise
+
+
+def get_trace_summary(session_id: str, problem_id: str) -> Optional[dict]:
+    """读取某题的过渡摘要。无记录 / 出错均返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT summary_json FROM trace_summaries WHERE session_id = ? AND problem_id = ?",
+            (session_id, problem_id),
+        ).fetchone())
+        if not row:
+            return None
+        return json.loads(row["summary_json"] or "{}")
+    except Exception as exc:
+        logger.error("get_trace_summary(%s,%s) failed: %s", session_id, problem_id, exc)
         return None
 
 

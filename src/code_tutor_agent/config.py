@@ -72,7 +72,9 @@ PURPOSE_CONFIGS = {
     "adversarial-eval-low": {"alias": "default", "temperature": 0.2},
 
     # === 编辑轨迹分析（错误模式画像 feeder，见 docs/error-mode-tracking-design.md）===
-    "edit-trace":           {"alias": "default", "temperature": 0.1},
+    # max_tokens=16384：thinking 模型会把大量输出配额耗在 reasoning_tokens 上，
+    # 8192 默认上限会导致最终 JSON 被截断（finish_reason=length）而解析失败。
+    "edit-trace":           {"alias": "default", "temperature": 0.1, "max_tokens": 16384},
 
     # === 基准测试 ===
     "benchmark":            {"alias": "secondary", "temperature": 0.5},
@@ -158,6 +160,21 @@ def get_session_ttl_hours() -> int:
     从环境变量 SESSION_TTL_HOURS 读取，默认 168（7 天）。
     """
     return int(os.getenv("SESSION_TTL_HOURS", "168"))
+
+
+# ── 轨迹分析 LLM 调用重试 ──
+def get_trace_retry_config() -> dict:
+    """轨迹分析 LLM 调用的重试参数（指数退避）。
+
+    从环境变量读取，适合被 RPM/TPM 限流时调大间隔：
+    - TRACE_RETRY_ATTEMPTS：最大重试次数，默认 4
+    - TRACE_RETRY_BASE_DELAY_SECONDS：首次重试等待秒数，默认 30
+      （RPM 限流通常按分钟计，30s 起步可在下一分钟窗口内等出配额）
+    """
+    return {
+        "attempts": int(os.getenv("TRACE_RETRY_ATTEMPTS", "4")),
+        "base_delay": float(os.getenv("TRACE_RETRY_BASE_DELAY_SECONDS", "30")),
+    }
 
 
 def get_cleanup_interval_minutes() -> int:

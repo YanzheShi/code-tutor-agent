@@ -73,9 +73,35 @@ export async function getReferenceCode(sid: string): Promise<{ code: string; tit
   return r.json();
 }
 
-export async function analyzeTrace(sid: string): Promise<any> {
-  const r = await fetch(`${BASE}/session/${sid}/analyze`, { method: 'POST' });
+export async function analyzeTrace(sid: string, problemId = 'default', message?: string): Promise<any> {
+  const r = await fetch(`${BASE}/session/${sid}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ problem_id: problemId, message }),
+  });
   if (!r.ok) throw new Error(`analyzeTrace failed: ${r.status}`);
   const data = await r.json();
-  return data.analysis;
+  // 首轮：data.analysis；多轮追问：data.reply
+  return message ? data.reply : data.analysis;
+}
+
+export async function fetchTraceAnalysis(sid: string, problemId = 'default'): Promise<any> {
+  const r = await fetch(`${BASE}/session/${sid}/analysis?problem_id=${encodeURIComponent(problemId)}`);
+  if (!r.ok) throw new Error(`fetchTraceAnalysis failed: ${r.status}`);
+  return r.json();
+}
+
+export async function summarizeTrace(
+  sid: string,
+  problemId = 'default',
+  transitionAction = 'continue',
+): Promise<any> {
+  const r = await fetch(`${BASE}/session/${sid}/analyze/summarize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ problem_id: problemId, transition_action: transitionAction }),
+  });
+  if (!r.ok) throw new Error(`summarizeTrace failed: ${r.status}`);
+  const data = await r.json();
+  return data.summary;
 }

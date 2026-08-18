@@ -55,6 +55,10 @@ export default function App() {
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
         onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
     analyzingTrace: s.analyzingTrace, onAnalyzeTrace: s.onAnalyzeTrace,
+    traceFailed: s.traceFailed,
+    traceAnalysis: s.traceAnalysis, traceMessages: s.traceMessages,
+    traceAsking: s.traceAsking, traceInput: s.traceInput,
+    onSetTraceInput: s.setTraceInput, onTraceAsk: s.onTraceAsk,
   };
   return <MainLayout {...mainProps} />;
 }

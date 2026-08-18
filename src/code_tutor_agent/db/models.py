@@ -84,6 +84,7 @@ class DBSubmission(BaseModel):
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "problem_id": self.problem_id,
             "code": self.student_code,
             "status": self.status,
             "verdict": self.verdict,
