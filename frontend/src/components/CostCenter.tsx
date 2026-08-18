@@ -7,8 +7,10 @@
  * 不展示「用户」维度,预算为「你的日预算 + 单 Session」。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { API_BASE } from '../api/config';
+import { useTheme } from '../hooks/useTheme';
+import EChart, { chartTokens, type ChartOption } from './EChart';
 
 const BASE = API_BASE;
 
@@ -87,39 +89,54 @@ function Bar({ pct, color }: { pct: number; color: string }) {
   );
 }
 
+// ── ECharts 图表 ──
+// 主题色由 chartTokens() 解析 --ct-* CSS 变量;useTheme 订阅使主题切换时重建 option。
+
 function Donut({ data, fmt, centerLabel }: {
   data: { purpose: string; value: number; pct: number }[];
   fmt: (v: number) => string;
   centerLabel: string;
 }) {
-  const cx = 60, cy = 60, rO = 54, rI = 34;
-  const pol = (r: number, a: number) => {
-    const rad = ((a - 90) * Math.PI) / 180;
-    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+  useTheme(); // 主题切换时触发重渲染,chartTokens 重新取值
+  const t = chartTokens();
+  const total = data.reduce((s, d) => s + d.value, 0) || 0;
+  const option: ChartOption = {
+    tooltip: {
+      trigger: 'item',
+      formatter: (p) => {
+        const it = p as { name: string; value: number; percent: number };
+        return `${it.name} ${fmt(it.value)} (${it.percent}%)`;
+      },
+    },
+    title: {
+      text: fmt(total),
+      subtext: centerLabel,
+      left: 'center', top: '40%',
+      textAlign: 'center',
+      textStyle: { fontSize: 15, fontWeight: 600, color: t.text },
+      subtextStyle: { fontSize: 11, color: t.muted },
+      itemGap: 2,
+    },
+    series: [{
+      type: 'pie',
+      radius: ['62%', '90%'],
+      center: ['50%', '50%'],
+      avoidLabelOverlap: true,
+      label: { show: false },
+      emphasis: { scale: true, scaleSize: 4 },
+      itemStyle: { borderColor: t.surface, borderWidth: 2, borderRadius: 3 },
+      data: data.map((d, i) => ({
+        name: d.purpose,
+        value: d.value,
+        itemStyle: { color: PALETTE[i % PALETTE.length] },
+      })),
+    }],
   };
-  const arc = (a0: number, a1: number) => {
-    const [x1, y1] = pol(rO, a0);
-    const [x2, y2] = pol(rO, a1);
-    const [x3, y3] = pol(rI, a1);
-    const [x4, y4] = pol(rI, a0);
-    const large = a1 - a0 > 180 ? 1 : 0;
-    return `M${x1.toFixed(2)} ${y1.toFixed(2)} A${rO} ${rO} 0 ${large} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} L${x3.toFixed(2)} ${y3.toFixed(2)} A${rI} ${rI} 0 ${large} 0 ${x4.toFixed(2)} ${y4.toFixed(2)} Z`;
-  };
-  let acc = 0;
-  const total = data.reduce((s, d) => s + d.value, 0) || 1;
-  const slices = data.map((d, i) => {
-    const pct = (d.value / total) * 100;
-    const a0 = acc * 3.6, a1 = (acc + pct) * 3.6;
-    acc += pct;
-    return <path key={d.purpose} d={arc(a0, a1)} fill={PALETTE[i % PALETTE.length]}><title>{d.purpose} {pct.toFixed(1)}%</title></path>;
-  });
   return (
     <div className="flex items-center gap-4">
-      <svg viewBox="0 0 120 120" className="h-[160px] w-[160px] shrink-0" role="img" aria-label={centerLabel}>
-        {slices}
-        <text x="60" y="56" textAnchor="middle" fontSize="11" fill="var(--ct-muted)">{centerLabel}</text>
-        <text x="60" y="72" textAnchor="middle" fontSize="15" fontWeight={600} fill="var(--ct-text)">{fmt(total)}</text>
-      </svg>
+      <div className="h-[160px] w-[160px] shrink-0">
+        <EChart option={option} ariaLabel={centerLabel} />
+      </div>
       <div className="flex-1 space-y-1">
         {data.map((d, i) => (
           <div key={d.purpose} className="flex items-center gap-2 text-xs">
@@ -134,44 +151,94 @@ function Donut({ data, fmt, centerLabel }: {
   );
 }
 
+// 成本面积图:单 series + areaStyle,边界不闭合(boundaryGap:false)
 function AreaChart({ trend }: { trend: { day: string; cost: number }[] }) {
+  useTheme();
+  const t = chartTokens();
   if (trend.length === 0) return <div className="text-xs text-ct-muted">暂无数据</div>;
   const max = Math.max(...trend.map((d) => d.cost), 1);
-  const pts = trend.map((d, i) => `${(i / Math.max(1, trend.length - 1) * 100).toFixed(1)},${(100 - (d.cost / max) * 100).toFixed(1)}`).join(' ');
-  return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-[180px] w-full" role="img" aria-label="成本趋势">
-      <polygon points={`0,100 ${pts} 100,100`} fill="var(--ct-info-bg)" />
-      <polyline points={pts} fill="none" stroke="var(--ct-accent)" strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
-    </svg>
-  );
+  // 成本 Y 轴:整数 ¥(¥0 / ¥5 / ¥10),避免 ¥0.00 这种细度
+  const fmtCostAxis = (v: number) => v === 0 ? '¥0' : '¥' + (v >= 10 ? Math.round(v).toString() : v.toFixed(1));
+  const option: ChartOption = {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v) => fmtMoney(Number(v)),
+    },
+    grid: { left: 4, right: 4, top: 8, bottom: 2, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: trend.map((d) => d.day),
+      axisLabel: { color: t.muted, fontSize: 10, formatter: (d: string) => d.slice(5) },
+      axisLine: { lineStyle: { color: t.border } },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      max, interval: max / 2,
+      axisLabel: { color: t.muted, fontSize: 10, formatter: (v: number) => fmtCostAxis(v) },
+      splitLine: { lineStyle: { type: 'dashed', color: t.border, opacity: 0.5 } },
+    },
+    series: [{
+      type: 'line',
+      data: trend.map((d) => d.cost),
+      symbol: 'circle', symbolSize: 4, showSymbol: trend.length <= 15,
+      lineStyle: { color: t.accent, width: 1.5 },
+      itemStyle: { color: t.accent },
+      areaStyle: { color: t.infoBg },
+    }],
+  };
+  return <EChart option={option} ariaLabel="成本趋势" />;
 }
 
-// 堆叠面积:输出 / 输入(非缓存) / 缓存读 / 缓存写,各层之和 = 总 Token
+// 堆叠面积:输出 / 输入(非缓存) / 缓存读,stack 总和 = 总 Token
+// (缓存写不展示:SenseNova/DeepSeek 网关不返回 cache_creation,恒为 0)
 function StackedAreaChart({ trend }: { trend: {
   day: string; prompt: number; completion: number; cache_read: number; cache_creation: number;
 }[] }) {
+  useTheme();
+  const t = chartTokens();
   if (trend.length === 0) return <div className="text-xs text-ct-muted">暂无数据</div>;
   const layers = [
     { key: '输出', color: '#1a7f37', get: (d: typeof trend[number]) => d.completion },
     { key: '输入(非缓存)', color: '#0969da', get: (d: typeof trend[number]) => Math.max(0, d.prompt - d.cache_read - d.cache_creation) },
     { key: '缓存读', color: '#9a6700', get: (d: typeof trend[number]) => d.cache_read },
-    { key: '缓存写', color: '#6e7781', get: (d: typeof trend[number]) => d.cache_creation },
   ];
   const max = Math.max(...trend.map((d) => d.prompt + d.completion), 1);
-  const x = (i: number) => (i / Math.max(1, trend.length - 1) * 100).toFixed(1);
-  const y = (v: number) => (100 - (v / max) * 100).toFixed(1);
-  const cum: number[][] = layers.map((_, li) =>
-    trend.map((d) => layers.slice(0, li + 1).reduce((s, l) => s + l.get(d), 0)));
+  const option: ChartOption = {
+    tooltip: {
+      trigger: 'axis',
+      valueFormatter: (v) => fmtToken(Number(v)),
+    },
+    grid: { left: 4, right: 4, top: 8, bottom: 2, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: trend.map((d) => d.day),
+      axisLabel: { color: t.muted, fontSize: 10, formatter: (d: string) => d.slice(5) },
+      axisLine: { lineStyle: { color: t.border } },
+      axisTick: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      max, interval: max / 2,
+      axisLabel: { color: t.muted, fontSize: 10, formatter: (v: number) => fmtToken(v) },
+      splitLine: { lineStyle: { type: 'dashed', color: t.border, opacity: 0.5 } },
+    },
+    series: layers.map((l) => ({
+      type: 'line',
+      name: l.key,
+      stack: 'total',
+      data: trend.map((d) => l.get(d)),
+      symbol: 'circle', symbolSize: 4, showSymbol: trend.length <= 15,
+      lineStyle: { color: l.color, width: 1 },
+      itemStyle: { color: l.color },
+      areaStyle: { color: l.color, opacity: 0.85 },
+    })),
+  };
   return (
     <div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-[180px] w-full" role="img" aria-label="Token 量趋势">
-        {layers.map((l, li) => {
-          const lower = li === 0 ? trend.map(() => 0) : cum[li - 1];
-          const top = trend.map((_, i) => `${x(i)},${y(cum[li][i])}`).join(' ');
-          const bottom = [...trend.keys()].reverse().map((i) => `${x(i)},${y(lower[i])}`).join(' ');
-          return <polygon key={l.key} points={`${top} ${bottom}`} fill={l.color} opacity={0.85}><title>{l.key}</title></polygon>;
-        })}
-      </svg>
+      <EChart option={option} ariaLabel="Token 量趋势" />
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-ct-muted">
         {layers.map((l) => (
           <span key={l.key} className="flex items-center gap-1.5">
@@ -245,7 +312,7 @@ function OverviewTab({ password, range, model }: { password: string; range: Rang
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {data.kpis.slice(0, 4).map(kpiCard)}
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {data.kpis.slice(4).map(kpiCard)}
       </div>
 

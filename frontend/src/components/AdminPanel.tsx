@@ -7,9 +7,11 @@
  *   成本中心 — token 用量 / 成本 / 缓存命中统计
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
-import CostCenter from './CostCenter';
+
+// 成本中心含 ECharts(~300KB),懒加载独立 chunk,仅在打开该 Tab 时下载
+const CostCenter = lazy(() => import('./CostCenter'));
 
 const BASE = API_BASE;
 
@@ -567,7 +569,11 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       {section === 'profile' && <AdminProfileView />}
 
       {/* Cost center */}
-      {section === 'cost' && <CostCenter adminToken={adminToken ?? ''} />}
+      {section === 'cost' && (
+        <Suspense fallback={<div className="p-4 text-sm text-ct-muted">加载成本中心…</div>}>
+          <CostCenter adminToken={adminToken ?? ''} />
+        </Suspense>
+      )}
     </div>
   );
 }

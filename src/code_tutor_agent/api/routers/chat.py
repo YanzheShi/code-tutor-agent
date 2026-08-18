@@ -45,6 +45,20 @@ def _normalize_to_messages(raw_list) -> list[Message]:
     return out
 
 
+def _explicit_generate_signals(message: str) -> bool:
+    """用户显式要求立即出题（如"出题" / "来一道" / "给我出"）。
+
+    命中这些关键词时，用户已经表达了"别再追问、直接出题"的意图，
+    应无条件推进到出题，而不是被 LLM 意图判定的偶发抖动拦在 dialog 态。
+    """
+    return any(k in message for k in ("出题", "来一道", "给我出", "出道题", "开始做题"))
+
+
+def _explicit_random_signals(message: str) -> bool:
+    """用户把 topic / 难度都交给 AI 决定（"随机" / "随便" / "由你决定" 等）。"""
+    return any(k in message for k in ("随机", "随便", "都行", "由你决定", "你决定", "你来定", "随你"))
+
+
 def _build_results_context(values: dict) -> str:
     """把用户最近的运行 / 判题结果格式化为文本，供导师 prompt 注入。
 
@@ -283,6 +297,23 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
             logger.warning("analyze_user_intent failed: %s", exc)
             intent = DialogIntent(
                 next_message="我没理解清楚，能再详细说说你想练什么类型的题吗？"
+            )
+
+        # ── 确定性兜底：修复 next-problem 重入 dialog 卡死 ──
+        # analyze_user_intent 的 prompt 在「对话初期(1-2 轮)」分支与「随机/出题即 ready」
+        # 分支存在矛盾，导致消息如"请随机给我出一道算法题"约 50% 概率被误判为
+        # is_ready=False（被当成"初期需推荐方向"），使 next-problem 切换后无法触发出题、
+        # 整个连续做题链路永久卡在 dialog 态。这里用显式关键词做确定性补强：
+        # 命中"要求出题/交AI决定"信号且 LLM 未判 ready 时，强制推进到出题。
+        if not intent.is_ready and (
+            _explicit_generate_signals(message) or _explicit_random_signals(message)
+        ):
+            intent.is_ready = True
+            # topic 与 difficulty 都缺失 → 用户把选择权交给 AI，走随机路径（保留惊喜感）
+            if not intent.topic and not intent.difficulty:
+                intent.is_random = True
+            logger.info(
+                "intent 兜底强制 is_ready=True（关键词命中，原 is_ready=False）"
             )
 
         if intent.is_ready:

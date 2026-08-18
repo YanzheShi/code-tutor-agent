@@ -17,14 +17,9 @@ from code_tutor_agent.schemas.api import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_ADMIN_PASSWORD: str | None = None
-
-
 def _get_admin_password() -> str | None:
-    global _ADMIN_PASSWORD
-    if _ADMIN_PASSWORD is None:
-        _ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
-    return _ADMIN_PASSWORD
+    # 不缓存:env 在进程启动时经 load_dotenv 注入,每次直读避免测试间状态污染
+    return os.getenv("ADMIN_PASSWORD")
 
 
 def _verify_admin(request_body: dict) -> bool:

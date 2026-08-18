@@ -72,7 +72,7 @@ def _init_db_tables(cursor) -> None:
             source TEXT NOT NULL DEFAULT 'generated',
             source_url TEXT DEFAULT '',
             alternative_solutions TEXT NOT NULL DEFAULT '[]',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
 
@@ -98,7 +98,7 @@ def _init_db_tables(cursor) -> None:
         CREATE TABLE IF NOT EXISTS profiles (
             user_id TEXT PRIMARY KEY,
             profile_json TEXT NOT NULL DEFAULT '{}',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
 
@@ -106,7 +106,7 @@ def _init_db_tables(cursor) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_activity (
             session_id TEXT PRIMARY KEY,
-            last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            last_active_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
 
@@ -117,7 +117,7 @@ def _init_db_tables(cursor) -> None:
             user_id TEXT DEFAULT 'default',
             events_json TEXT NOT NULL DEFAULT '[]',
             problem_id TEXT NOT NULL DEFAULT 'default',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
 
@@ -126,7 +126,7 @@ def _init_db_tables(cursor) -> None:
         CREATE TABLE IF NOT EXISTS trace_analysis (
             session_id TEXT PRIMARY KEY,
             result_json TEXT NOT NULL DEFAULT '{}',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
 
@@ -137,8 +137,8 @@ def _init_db_tables(cursor) -> None:
             problem_id TEXT NOT NULL DEFAULT 'default',
             result_json TEXT NOT NULL DEFAULT '{}',
             model TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime')),
             PRIMARY KEY (session_id, problem_id)
         )
     """)
@@ -151,7 +151,7 @@ def _init_db_tables(cursor) -> None:
             transition_action TEXT DEFAULT '',
             summary_json TEXT NOT NULL DEFAULT '{}',
             token_est INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
             PRIMARY KEY (session_id, problem_id)
         )
     """)
@@ -163,7 +163,7 @@ def _init_db_tables(cursor) -> None:
             session_id TEXT NOT NULL,
             problem_id TEXT NOT NULL DEFAULT 'default',
             messages_json TEXT NOT NULL DEFAULT '[]',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime')),
             PRIMARY KEY (session_id, problem_id)
         )
     """)
@@ -183,7 +183,7 @@ def _init_db_tables(cursor) -> None:
             verdict TEXT DEFAULT '',
             judge_results TEXT DEFAULT '[]',
             feedback TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (problem_id) REFERENCES problems (id)
         )
     """)
@@ -192,7 +192,7 @@ def _init_db_tables(cursor) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS token_usage (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            ts TIMESTAMP DEFAULT (datetime('now','localtime')),
             session_id TEXT DEFAULT '',
             user_id TEXT DEFAULT 'default',
             purpose TEXT NOT NULL,
@@ -608,8 +608,8 @@ def touch_session(session_id: str) -> None:
     """
     try:
         _with_conn(lambda cursor: cursor.execute(
-            "INSERT INTO session_activity (session_id, last_active_at) VALUES (?, CURRENT_TIMESTAMP) "
-            "ON CONFLICT(session_id) DO UPDATE SET last_active_at = CURRENT_TIMESTAMP",
+            "INSERT INTO session_activity (session_id, last_active_at) VALUES (?, datetime('now','localtime')) "
+            "ON CONFLICT(session_id) DO UPDATE SET last_active_at = datetime('now','localtime')",
             (session_id,),
         ))
     except Exception as exc:
@@ -621,7 +621,7 @@ def get_stale_sessions(max_age_hours: int) -> list[str]:
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
             "SELECT session_id FROM session_activity "
-            "WHERE last_active_at < datetime('now', '-' || ? || ' hours')",
+            "WHERE last_active_at < datetime('now','localtime', '-' || ? || ' hours')",
             (str(max_age_hours),),
         ).fetchall())
         return [row["session_id"] for row in rows]
@@ -696,7 +696,7 @@ def save_profile(profile, user_id: str = "default"):
     try:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = datetime('now','localtime')",
             (user_id, profile.model_dump_json()),
         ))
         logger.info("save_profile() — user=%s, proficiency=%.2f, attempts=%d",
@@ -756,7 +756,7 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_i
             old = json.loads(row["events_json"] or "[]")
             merged = old + list(events)
             cursor.execute(
-                "UPDATE edit_traces SET events_json = ?, user_id = ?, problem_id = ?, updated_at = CURRENT_TIMESTAMP "
+                "UPDATE edit_traces SET events_json = ?, user_id = ?, problem_id = ?, updated_at = datetime('now','localtime') "
                 "WHERE session_id = ?",
                 (json.dumps(merged, ensure_ascii=False), user_id, problem_id, session_id),
             )
@@ -793,7 +793,7 @@ def save_trace_analysis(session_id: str, result: dict) -> None:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO trace_analysis (session_id, result_json) VALUES (?, ?) "
             "ON CONFLICT(session_id) DO UPDATE SET "
-            "result_json = excluded.result_json, created_at = CURRENT_TIMESTAMP",
+            "result_json = excluded.result_json, created_at = datetime('now','localtime')",
             (session_id, json.dumps(result, ensure_ascii=False)),
         ))
         logger.info("save_trace_analysis() — session=%s", session_id)
@@ -845,9 +845,9 @@ def save_trace_thread(session_id: str, problem_id: str, messages: list[dict]) ->
     try:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO trace_threads (session_id, problem_id, messages_json, updated_at) "
-            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+            "VALUES (?, ?, ?, datetime('now','localtime')) "
             "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
-            "messages_json = excluded.messages_json, updated_at = CURRENT_TIMESTAMP",
+            "messages_json = excluded.messages_json, updated_at = datetime('now','localtime')",
             (session_id, problem_id, json.dumps(messages, ensure_ascii=False)),
         ))
         logger.info("save_trace_thread() — session=%s pid=%s msgs=%d", session_id, problem_id, len(messages))
@@ -888,9 +888,9 @@ def save_analysis_result(session_id: str, problem_id: str, result: dict, model: 
     try:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO analysis_results (session_id, problem_id, result_json, model, updated_at) "
-            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
+            "VALUES (?, ?, ?, ?, datetime('now','localtime')) "
             "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
-            "result_json = excluded.result_json, model = excluded.model, updated_at = CURRENT_TIMESTAMP",
+            "result_json = excluded.result_json, model = excluded.model, updated_at = datetime('now','localtime')",
             (session_id, problem_id, json.dumps(result, ensure_ascii=False), model),
         ))
         logger.info("save_analysis_result() — session=%s pid=%s", session_id, problem_id)
@@ -924,7 +924,7 @@ def save_trace_summary(
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(session_id, problem_id) DO UPDATE SET "
             "transition_action = excluded.transition_action, summary_json = excluded.summary_json, "
-            "token_est = excluded.token_est, created_at = CURRENT_TIMESTAMP",
+            "token_est = excluded.token_est, created_at = datetime('now','localtime')",
             (session_id, problem_id, transition_action, json.dumps(summary, ensure_ascii=False), token_est),
         ))
         logger.info("save_trace_summary() — session=%s pid=%s action=%s", session_id, problem_id, transition_action)
@@ -986,7 +986,7 @@ def save_user_profile_v2(profile: dict, user_id: str = "default_v2") -> None:
     try:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
-            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            "ON CONFLICT(user_id) DO UPDATE SET profile_json = excluded.profile_json, updated_at = datetime('now','localtime')",
             (user_id, _json.dumps(profile, ensure_ascii=False)),
         ))
         logger.info("save_user_profile_v2() — user=%s, tags=%d", user_id, len(profile.get("prof", {})))
@@ -1110,7 +1110,7 @@ def save_user_memory(memory: dict, user_id: str = MEMORY_USER_ID) -> None:
         _with_conn(lambda cursor: cursor.execute(
             "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
             "ON CONFLICT(user_id) DO UPDATE SET "
-            "profile_json = excluded.profile_json, updated_at = CURRENT_TIMESTAMP",
+            "profile_json = excluded.profile_json, updated_at = datetime('now','localtime')",
             (user_id, _json.dumps(memory, ensure_ascii=False)),
         ))
         logger.info("save_user_memory(%s) — behavior=%d, observations=%d",
@@ -1172,7 +1172,8 @@ def insert_token_usage_batch(rows: list[tuple]) -> None:
     """批量写入 token_usage 明细(由异步 sink 调用)。
 
     ``ts`` 显式写入**本地**时间,与回调里的 ``ts_day``、查询用的
-    ``_fmt_date(datetime.now())`` 保持同一时区基准(CURRENT_TIMESTAMP 是 UTC,
+    ``_fmt_date(datetime.now())`` 保持同一时区基准。全库时间列已统一为
+    ``datetime('now','localtime')``(SQLite 的 CURRENT_TIMESTAMP 是 UTC,
     跨时区会与「今日」过滤错配)。
     """
     if not rows:
@@ -1355,8 +1356,6 @@ def query_token_overview(from_date: str | None, to_date: str | None,
          "delta": _delta(cur["completion"], prev["completion"])},
         {"label": "缓存读", "value": cur["cache_read"],
          "delta": _delta(cur["cache_read"], prev["cache_read"])},
-        {"label": "缓存写", "value": cur["cache_creation"],
-         "delta": _delta(cur["cache_creation"], prev["cache_creation"])},
     ]
 
     # ── 趋势 / 占比 / Top5:随筛选范围 + 模型 ──

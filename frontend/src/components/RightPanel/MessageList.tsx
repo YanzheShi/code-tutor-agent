@@ -35,18 +35,6 @@ export default function MessageList({
         );
       })}
 
-      {/* 判题短报 */}
-      {verdict && verdict !== 'AC' && (
-        <div className={`rounded border px-3 py-2 text-sm ${
-          verdict === 'WA' ? 'border-ct-warn/30 bg-ct-warn-bg text-ct-warn'
-          : 'border-ct-error/30 bg-ct-error-bg text-ct-error'
-        }`}>
-          {verdict === 'WA' && '答案不对，再检查一下逻辑'}
-          {verdict === 'TLE' && '超时了，想想更高效的算法'}
-          {verdict === 'RE' && '执行出错'}
-        </div>
-      )}
-
       {/* LeetCode 风格失败面板（首个失败用例） */}
       {verdict && verdict !== 'AC' && failedCase && (
         <div className="rounded border border-ct-border bg-ct-surface-secondary p-3 space-y-2 text-xs">

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -58,20 +58,61 @@ class TestCost:
             "prompt_tokens": 1000, "completion_tokens": 500,
             "cache_creation_tokens": 0, "cache_read_tokens": 200,
         }
-        # (800 non-cached*1 + 500*2 + 0*1.25 + 200*0.1)/1000
-        assert cost.cost_calculator("deepseek-chat", rec) == pytest.approx(1.82)
+        # (800 non-cached*1 + 500*2 + 0*1.25 + 200*0.1)/1e6
+        assert cost.cost_calculator("deepseek-chat", rec) == pytest.approx(0.00182)
 
     def test_cost_calculator_cache_creation(self):
         rec = {
             "prompt_tokens": 1000, "completion_tokens": 100,
             "cache_creation_tokens": 400, "cache_read_tokens": 0,
         }
-        # (600*1 + 100*2 + 400*1.25 + 0)/1000 = (600+200+500)/1000
-        assert cost.cost_calculator("deepseek-chat", rec) == pytest.approx(1.3)
+        # (600*1 + 100*2 + 400*1.25 + 0)/1e6 = (600+200+500)/1e6
+        assert cost.cost_calculator("deepseek-chat", rec) == pytest.approx(0.0013)
 
     def test_pick_pricing_unknown_falls_to_default(self):
         assert cost.pick_pricing("gpt-4o") is cost.DEFAULT_PRICING
         assert cost.pick_pricing("deepseek-reasoner")["output"] == 16.0
+        # v4-flash 命中时段表
+        assert cost.pick_pricing("deepseek-v4-flash")["peak"]["input"] == 3.0
+
+    def test_is_peak_hour(self):
+        bj = lambda h: datetime(2026, 8, 19, h, 30, tzinfo=timezone(timedelta(hours=8)))
+        # 高峰:09-12 与 14-18(含端点、不含结束整点)
+        assert cost.is_peak_hour(bj(9))
+        assert cost.is_peak_hour(bj(11))
+        assert cost.is_peak_hour(bj(14))
+        assert cost.is_peak_hour(bj(17))
+        # 空闲:凌晨/午间/晚间
+        assert not cost.is_peak_hour(bj(8))
+        assert not cost.is_peak_hour(bj(12))
+        assert not cost.is_peak_hour(bj(13))
+        assert not cost.is_peak_hour(bj(18))
+        assert not cost.is_peak_hour(bj(0))
+
+    def test_cost_calculator_v4_flash_peak_offpeak(self):
+        # 峰值档:未命中输入 3.0 / 输出 9.0 / 命中 0.10(元/百万)
+        rec = {
+            "prompt_tokens": 1_000_000, "completion_tokens": 1_000_000,
+            "cache_creation_tokens": 0, "cache_read_tokens": 1_000_000,
+        }
+        peak = datetime(2026, 8, 19, 10, tzinfo=timezone(timedelta(hours=8)))
+        off = datetime(2026, 8, 19, 2, tzinfo=timezone(timedelta(hours=8)))
+        # 非缓存输入 = 1M - 0 - 1M = 0 → cost = (0*3 + 1M*9 + 1M*0.1)/1M
+        assert cost.cost_calculator("deepseek-v4-flash", rec, dt=peak) == pytest.approx(9.10)
+        # 空闲档:输入 1.5 / 输出 4.5 / 命中 0.05 → 4.5 + 0.05
+        assert cost.cost_calculator("deepseek-v4-flash", rec, dt=off) == pytest.approx(4.55)
+
+    def test_cost_calculator_v4_flash_cache_write_billed_as_input(self):
+        # 新计价无独立缓存写入价:cache_creation 按未命中输入价计
+        rec = {
+            "prompt_tokens": 1_000_000, "completion_tokens": 0,
+            "cache_creation_tokens": 1_000_000, "cache_read_tokens": 0,
+        }
+        peak = datetime(2026, 8, 19, 10, tzinfo=timezone(timedelta(hours=8)))
+        # 峰值:1M * 3.0 / 1M = 3.0;空闲:1.5
+        assert cost.cost_calculator("deepseek-v4-flash", rec, dt=peak) == pytest.approx(3.0)
+        off = datetime(2026, 8, 19, 2, tzinfo=timezone(timedelta(hours=8)))
+        assert cost.cost_calculator("deepseek-v4-flash", rec, dt=off) == pytest.approx(1.5)
 
     def test_cache_hit_rate(self):
         rec = {"prompt_tokens": 1000, "cache_creation_tokens": 100, "cache_read_tokens": 200}
@@ -188,7 +229,7 @@ class TestCallback:
         assert rec["model_name"] == "deepseek-chat"
         assert rec["prompt_tokens"] == 1000
         assert rec["cache_read_tokens"] == 200
-        assert rec["cost"] == pytest.approx(1.82)
+        assert rec["cost"] == pytest.approx(0.00182)
         # 消费后已清理,避免跨调用串 metadata
         assert "r1" not in handler._run_meta
 
@@ -291,10 +332,10 @@ class TestDatabaseAggregation:
         out = db.query_token_overview(TODAY, TODAY)
         assert set(out) >= {"kpis", "trend", "tokenTrend", "moduleShare",
                             "moduleTokenShare", "topPurposes"}
-        assert len(out["kpis"]) == 9
+        assert len(out["kpis"]) == 8
         kpi_labels = {k["label"] for k in out["kpis"]}
         assert {"总成本", "总调用", "缓存命中率", "预估月费", "总 Token",
-                "输入 Token", "输出 Token", "缓存读", "缓存写"} <= kpi_labels
+                "输入 Token", "输出 Token", "缓存读"} <= kpi_labels
         assert all("delta" in k for k in out["kpis"])
         assert out["range"].get("model") == "全部"
         assert out["moduleShare"][0]["purpose"] in {"judge", "problem"}

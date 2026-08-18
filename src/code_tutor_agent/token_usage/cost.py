@@ -3,27 +3,42 @@
 集中管理单价(随网关调价只改这里)、成本折算、缓存命中率口径、
 以及 purpose → 业务分类的映射。
 
-单价口径(单位:元 / 千 token),与 DeepSeek 官方一致:
+单价口径(单位:元 / 百万 token,与 DeepSeek 官方一致):
 - input / output 普通单价
-- cache_write = 写入缓存倍率(DeepSeek 1.25×)
-- cache_read  = 缓存命中折扣(DeepSeek 0.1×)
+- cache_write = 缓存写入单价(旧档模型;新档模型无此键,写入按未命中输入价计)
+- cache_read  = 缓存命中单价
+- 支持时段模型:price 表为 {peak, off_peak} 两档,按北京时间高峰/空闲选价
 """
 from __future__ import annotations
 
-# ── 单价配置(元 / 千 token) ──
+from datetime import datetime, timedelta, timezone
+
+# 高峰时段(北京时间,其余为空闲):09:00-12:00、14:00-18:00
+PEAK_SLOTS: tuple[tuple[int, int], ...] = ((9, 12), (14, 18))
+# 中国无夏令时,固定 UTC+8 即可(无需 tzdata)
+_BJ_TZ = timezone(timedelta(hours=8))
+
+# ── 单价配置(元 / 百万 token) ──
 # 默认档:覆盖未知模型。DeepSeek 系按名称子串匹配。
-PRICING: dict[str, dict[str, float]] = {
+# 旧档模型(deepseek-chat/reasoner)用固定单价;新档模型可配 peak/off_peak 双价。
+PRICING: dict[str, dict[str, float] | dict[str, dict[str, float]]] = {
     "deepseek-chat": {
         "input": 1.0,
         "output": 2.0,
-        "cache_write": 1.25,   # 写入缓存倍率
-        "cache_read": 0.1,     # 命中折扣
+        "cache_write": 1.25,
+        "cache_read": 0.1,
     },
     "deepseek-reasoner": {
         "input": 4.0,
         "output": 16.0,
         "cache_write": 1.25,
         "cache_read": 0.1,
+    },
+    # deepseek-v4-flash:官方时段价(高峰=空闲×2)。新计价无独立缓存写入价,
+    # cache_creation 按未命中输入价计(见 cost_calculator 中 cache_write 兜底)。
+    "deepseek-v4-flash": {
+        "peak":     {"input": 3.0,  "output": 9.0,  "cache_read": 0.10},
+        "off_peak": {"input": 1.5,  "output": 4.5,  "cache_read": 0.05},
     },
 }
 DEFAULT_PRICING: dict[str, float] = {
@@ -63,7 +78,13 @@ def category_of(purpose: str) -> str:
     return PURPOSE_CATEGORY.get(purpose, "其他")
 
 
-def pick_pricing(model_name: str) -> dict[str, float]:
+def is_peak_hour(dt: datetime | None = None) -> bool:
+    """是否为高峰时段。默认取当前北京时间;可传 dt 便于测试/回放历史。"""
+    dt = dt or datetime.now(_BJ_TZ)
+    return any(start <= dt.hour < end for start, end in PEAK_SLOTS)
+
+
+def pick_pricing(model_name: str) -> dict[str, float] | dict[str, dict[str, float]]:
     """按模型名选择单价表;名称含已知厂商子串则命中,否则用默认档。"""
     if not model_name:
         return DEFAULT_PRICING
@@ -74,24 +95,35 @@ def pick_pricing(model_name: str) -> dict[str, float]:
     return DEFAULT_PRICING
 
 
-def cost_calculator(model_name: str, rec: dict) -> float:
+def select_price(model_name: str, dt: datetime | None = None) -> dict[str, float]:
+    """选择实际计价用的单价表:时段模型按北京高峰/空闲选档,其余用固定档。"""
+    p = pick_pricing(model_name)
+    if "peak" in p:
+        return p["peak"] if is_peak_hour(dt) else p["off_peak"]
+    return p
+
+
+def cost_calculator(model_name: str, rec: dict, dt: datetime | None = None) -> float:
     """按 input / output / cache_write / cache_read 四类单价折算成本(元)。
 
     ``prompt_tokens`` 为原始输入总量;其中 ``cache_creation``(写入新缓存)
     与 ``cache_read``(命中)之外的部分按普通 input 计价。
+    单价单位:元 / 百万 token。
     """
-    p = pick_pricing(model_name)
+    p = select_price(model_name, dt)
     non_cached_input = (
         rec["prompt_tokens"] - rec["cache_creation_tokens"] - rec["cache_read_tokens"]
     )
     if non_cached_input < 0:
         non_cached_input = 0
+    # 新计价格式(如 v4-flash)无独立缓存写入价:写入按未命中输入价计
+    cache_write = p.get("cache_write", p["input"])
     cost = (
         non_cached_input * p["input"]
         + rec["completion_tokens"] * p["output"]
-        + rec["cache_creation_tokens"] * p["cache_write"]
+        + rec["cache_creation_tokens"] * cache_write
         + rec["cache_read_tokens"] * p["cache_read"]
-    ) / 1000.0
+    ) / 1_000_000.0
     return round(cost, 6)
 
 
