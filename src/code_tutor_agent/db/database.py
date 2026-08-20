@@ -773,15 +773,75 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_i
         raise
 
 
+def _apply_code_diff(base_code: str, diff_text: str) -> str:
+    """按行级 diff 文本重建全量代码。
+
+    diff 格式（前端 useEditTrace 生成）：
+      # a0-a1 -> b0-b1      # 行区间（0 起，与 split('\\n') 索引一致）
+      -旧行                # 仅标注，应用时不需要
+      +新行
+    从后往前替换 lines[a0:a1] = new_lines，避免行号偏移。
+    """
+    lines = base_code.split("\n")
+    hunks: list[tuple[int, int, list[str]]] = []
+    cur_hunk: tuple[int, int, list[str]] | None = None
+    for ln in diff_text.split("\n"):
+        if ln.startswith("# "):
+            if cur_hunk is not None:
+                hunks.append(cur_hunk)
+            head = ln[2:].split(" -> ")
+            a0, a1 = (int(x) for x in head[0].split("-"))
+            cur_hunk = (a0, a1, [])
+        elif ln.startswith("+") and cur_hunk is not None:
+            cur_hunk[2].append(ln[1:])
+    if cur_hunk is not None:
+        hunks.append(cur_hunk)
+    for a0, a1, new_lines in reversed(hunks):
+        lines[a0:a1] = new_lines
+    return "\n".join(lines)
+
+
+def reconstruct_edit_trace(events: list[dict]) -> list[dict]:
+    """把 code_format='diff' 的事件按序重建为全量 code 快照（返回新列表，不改 DB）。
+
+    diff 事件相对"上一快照"增量存储；若链断（前面缺少全量基准，如事件丢失），
+    该事件无法重建 → 丢弃并计数告警——轨迹缺口对分析端可见，而非静默错位。
+    旧数据事件无 code_format → 原样通过。
+    """
+    out: list[dict] = []
+    last_code: Optional[str] = None
+    dropped = 0
+    for ev in events:
+        ev = dict(ev)
+        if ev.get("code_format") == "diff":
+            if last_code is None:
+                dropped += 1
+                continue
+            ev["code"] = _apply_code_diff(last_code, ev.get("code_diff") or "")
+            ev.pop("code_format", None)
+            ev.pop("code_diff", None)
+            last_code = ev["code"]
+        elif ev.get("code") is not None:
+            last_code = ev["code"]
+        out.append(ev)
+    if dropped:
+        logger.warning("reconstruct_edit_trace: %d 条 diff 事件因缺少全量基准被丢弃", dropped)
+    return out
+
+
 def get_edit_trace(session_id: str) -> list[dict]:
-    """读取某会话的编辑轨迹事件列表。无记录 / 出错均返回 []。"""
+    """读取某会话的编辑轨迹事件列表。无记录 / 出错均返回 []。
+
+    diff 事件（code_format='diff'）在读取时按序重建为全量 code 快照，
+    下游（LLM 分析 / 画像）拿到的始终是带全量代码的事件。
+    """
     try:
         row = _with_conn(lambda cursor: cursor.execute(
             "SELECT events_json FROM edit_traces WHERE session_id = ?", (session_id,)
         ).fetchone())
         if not row:
             return []
-        return json.loads(row["events_json"] or "[]")
+        return reconstruct_edit_trace(json.loads(row["events_json"] or "[]"))
     except Exception as exc:
         logger.error("get_edit_trace(%s) failed: %s", session_id, exc)
         return []

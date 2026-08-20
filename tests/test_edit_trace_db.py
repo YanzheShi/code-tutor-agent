@@ -42,6 +42,71 @@ class TestEditTraceStore:
         assert len(db.get_edit_trace("s2")) == 2
 
 
+class TestReconstructEditTrace:
+    """覆盖：diff 事件按序重建全量快照、链断丢弃、旧数据原样通过。"""
+
+    def _diff(self, old: str, new: str) -> str:
+        """用与前端同构的方式生成 diff 文本（# 区间 / -旧 / +新）。"""
+        import difflib
+
+        a, b = old.split("\n"), new.split("\n")
+        sm = difflib.SequenceMatcher(None, a, b)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal":
+                continue
+            old_lines, new_lines = a[i1:i2], b[j1:j2]
+            return f"# {i1}-{i2} -> {j1}-{j2}\n" + "\n".join(
+                ["-" + ln for ln in old_lines] + ["+" + ln for ln in new_lines]
+            )
+        return ""
+
+    def test_reconstructs_diff_chain(self, tmp_db):
+        base = "a\nb\nc\n"
+        mid = "a\nb\nc\nd\n"
+        final = "a\nx\nc\nd\n"
+        events = [
+            {"ts": 1, "type": "edit", "code": base, "problem_id": "67"},
+            {"ts": 2, "type": "edit", "code_format": "diff",
+             "code_diff": self._diff(base, mid), "problem_id": "67"},
+            {"ts": 3, "type": "edit", "code_format": "diff",
+             "code_diff": self._diff(mid, final), "problem_id": "67"},
+        ]
+        db.save_edit_trace("s3", "default", events)
+        out = db.get_edit_trace("s3")
+        assert [e["type"] for e in out] == ["edit", "edit", "edit"]
+        assert out[0]["code"] == base
+        assert out[1]["code"] == mid
+        assert out[2]["code"] == final
+        # diff 专用字段被移除，下游看到的是全量
+        assert "code_format" not in out[1] and "code_diff" not in out[1]
+
+    def test_dropped_when_chain_broken(self, tmp_db):
+        # 首条就是 diff（前面无全量基准）→ 无法重建 → 丢弃
+        events = [
+            {"ts": 1, "type": "edit", "code_format": "diff",
+             "code_diff": "# 0-1 -> 0-1\n+x\n", "problem_id": "67"},
+            {"ts": 2, "type": "run", "code": "x\n", "problem_id": "67"},
+        ]
+        db.save_edit_trace("s4", "default", events)
+        out = db.get_edit_trace("s4")
+        assert len(out) == 1 and out[0]["type"] == "run"
+
+    def test_legacy_events_passthrough(self, tmp_db):
+        events = [{"ts": 1, "type": "edit", "code": "a\n", "problem_id": "67"}]
+        db.save_edit_trace("s5", "default", events)
+        assert db.get_edit_trace("s5") == events
+
+    def test_same_as_prev_keeps_last_code(self, tmp_db):
+        # same_as_prev 事件不携带代码：last_code 保持上一快照
+        events = [
+            {"ts": 1, "type": "edit", "code": "a\n", "problem_id": "67"},
+            {"ts": 2, "type": "run", "same_as_prev": True, "problem_id": "67"},
+        ]
+        db.save_edit_trace("s6", "default", events)
+        out = db.get_edit_trace("s6")
+        assert out[1]["type"] == "run" and "code" not in out[1]
+
+
 class TestErrorModeDeltasDB:
     def test_apply_roundtrip_through_profile(self, tmp_db):
         from code_tutor_agent.profile.weakness import ErrorModeDelta
