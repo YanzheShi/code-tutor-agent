@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import operator
 from enum import Enum
-from typing import Annotated, List, Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -365,5 +365,15 @@ class SessionState(BaseModel):
             "压缩后的历史对话摘要。当对话 token 超预算时，"
             "旧消息被 LLM 压缩到此字段，新消息保留原文。"
             "Agent 模式换题时生成跨题摘要存入此字段。"
+        ),
+    )
+
+    # ── 换题增量摘要的起始下标（换题时记录，供下次换题只压缩当前题 delta）──
+    tutor_messages_cutoff: int = Field(
+        default=0,
+        description=(
+            "tutor_messages 中「当前题对话」的起始下标（每次换题时重置为"
+            " len(tutor_messages)，即下一次换题摘要只压缩自上次换题以来的增量，"
+            "避免换题摘要 O(N²) 吃全量历史）。"
         ),
     )

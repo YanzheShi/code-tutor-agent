@@ -110,16 +110,56 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
-    # ── 编辑轨迹（前端实时采集，按 session 聚合；供提交时错误模式分析）──
+    # ── 编辑轨迹（前端实时采集，按 (session_id, problem_id) 联合主键隔离）──
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS edit_traces (
-            session_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
             user_id TEXT DEFAULT 'default',
-            events_json TEXT NOT NULL DEFAULT '[]',
             problem_id TEXT NOT NULL DEFAULT 'default',
-            updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+            events_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime')),
+            PRIMARY KEY (session_id, problem_id)
         )
     """)
+
+    # 迁移：旧 schema（session_id 单主键）→ 新 schema（联合主键）
+    # 将旧行的事件按内嵌 problem_id 拆分到各行，并去除事件级冗余 problem_id
+    _et_cols = cursor.execute("PRAGMA table_info(edit_traces)").fetchall()
+    _et_pk = [c for c in _et_cols if c[5] > 0]  # c[5] = pk ordinal (>0 = part of PK)
+    if len(_et_pk) == 1:
+        cursor.execute("ALTER TABLE edit_traces RENAME TO _edit_traces_old")
+        cursor.execute("""
+            CREATE TABLE edit_traces (
+                session_id TEXT NOT NULL,
+                user_id TEXT DEFAULT 'default',
+                problem_id TEXT NOT NULL DEFAULT 'default',
+                events_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TIMESTAMP DEFAULT (datetime('now','localtime')),
+                PRIMARY KEY (session_id, problem_id)
+            )
+        """)
+        for _et_row in cursor.execute(
+            "SELECT session_id, user_id, problem_id, events_json FROM _edit_traces_old"
+        ).fetchall():
+            _et_events = json.loads(_et_row["events_json"] or "[]")
+            _et_groups: dict[str, list[dict]] = {}
+            for _ev in _et_events:
+                if not isinstance(_ev, dict):
+                    continue
+                _epid = str(_ev.get("problem_id") or _et_row["problem_id"] or "default")
+                _ev_clean = {k: v for k, v in _ev.items() if k != "problem_id"}
+                _et_groups.setdefault(_epid, []).append(_ev_clean)
+            if not _et_groups:
+                _et_groups[str(_et_row["problem_id"] or "default")] = []
+            for _epid, _evs in _et_groups.items():
+                cursor.execute(
+                    "INSERT OR REPLACE INTO edit_traces (session_id, user_id, problem_id, events_json) "
+                    "VALUES (?, ?, ?, ?)",
+                    (_et_row["session_id"], _et_row["user_id"], _epid,
+                     json.dumps(_evs, ensure_ascii=False))
+                )
+        cursor.execute("DROP TABLE _edit_traces_old")
+        logger.info("edit_traces migrated to composite PK (session_id, problem_id)")
 
     # ── 独立轨迹分析结论（纯展示，不回灌画像；按 session 缓存）──
     cursor.execute("""
@@ -641,6 +681,25 @@ def delete_session_activity(session_id: str) -> None:
         logger.warning("delete_session_activity(%s) failed: %s", session_id, exc)
 
 
+def delete_session_sidecar_data(session_id: str) -> None:
+    """清理某会话的全部旁路数据（与 checkpointer.delete_thread 联动，随会话 TTL 清理）。
+
+    覆盖：edit_traces / trace_analysis / analysis_results / trace_summaries /
+    trace_threads / submissions（均按 session_id 为 key 持续增长，无 TTL）。
+    任一失败只告警不阻断主删除流程。
+    """
+    try:
+        def _do(cursor):
+            for table in ("edit_traces", "trace_analysis", "analysis_results",
+                          "trace_summaries", "trace_threads"):
+                cursor.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
+            cursor.execute("DELETE FROM submissions WHERE session_id = ?", (session_id,))
+        _with_conn(_do)
+        logger.info("delete_session_sidecar_data() — session=%s", session_id)
+    except Exception as exc:
+        logger.warning("delete_session_sidecar_data(%s) failed: %s", session_id, exc)
+
+
 def get_all_submissions(limit: int = 100) -> list[dict]:
     """Return all recent submissions across all problems (for admin panel)."""
     try:
@@ -741,33 +800,49 @@ def update_profile_on_result(
 
 
 def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_id: str = "default") -> None:
-    """累计保存某会话的编辑轨迹事件（UPSERT + 追加）。
+    """累计保存某会话的编辑轨迹事件（UPSERT + 追加），按 (session_id, problem_id) 联合主键隔离。
 
     frontend 每次 flush 只发送自上次 flush 以来的增量事件；后端读旧 →
     追加 → 写回，保证多次 flush 的事件不丢。整个读改写在一个连接事务内完成。
-    problem_id 为请求体级别的兜底值，写进 edit_traces.problem_id 列
-    （事件内嵌的 problem_id 才是按题过滤的精确依据）。
+    事件按内嵌 problem_id 分组后写入各自行；无内嵌 pid 的事件用请求体 problem_id 兜底。
+    每行 events_json 只存该题的事件，不再每条事件冗余 problem_id（行级 problem_id 已是主键）。
     """
+    problem_id = str(problem_id) if problem_id is not None else "default"
+    # 按事件内嵌 pid 分组，去除冗余的 per-event problem_id（行级 pid 已是联合主键）
+    groups: dict[str, list[dict]] = {}
+    for e in events:
+        if not isinstance(e, dict):
+            continue
+        pid = str(e.get("problem_id") or problem_id)
+        ev = {k: v for k, v in e.items() if k != "problem_id"}
+        groups.setdefault(pid, []).append(ev)
+
+    if not groups:
+        groups[problem_id] = []
+
     def _do(cursor):
-        row = cursor.execute(
-            "SELECT events_json FROM edit_traces WHERE session_id = ?", (session_id,)
-        ).fetchone()
-        if row:
-            old = json.loads(row["events_json"] or "[]")
-            merged = old + list(events)
-            cursor.execute(
-                "UPDATE edit_traces SET events_json = ?, user_id = ?, problem_id = ?, updated_at = datetime('now','localtime') "
-                "WHERE session_id = ?",
-                (json.dumps(merged, ensure_ascii=False), user_id, problem_id, session_id),
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO edit_traces (session_id, user_id, events_json, problem_id) VALUES (?, ?, ?, ?)",
-                (session_id, user_id, json.dumps(list(events), ensure_ascii=False), problem_id),
-            )
+        for pid, evs in groups.items():
+            row = cursor.execute(
+                "SELECT events_json FROM edit_traces WHERE session_id = ? AND problem_id = ?",
+                (session_id, pid)
+            ).fetchone()
+            if row:
+                old = json.loads(row["events_json"] or "[]")
+                merged = old + evs
+                cursor.execute(
+                    "UPDATE edit_traces SET events_json = ?, user_id = ?, updated_at = datetime('now','localtime') "
+                    "WHERE session_id = ? AND problem_id = ?",
+                    (json.dumps(merged, ensure_ascii=False), user_id, session_id, pid),
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO edit_traces (session_id, user_id, problem_id, events_json) VALUES (?, ?, ?, ?)",
+                    (session_id, user_id, pid, json.dumps(evs, ensure_ascii=False)),
+                )
     try:
         _with_conn(_do)
-        logger.info("save_edit_trace() — session=%s, +%d events", session_id, len(events))
+        total = sum(len(evs) for evs in groups.values())
+        logger.info("save_edit_trace() — session=%s, +%d events across %d problems", session_id, total, len(groups))
     except Exception as exc:
         logger.error("save_edit_trace(%s) failed: %s", session_id, exc)
         raise
@@ -802,18 +877,25 @@ def _apply_code_diff(base_code: str, diff_text: str) -> str:
 
 
 def reconstruct_edit_trace(events: list[dict]) -> list[dict]:
-    """把 code_format='diff' 的事件按序重建为全量 code 快照（返回新列表，不改 DB）。
+    """把事件流重建为带全量 code 的事件列表（返回新列表，不改 DB）。
 
-    diff 事件相对"上一快照"增量存储；若链断（前面缺少全量基准，如事件丢失），
-    该事件无法重建 → 丢弃并计数告警——轨迹缺口对分析端可见，而非静默错位。
-    旧数据事件无 code_format → 原样通过。
+    全量方案（新数据）：每个 edit/run/submit 已自带全量 code；only same_as_prev 事件
+    （与上一条完全相同）未携带 code，此处直接继承上一条的 code（纯去重，不丢真相）。
+    不再有 diff 链脆弱性：单点丢失只丢那一条、绝不传染半场；存储真相即代码本身。
+
+    diff 分支（旧数据兼容）：code_format='diff' 的事件相对"上一快照"增量存储；
+    若链断（前面缺少全量基准，如事件丢失），该事件无法重建 → 丢弃并计数告警。
+
+    P2-2: 按 (ts, seq) 稳定排序，消除同 ts 事件的顺序歧义。
     """
+    events = sorted(events, key=lambda e: (e.get("ts", 0), e.get("seq", 0) or 0))
     out: list[dict] = []
     last_code: Optional[str] = None
     dropped = 0
     for ev in events:
         ev = dict(ev)
         if ev.get("code_format") == "diff":
+            # 旧数据兼容：行级 diff 重建
             if last_code is None:
                 dropped += 1
                 continue
@@ -821,6 +903,10 @@ def reconstruct_edit_trace(events: list[dict]) -> list[dict]:
             ev.pop("code_format", None)
             ev.pop("code_diff", None)
             last_code = ev["code"]
+        elif ev.get("same_as_prev"):
+            # 全量方案去重事件：继承上一条 code（若首条就 same_as_prev 则 code=None，罕见）
+            if last_code is not None:
+                ev["code"] = last_code
         elif ev.get("code") is not None:
             last_code = ev["code"]
         out.append(ev)
@@ -830,18 +916,22 @@ def reconstruct_edit_trace(events: list[dict]) -> list[dict]:
 
 
 def get_edit_trace(session_id: str) -> list[dict]:
-    """读取某会话的编辑轨迹事件列表。无记录 / 出错均返回 []。
+    """读取某会话的编辑轨迹事件列表（合并全部题）。无记录 / 出错均返回 []。
 
+    按 (session_id, problem_id) 联合主键存储：本函数合并该会话全部题的事件。
     diff 事件（code_format='diff'）在读取时按序重建为全量 code 快照，
     下游（LLM 分析 / 画像）拿到的始终是带全量代码的事件。
     """
     try:
-        row = _with_conn(lambda cursor: cursor.execute(
+        rows = _with_conn(lambda cursor: cursor.execute(
             "SELECT events_json FROM edit_traces WHERE session_id = ?", (session_id,)
-        ).fetchone())
-        if not row:
+        ).fetchall())
+        if not rows:
             return []
-        return reconstruct_edit_trace(json.loads(row["events_json"] or "[]"))
+        all_events: list[dict] = []
+        for row in rows:
+            all_events.extend(json.loads(row["events_json"] or "[]"))
+        return reconstruct_edit_trace(all_events)
     except Exception as exc:
         logger.error("get_edit_trace(%s) failed: %s", session_id, exc)
         return []
@@ -877,27 +967,62 @@ def get_trace_analysis(session_id: str) -> Optional[dict]:
 
 
 def get_edit_trace_by_problem(session_id: str, problem_id: Optional[str] = None) -> list[dict]:
-    """读取某会话的编辑轨迹事件，按 problem_id 过滤。
+    """读取某会话指定题的编辑轨迹事件。
 
-    problem_id 为 None / "default" 时返回全部事件（兼容尚未带 problem_id 的旧数据）。
-    优先按事件内嵌 problem_id 精确过滤；旧数据事件无内嵌 pid 时，
-    回退到 edit_traces.problem_id 列（会话级 pid 匹配则返回全量）。
+    按 (session_id, problem_id) 联合主键直接查询，无需 JSON 数组过滤。
+    problem_id 为 None / "default" 时返回全部题的事件（兼容旧用法）。
     """
-    events = get_edit_trace(session_id)
     if not problem_id or problem_id == "default":
-        return events
-    matched = [e for e in events if e.get("problem_id") == problem_id]
-    if matched:
-        return matched
+        return get_edit_trace(session_id)
     try:
         row = _with_conn(lambda cursor: cursor.execute(
-            "SELECT problem_id FROM edit_traces WHERE session_id = ?", (session_id,)
+            "SELECT events_json FROM edit_traces WHERE session_id = ? AND problem_id = ?",
+            (session_id, str(problem_id))
         ).fetchone())
-        if row and row[0] == problem_id:
-            return events
+        if not row:
+            return []
+        return reconstruct_edit_trace(json.loads(row["events_json"] or "[]"))
     except Exception as exc:
-        logger.error("get_edit_trace_by_problem(%s) column fallback failed: %s", session_id, exc)
-    return []
+        logger.error("get_edit_trace_by_problem(%s, %s) failed: %s", session_id, problem_id, exc)
+        return []
+
+
+def purge_trace_data(days: int = 30) -> dict:
+    """清理过期的细粒度轨迹数据（全量方案下 edit_traces 增长较快，需定期瘦身）。
+
+    只删「轨迹分析派生数据」，绝不碰 submissions / profiles / problems 等核心业务表：
+    - edit_traces      ：前端全量采集的细粒度编辑事件（最大头）
+    - trace_threads    ：多轮分析线程 transcript
+    - trace_analysis    ：首轮结构化结论缓存
+    - analysis_results  ：按题分析结果
+    - trace_summaries   ：过渡摘要
+
+    删除依据：各表 updated_at / created_at < (now - days)。默认保留 30 天。
+    返回被删行数统计，便于观测与审计。
+
+    触发方式（二选一，均已在设计文档约定）：
+    - 管理端点  GET /admin/purge-trace?days=30  （运维手动触发）
+    - 定时任务  （cron / 启动后后台线程，按业务节奏调用本函数）
+    """
+    cutoff = f"datetime('now','localtime', '-{int(days)} days')"
+    targets = [
+        ("edit_traces", "updated_at"),
+        ("trace_threads", "updated_at"),
+        ("trace_analysis", "created_at"),
+        ("analysis_results", "updated_at"),
+        ("trace_summaries", "created_at"),
+    ]
+    stats: dict[str, int] = {}
+    try:
+        for table, col in targets:
+            n = _with_conn(lambda cursor, t=table, c=col: cursor.execute(
+                f"DELETE FROM {t} WHERE {c} < {cutoff}"
+            ).rowcount)
+            stats[table] = n
+        logger.info("purge_trace_data: 清理 %d 天前轨迹数据 -> %s", days, stats)
+    except Exception as exc:
+        logger.error("purge_trace_data(%d) failed: %s", days, exc)
+    return stats
 
 
 def save_trace_thread(session_id: str, problem_id: str, messages: list[dict]) -> None:

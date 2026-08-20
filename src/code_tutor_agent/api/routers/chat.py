@@ -6,6 +6,7 @@ import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.deps import get_graph
@@ -112,44 +113,72 @@ def _build_results_context(values: dict) -> str:
     return "\n".join(lines) if lines else "（暂无运行/判题记录）"
 
 
-def _build_chat_context(tutor_msgs, limit: int = 8) -> str:
-    """取最近 limit 条 tutor_messages，拼成「导师/用户: ...」展示上下文。"""
-    _lines = []
-    for msg in (tutor_msgs or [])[-limit:]:
-        role = msg.get("role", "tutor") if isinstance(msg, dict) else getattr(msg, "role", "tutor")
-        content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
-        if content:
-            label = "导师" if role == "tutor" else "用户"
-            _lines.append(f"{label}: {content}")
-    return "\n".join(_lines) if _lines else "（无）"
+# 历史轮次进入 LLM 上下文的最大消息条数（append-only 列表尾部追加；
+# 只裁最旧消息并接受局部缓存失效——有前缀缓存后多带历史的边际成本极低，
+# 阈值放宽反而能修掉「导师记得的对话 ≠ 用户看到的对话」的语义割裂）
+_MAX_CHAT_CONTEXT_MESSAGES = 60
 
 
-def _build_system_prompt(phase: str, verdict: str) -> str:
-    """根据 phase / last_verdict 选导师 system prompt（AC 复盘 / WA 辅导 / 做题中）。"""
+def _build_state_note(phase: str, verdict: str) -> str:
+    """本轮辅导状态的动态说明（放当轮 human 消息开头，不污染静态 system 前缀）。"""
     if phase == "reviewing":
         # AC 后复盘/讨论模式
         return (
-            "你是 AI 编程导师，用户刚通过了一道算法题（AC），"
-            "现在在回顾和讨论这道题。你的任务是：\n"
-            "- 解释解题思路、时间/空间复杂度\n"
-            "- 讨论其他可能的解法（暴力/优化/不同数据结构）\n"
-            "- 分析这道题的易错点和面试常见追问\n"
-            "- 如果用户要求出下一题，引导他说出想练的方向\n"
-            "语气鼓励、专业，回复控制在 300 字以内。"
+            "【本轮辅导状态】用户刚通过了一道算法题（AC），现在在回顾和讨论这道题。\n"
+            "你的任务是：解释解题思路、时间/空间复杂度；讨论其他可能的解法"
+            "（暴力/优化/不同数据结构）；分析这道题的易错点和面试常见追问；"
+            "如果用户要求出下一题，引导他说出想练的方向。\n"
+            "回复控制在 300 字以内。"
         )
     if verdict == "WA":
         # 刚提交 WA，正在辅导中
         return (
-            "你是 AI 编程导师，语气温暖鼓励。用户刚提交的代码没有通过（WA），"
-            "根据对话上下文分析问题、给出针对性建议。"
-            "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+            "【本轮辅导状态】用户刚提交的代码没有通过（WA）。\n"
+            "请基于对话上下文与下方客观运行/判题结果分析问题、给出针对性建议。\n"
+            "不要直接给出完整代码，引导用户自己思考。"
         )
     # 用户正在做题的通用辅导
     return (
-        "你是 AI 编程导师，语气温暖鼓励。用户正在做题，"
-        "根据对话上下文分析问题、给出针对性建议。"
-        "不要直接给出完整代码，引导用户自己思考。回复控制在 200 字以内。"
+        "【本轮辅导状态】用户正在做题。\n"
+        "不要直接给出完整代码，引导用户自己思考。"
     )
+
+
+def _build_round_user_text(message: str, code: str, results: str) -> str:
+    """单轮用户消息的规范文本：正文 + 当轮草稿代码 + 当轮运行/判题结果。
+
+    写入 tutor_messages 时原样存进消息 metadata，下一轮请求按 metadata 原样重建，
+    保证 append-only 前缀逐字节稳定（历史轮的旧草稿/旧结果只计费一次）。
+    """
+    return (
+        f"用户消息：{message}\n\n"
+        f"【用户当时的编辑器代码】\n"
+        f"```python\n{code or '（编辑器为空）'}\n```\n\n"
+        f"【用户当时的运行/判题结果】\n{results}"
+    )
+
+
+def _rebuild_history_messages(tutor_msgs, max_msgs: int = _MAX_CHAT_CONTEXT_MESSAGES) -> list:
+    """把 tutor_messages 历史重建为 append-only 的 human/ai 消息序列。
+
+    新格式消息（Message 对象带 metadata.round_text）原样重建；
+    旧格式（dict / 无 metadata）退化为「用户消息：…」，仅一次性断缓存。
+    """
+    out: list = []
+    for m in (tutor_msgs or [])[-max_msgs:]:
+        if isinstance(m, dict):
+            role = m.get("role", "tutor")
+            content = m.get("content", "")
+            round_text = (m.get("metadata") or {}).get("round_text")
+        else:
+            role = getattr(m, "role", "tutor")
+            content = getattr(m, "content", "")
+            round_text = (getattr(m, "metadata", None) or {}).get("round_text")
+        if role == "user":
+            out.append(HumanMessage(content=round_text or f"用户消息：{content}"))
+        else:
+            out.append(AIMessage(content=str(content)))
+    return out
 
 
 # 导师输出格式约束：避免把代码写成 ` ```python Solution: ` 这种畸形围栏、
@@ -183,6 +212,14 @@ _RESULT_HINT = (
     "- 只有当结果确实显示逻辑错误时，才去分析算法/逻辑问题。\n"
     "- 不要臆造用户没有遇到的错误；如果用户贴了代码请结合其真实运行结果回应。"
 )
+
+# 导师人设（全静态，收敛为单一变体：phase/verdict 变化不再制造新的 system 缓存线，
+# 状态差异改为放当轮 human 消息开头，见 _build_state_note）
+_TUTOR_SYSTEM = (
+    "你是 AI 编程导师，语气温暖鼓励。用户正在做算法题，"
+    "根据对话上下文分析问题、给出针对性建议。"
+    "\n回复控制在 200 字以内。"
+) + _JUDGE_HINT + _RESULT_HINT + _FORMAT_HINT
 
 
 async def _run_graph_and_generate_tests(graph, config, sid: str):
@@ -271,13 +308,16 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
     history = _normalize_to_messages(raw_history)
     history.append(Message(role="user", content=message))
 
-    # 构建完整前端展示历史（保留跨题对话，不清空）
-    _full_display = _normalize_to_messages(values.get("tutor_messages"))
-    _full_display.append(Message(role="user", content=message))
+    def _fresh_display() -> list[Message]:
+        """基于最新 state 的 tutor_messages 重建前端展示历史（竞态修复：
+        不在请求开始时快照，避免流式期间并发写入被整表覆盖丢失）。"""
+        fresh = _normalize_to_messages(graph.get_state(config).values.get("tutor_messages"))
+        fresh.append(Message(role="user", content=message))
+        return fresh
 
     graph.update_state(config, {
         "agent_dialog_history": history,
-        "tutor_messages": _full_display,
+        "tutor_messages": _fresh_display(),
     }, as_node="agent_dialog_node")
 
     # 提取跨题摘要（Agent 模式换题时生成），注入到意图分析中
@@ -335,15 +375,16 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
                 # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
                 ready_msg = build_ready_message(topic, difficulty)
             history.append(ready_msg)
-            _full_display.append(ready_msg)
             # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）
+            _display = _fresh_display()
+            _display.append(ready_msg)
             _updates = {
                 "agent_dialog_history": history,
                 "agent_dialog_complete": True,
                 "status": "awaiting_problem",
                 "topic": topic,
                 "difficulty": difficulty,
-                "tutor_messages": _full_display,
+                "tutor_messages": _display,
             }
             # LeetCode 来源：仅把原始链接交给 generator_node，由其在服务端抓取并解析
             # （解析逻辑已收口到 generation 包，不再在路由层预解析）。
@@ -362,10 +403,11 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
             # 非 ready：回复来自同一次判定的 next_message（已合并，无需再调自由模型）
             reply = intent.next_message or "好的，我明白了，能再具体说说吗？"
             history.append(Message(role="tutor", content=reply))
-            _full_display.append(Message(role="tutor", content=reply))
+            _display = _fresh_display()
+            _display.append(Message(role="tutor", content=reply))
             graph.update_state(config, {
                 "agent_dialog_history": history,
-                "tutor_messages": _full_display,
+                "tutor_messages": _display,
             }, as_node="agent_dialog_node")
             for chunk in _chunk_text(reply):
                 yield _sse_payload(chunk)
@@ -388,7 +430,7 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
           graph.stream(None, config) 从 END 不会重启，返回空。
     统一走直接 LLM 是最可靠的做法。
     """
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
     from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, run_tool_loop
     from code_tutor_agent.config import get_llm
@@ -403,13 +445,11 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
         else (problem.get("description", "") if problem else "")
     )
 
-    _chat_context = _build_chat_context(values.get("tutor_messages"))
     _results_context = _build_results_context(values)
 
-    # 根据 phase / last_verdict 匹配合适的 system prompt
+    # 根据 phase / last_verdict 生成当轮状态说明（放当轮 human 消息，不动静态 system）
     _phase = values.get("phase", "")
     _verdict = values.get("last_verdict", "")
-    system = _build_system_prompt(_phase, _verdict)
 
     async def normal_chat_stream():
         # 用户当前编辑器代码（未提交）：只读注入 prompt，不写 state / 画像 / 轨迹。
@@ -421,21 +461,26 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
                 _code_context = code[:_code_limit] + "\n# …（代码过长，已截断）"
             else:
                 _code_context = code
-        user_prompt = (
-            f"算法题：{title}\n\n"
-            f"题面：\n{desc}\n\n"
-            f"用户当前编辑器代码（未提交，仅供实时参考，可能不完整或运行失败）：\n"
-            f"```python\n{_code_context or '（编辑器为空）'}\n```\n\n"
-            f"用户最近的运行与判题结果（客观事实，请优先依据此定位具体错误）：\n"
-            f"{_results_context}\n\n"
-            f"近期对话：\n{_chat_context}\n\n"
-            f"用户当前消息：{message}"
+        # 当轮消息 = 状态说明 + 规范轮次文本；完整文本随消息 metadata 持久化，
+        # 下一轮按原样重建，保证 append-only 前缀稳定
+        _round_text = _build_state_note(_phase, _verdict) + "\n\n" + _build_round_user_text(
+            message, _code_context, _results_context
         )
-        # 用 LangChain Message 列表承载上下文（工具循环需就地追加 ToolMessage）
+
+        # ── append-only 消息列表（替代单条重建式 blob）──
+        #   [system(全静态) + human(题面，本题内固定) + (ai 占位) + 历史轮次 + 当轮]
+        # 前缀逐轮增长且逐字节不变 → 网关前缀缓存命中率随轮数趋近 100%。
         msgs = [
-            SystemMessage(content=system + _JUDGE_HINT + _RESULT_HINT + _FORMAT_HINT),
-            HumanMessage(content=user_prompt),
+            SystemMessage(content=_TUTOR_SYSTEM),
+            HumanMessage(content=f"算法题：{title}\n\n题面：\n{desc}"),
         ]
+        _history = _rebuild_history_messages(values.get("tutor_messages"))
+        if not _history or getattr(_history[0], "type", "") != "ai":
+            # 题面之后需要一个 AI 占位消息，保证 human/ai 交替（前缀稳定）
+            msgs.append(AIMessage(content="已了解题目，开始辅导。"))
+        msgs.extend(_history)
+        msgs.append(HumanMessage(content=_round_text))
+
         # ── 工具循环（非流式）：导师先决定是否跑代码验证 ──
         # return_last_content=True：若 LLM 没调工具（纯讨论），直接拿到首轮文本，
         # 下方复用它跳过 astream 二次调用，省一次 LLM 往返（方案 A）。
@@ -495,9 +540,20 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
 
         # 手动保存到 state（暂停安全写入：直接 update_state 会丢失
         # wait_for_submit 的挂起中断，见 deps.pause_safe_update）
-        tutor_msgs = list(values.get("tutor_messages", []))
-        tutor_msgs.append({"role": "user", "content": message})
-        tutor_msgs.append({"role": "tutor", "content": reply})
+        # 竞态修复：请求开始时的 values 快照在流式生成期间可能已过期
+        # （并发 /submit 判题会追加 tutor 消息），必须先基于最新 state 追加，
+        # 否则旧快照整表覆盖会丢并发写入（last-wins lost update）。
+        # 当轮用户消息携带完整 round_text，供下一轮按原样重建（缓存前缀稳定）。
+        try:
+            fresh_msgs = graph.get_state(config).values.get("tutor_messages") or []
+            tutor_msgs = list(fresh_msgs)
+            tutor_msgs.append(Message(role="user", content=message, metadata={"round_text": _round_text}))
+            tutor_msgs.append(Message(role="tutor", content=reply))
+        except Exception as exc:
+            logger.warning("Failed to read fresh state for chat persist: %s", exc)
+            tutor_msgs = list(values.get("tutor_messages", []))
+            tutor_msgs.append({"role": "user", "content": message})
+            tutor_msgs.append({"role": "tutor", "content": reply})
         try:
             from code_tutor_agent.api.deps import pause_safe_update
             pause_safe_update(graph, config, {"tutor_messages": tutor_msgs})

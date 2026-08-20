@@ -71,8 +71,6 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 1. **知识点（topic）**：如 "数组"、"双指针"、"动态规划" 等
 2. **难度（difficulty）**：easy / medium / hard
 
-{profile_section}
-
 ## 对话策略
 - 第一轮：友好地询问用户想练什么类型，给一些选项引导
 - 后续轮次：根据回答深入追问，逐步缩小范围
@@ -119,7 +117,9 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
   "is_random": true/false,
   "next_message": "给用户的下一轮对话消息（仅文本，不含JSON）"
 }}
-```"""
+```
+
+{profile_section}"""
 
 CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了解用户想练习什么类型的算法题。
 
@@ -467,10 +467,11 @@ async def analyze_user_intent(
     transcript = _build_transcript(history, context_summary)
     profile_summary = _build_profile_summary()
     memory_summary = _build_memory_summary()
+    # 画像只进 system 一次（模板末尾槽位：画像更新只影响 system 尾部，
+    # 主体策略文本保持缓存有效），user prompt 不再重复注入（双注入去重）
     system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
     user_prompt = (
         f"## 对话历史\n\n{transcript}\n\n"
-        + (f"## 用户画像信息\n\n{profile_summary}\n\n" if profile_summary else "")
         + (f"{memory_summary}\n\n" if memory_summary else "")
         + "请分析用户的意图。"
     )

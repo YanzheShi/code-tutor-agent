@@ -69,7 +69,8 @@ _cors_origins = [
     for o in os.getenv(
         "CORS_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,"
-        "http://localhost:5173,http://127.0.0.1:5173",
+        "http://localhost:5173,http://127.0.0.1:5173,"
+        "http://localhost:5174,http://127.0.0.1:5174",
     ).split(",")
     if o.strip()
 ]
@@ -148,7 +149,11 @@ async def _session_cleanup_loop():
     超过 TTL 的会话会被自动删除（checkpointer + activity 记录）。
     """
     from code_tutor_agent.config import get_session_ttl_hours, get_cleanup_interval_minutes
-    from code_tutor_agent.db.database import get_stale_sessions, delete_session_activity
+    from code_tutor_agent.db.database import (
+        delete_session_activity,
+        delete_session_sidecar_data,
+        get_stale_sessions,
+    )
 
     interval_min = get_cleanup_interval_minutes()
     ttl_hours = get_session_ttl_hours()
@@ -175,6 +180,7 @@ async def _session_cleanup_loop():
                         if hasattr(checkpointer, "delete_thread"):
                             checkpointer.delete_thread(tid)
                         delete_session_activity(tid)
+                        delete_session_sidecar_data(tid)
                         _generation_progress.pop(tid, None)
                         cleaned += 1
                     except Exception as exc:

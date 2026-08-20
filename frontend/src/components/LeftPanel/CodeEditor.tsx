@@ -20,7 +20,10 @@ export default function CodeEditor({
   };
 
   // 卸载时清掉全局编辑器引用，避免编辑轨迹采集拿到已 dispose 的 Monaco 实例
+  // P2-3: 卸载前先派发 ct:editor-unmount 事件，让 useEditTrace 在编辑器仍可读时
+  // 兜底 capturePending + flushIdleIfPaused，零星改动不丢失
   useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent('ct:editor-unmount'));
     if ((window as unknown as Record<string, unknown>).__ct_editor === editorRef.current) {
       (window as unknown as Record<string, unknown>).__ct_editor = undefined;
     }

@@ -113,8 +113,10 @@ export function useSession() {
   // 当前题 problem_id / 导师对话 → 供 useEditTrace 计算 dialogue_before（对话相关性）
   const problemIdRef = useRef<string | null>(null);
   const tutorMessagesRef = useRef<Message[]>([]);
+  // 编辑器代码 ref：始终同步 React state 中的最新代码，供 mark 在编辑器未挂载时兜底
+  const editorCodeRef = useRef('');
   // 编辑轨迹采集（仅前端采集 + 落本地文件，不做后端处理）
-  const editTrace = useEditTrace(sessionId, { problemIdRef, tutorMessagesRef });
+  const editTrace = useEditTrace(sessionId, { problemIdRef, tutorMessagesRef, codeRef: editorCodeRef });
   const [mode, setMode] = useState<string>(initial?.mode || 'practice');
 
   // 持久化：main 屏且有 sessionId 时落盘；其余情况（welcome/loading/error/admin）清掉，
@@ -126,6 +128,7 @@ export function useSession() {
 
   const [problem, setProblem] = useState<ProblemMeta | null>(null);
   const [editorCode, setEditorCode] = useState('');
+  editorCodeRef.current = editorCode; // 同步最新代码到 ref（每次渲染），供 mark 兜底
   const [tutorMessages, setTutorMessages] = useState<Message[]>([]);
   // 同步最新导师对话 / 当前题到 ref，供 useEditTrace 计算 dialogue_before（无需 re-attach 编辑器）
   useEffect(() => { tutorMessagesRef.current = tutorMessages; }, [tutorMessages]);
@@ -275,7 +278,7 @@ export function useSession() {
   const handleSubmit = useCallback(async () => {
     if (!sessionId || submittingFlag) return;
     const sid = sessionId; const code = editorCode;
-    editTrace.mark('submit'); // 提交锚点：强制记一条当前代码快照并落盘
+    await editTrace.mark('submit'); // 提交锚点：强制记一条当前代码快照并落盘（await 确保刷新/关页不丢）
     setSubmittingFlag(true); setRunResults(null);
     try {
       const resp = await submitCode(sid, code);
@@ -302,7 +305,7 @@ export function useSession() {
   const handleRun = useCallback(async () => {
     if (!sessionId || running || !editorCode.trim()) return;
     const sid = sessionId; const code = editorCode;
-    editTrace.mark('run'); // 运行锚点：强制记一条当前代码快照
+    await editTrace.mark('run'); // 运行锚点：强制记一条当前代码快照（await 确保刷新/关页不丢）
     setRunning(true); setRunResults(null); setActiveTabs(prev => ({ ...prev, right: 'run' }));
     try {
       const resp = await runCode(sid, code);

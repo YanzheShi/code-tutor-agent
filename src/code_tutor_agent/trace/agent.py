@@ -16,6 +16,7 @@ from typing import Optional
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from code_tutor_agent.config import get_llm, get_trace_retry_config
+from code_tutor_agent.context_manager import count_tokens
 from code_tutor_agent.db.database import (
     delete_trace_thread,
     get_edit_trace_by_problem,
@@ -26,6 +27,7 @@ from code_tutor_agent.db.database import (
     save_trace_thread,
 )
 from code_tutor_agent.trace.preprocess import build_dialogue_timeline, pick_code_snapshots
+from code_tutor_agent.trace.extract import extract_for_analysis
 from code_tutor_agent.trace.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,25 @@ _SYSTEM = (
     "注意：本次分析是**独立**的、仅供用户自我复盘参考，**不要**写成能力评分，也**不要**关联任何历史画像。"
     "你已知晓每次代码改动前导师说了什么（时间线里的「导师说：...」），据此判断用户是「独立改对」还是「被提示改对」。"
 )
+
+# 首轮任务指令（全静态，随 _SYSTEM 一起升格为 system message：
+# 跨题/跨会话/跨用户共享同一条缓存前缀；同时修复「不要关联历史画像」约束首轮不生效的问题）
+_SYSTEM_TASK = (
+    "## 任务\n基于轨迹与最终代码产出结构化复盘：\n"
+    "1. change_path：用若干步骤叙述代码怎么一步步写出来"
+    "（每步标 trigger：self/hint/boundary_reminder/correction_assisted）。\n"
+    "2. thinking_process：推断解题思维过程（是否走弯路、是否先写暴力再优化、是否提交前自查）。\n"
+    "3. weakness_tags：暴露的薄弱点，每条给 evidence、severity(0~1)、trigger、"
+    "hint_assisted、hints_before_fix。\n"
+    "4. interview_tips：2-4 条备考建议（point + reason）。\n"
+    "5. autonomy：self_fix_rate(0~1) 与 hint_dependent_weaknesses 列表（面试就绪度信号）。\n"
+    "6. summary：一句话总评。\n"
+    "只输出结构化结果。"
+)
+
+# 首轮分析动态数据块的总 token 预算（对比导师链路 ContextConfig；超预算时对
+# 时间线减半裁剪，而不是各截断参数各自为政地堆叠）
+_FIRST_ROUND_TOKEN_BUDGET = 24_000
 
 
 def _thread_key(session_id: str, problem_id: str) -> str:
@@ -229,11 +250,31 @@ def _gather_context(
 def _format_snapshots(snaps: list[dict]) -> str:
     parts = []
     for i, s in enumerate(snaps, 1):
-        dlg = s.get("dialogue_before") or []
-        dlg_txt = " 改动前导师说: " + " | ".join(d.get("content", "") for d in dlg) if dlg else ""
         parts.append(
-            f"### 快照 {i}（{s.get('event')}，ts={s.get('ts')}，改动: {s.get('change') or '—'}）{dlg_txt}\n"
+            f"### 快照 {i}（{s.get('event')}，ts={s.get('ts')}，改动: {s.get('change') or '—'}）\n"
             f"```python\n{s.get('code') or ''}\n```"
+        )
+    return "\n\n".join(parts)
+
+
+def _format_stuck_segments(segments: list[dict]) -> str:
+    """把结构化卡壳段拼成可读文本，喂给分析 LLM（让其精准归因"卡在哪/为何卡"）。"""
+    if not segments:
+        return "(无显著卡壳停顿)"
+    parts = []
+    for i, s in enumerate(segments, 1):
+        idle_s = (s.get("idleMs") or 0) / 1000.0
+        level = s.get("level") or "?"
+        code = s.get("code_at_pause") or s.get("pre_code") or ""
+        dlg = s.get("dialogue_before")
+        dlg_text = " 导师说: " + " | ".join(
+            d.get("content", "") for d in (dlg or []) if isinstance(d, dict) and d.get("content")
+        ) if dlg else ""
+        away = " (疑似离开/查资料，非真卡壳)" if s.get("away") else ""
+        parts.append(
+            f"### 卡壳 {i}（停顿 {idle_s:.1f}s，level={level}）{away}\n"
+            f"卡壳时代码状态:\n```python\n{code}\n```"
+            + (f"\n卡壳前刚收到的导师提示:{dlg_text}" if dlg_text else "")
         )
     return "\n\n".join(parts)
 
@@ -245,6 +286,10 @@ def first_round_analysis(session_id: str, problem_id: str, problem_meta=None) ->
     """首轮结构化分析：读按题过滤的轨迹 + 题目完整描述 + 终码 → LLM 结构化复盘。
 
     线程 = [system, 首轮结论(AI)]，落 trace_threads 表；多轮追问在其后 append。
+
+    缓存结构：_SYSTEM + 任务指令升格为静态 system message（跨题/跨会话/跨用户
+    共享同一前缀）；动态数据（题面/终码/快照/时间线）全在 human 消息里，
+    且带总 token 预算（超预算对时间线减半裁剪）。
     """
     events = get_edit_trace_by_problem(session_id, problem_id)
     if not events:
@@ -252,32 +297,40 @@ def first_round_analysis(session_id: str, problem_id: str, problem_meta=None) ->
     final_code, topic, description, constraints, examples = _gather_context(
         session_id, problem_id, problem_meta
     )
-    timeline = build_dialogue_timeline(events, with_diffs=True)
-    snapshots = _format_snapshots(pick_code_snapshots(events))
 
-    prompt = (
+    # ★ 改为调用抽取层（零 LLM）：把密集全量事件蒸馏成时间线 + 里程碑 + 结构化卡壳段
+    extraction = extract_for_analysis(events)
+
+    data = (
         f"## 本题信息\n- 知识点: {topic or '(未知)'}\n"
         f"- 题目描述:\n{(description or '(未知)')[:8000]}\n"
         f"- 约束条件:\n{constraints or '无'}\n"
         f"- 示例:\n{examples or '无'}\n\n"
         f"## 最终提交的代码\n```python\n{(final_code or '')[:4000]}\n```\n\n"
-        f"## 关键代码快照（按时间先后，含改动前导师提示）\n{snapshots or '(无)'}\n\n"
-        f"## 编辑轨迹时间线（含相邻快照 diff 与改动前的导师提示原文）\n{timeline}\n\n"
-        f"## 任务\n基于轨迹与最终代码产出结构化复盘：\n"
-        f"1. change_path：用若干步骤叙述代码怎么一步步写出来（每步标 trigger：self/hint/boundary_reminder/correction_assisted）。\n"
-        f"2. thinking_process：推断解题思维过程（是否走弯路、是否先写暴力再优化、是否提交前自查）。\n"
-        f"3. weakness_tags：暴露的薄弱点，每条给 evidence、severity(0~1)、trigger、hint_assisted、hints_before_fix。\n"
-        f"4. interview_tips：2-4 条备考建议（point + reason）。\n"
-        f"5. autonomy：self_fix_rate(0~1) 与 hint_dependent_weaknesses 列表（面试就绪度信号）。\n"
-        f"6. summary：一句话总评。\n只输出结构化结果。"
+        f"## 关键代码快照（按时间先后）\n{_format_snapshots(extraction.snapshots) or '(无)'}\n\n"
+        f"## 卡壳段（结构化，stuck_segments）\n{_format_stuck_segments(extraction.stuck_segments)}\n\n"
+        f"## 编辑轨迹时间线（含相邻快照 diff 与改动前的导师提示原文）\n{extraction.timeline_text}"
     )
+
+    # 抽取层内已做 token 预算减半裁剪；此处仅打点观测是否触发
+    tokens = count_tokens(data)
+    if tokens > _FIRST_ROUND_TOKEN_BUDGET:
+        logger.info(
+            "first_round_analysis: extracted data %d tokens > budget %d (timeline 已减半裁剪)",
+            tokens, _FIRST_ROUND_TOKEN_BUDGET,
+        )
+
+    msgs = [
+        SystemMessage(content=_SYSTEM + "\n\n" + _SYSTEM_TASK),
+        HumanMessage(content=data),
+    ]
 
     try:
         llm = get_llm(purpose="edit-trace")
         # 默认 method（json_schema）：thinking 模式下 function_calling 的强制 tool_choice 会 400，
         # 默认 json_schema 路径可用（与 judge/problem 等一致）。
         structured = llm.with_structured_output(AnalysisResult)
-        result = _invoke_with_retry(lambda: structured.invoke(prompt))
+        result = _invoke_with_retry(lambda: structured.invoke(msgs))
         if not isinstance(result, AnalysisResult):
             result = AnalysisResult(**(result if isinstance(result, dict) else {}))
         # 线程：system + 首轮结构化结论（AI 消息），供多轮追问与过渡压缩参考

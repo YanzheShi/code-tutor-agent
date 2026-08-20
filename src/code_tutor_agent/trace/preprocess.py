@@ -78,30 +78,42 @@ def build_dialogue_timeline(events: list[dict], max_events: int = 80, with_diffs
     return " → ".join(picked)
 
 
-def pick_code_snapshots(events: list[dict], max_snapshots: int = 12, code_limit: int = 1200) -> list[dict]:
-    """从 edit/submit 全量快照中均匀选取若干关键快照（防 prompt 膨胀）。
+def _change_size(prev: dict, cur: dict) -> int:
+    """相邻两个快照之间的代码变动量（行级 diff 中变化行数，非 equal 块）。"""
+    a = (prev.get("code") or "").splitlines()
+    b = (cur.get("code") or "").splitlines()
+    sm = difflib.SequenceMatcher(None, a, b)
+    return sum(
+        (i2 - i1) + (j2 - j1)
+        for tag, i1, i2, j1, j2 in sm.get_opcodes()
+        if tag != "equal"
+    )
 
-    返回 [{ts, event, change, code, dialogue_before}]，dialogue_before 只留最近 4 条、每条 200 字。
+
+def pick_code_snapshots(events: list[dict], max_snapshots: int = 4, code_limit: int = 1200) -> list[dict]:
+    """从 edit/submit 全量快照中选取里程碑快照（首版 / 最大转折 / 终版，防 prompt 膨胀）。
+
+    里程碑策略替代均匀采样：均匀采样会把 token 花在没有信息增量的中间态上，
+    首版、最大改动转折点、终版才是复盘最需要的信息。
+    返回 [{ts, event, change, code}]——dialogue_before 只在时间线里保留（去重）。
     """
     snaps = [e for e in events if e.get("type") in ("edit", "submit") and e.get("code")]
     if not snaps:
         return []
     if len(snaps) > max_snapshots:
-        idxs = {round(i * (len(snaps) - 1) / (max_snapshots - 1)) for i in range(max_snapshots)}
+        max_change_idx = max(
+            range(1, len(snaps)),
+            key=lambda i: _change_size(snaps[i - 1], snaps[i]),
+        )
+        idxs = {0, len(snaps) // 2, max_change_idx, len(snaps) - 1}
         snaps = [snaps[i] for i in sorted(idxs)]
     out: list[dict] = []
     for e in snaps:
-        dlg = [
-            {"role": d.get("role", "tutor"), "content": d.get("content", "")[:200]}
-            for d in (e.get("dialogue_before") or [])
-            if isinstance(d, dict) and d.get("content")
-        ]
         out.append({
             "ts": e.get("ts"),
             "event": e.get("type"),
             "change": e.get("change") or "",
             "code": (e.get("code") or "")[:code_limit],
-            "dialogue_before": dlg[-4:],
         })
     return out
 

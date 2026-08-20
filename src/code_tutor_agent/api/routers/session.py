@@ -4,37 +4,44 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import sqlite3
-import time
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from langgraph.types import Command
 from langchain_core.tracers.context import collect_runs
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from code_tutor_agent.api.deps import get_graph
-from code_tutor_agent.observability import build_run_config, record_verdict_feedback
-from code_tutor_agent.api.serializers import serialize_state, empty_state
-from code_tutor_agent.api.services.generation import run_generation, GENERATION_TIMEOUT
+from code_tutor_agent.api.serializers import empty_state, serialize_state
+from code_tutor_agent.api.services.generation import GENERATION_TIMEOUT, run_generation
 from code_tutor_agent.config import get_checkpoint_db_path
 from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
 from code_tutor_agent.db.database import (
     delete_session_activity,
+    delete_session_sidecar_data,
+    get_analysis_result,
     get_problem_by_id,
     get_stale_sessions,
-    get_submissions_by_session,
     get_trace_analysis,
-    get_analysis_result,
     get_trace_summary,
     save_edit_trace,
     save_submission,
-    save_trace_analysis,
     touch_session,
 )
+from code_tutor_agent.observability import build_run_config, record_verdict_feedback
+from code_tutor_agent.progress import _generation_progress
+from code_tutor_agent.schemas.api import (
+    CreateSessionRequest,
+    NextProblemReq,
+    NextProblemResp,
+    SessionStateResponse,
+    SubmitRequest,
+    SubmitResponse,
+)
+from code_tutor_agent.schemas.state import Message, ProblemMeta, SessionState
 from code_tutor_agent.trace import (
     archive_thread,
     continue_analysis,
@@ -42,9 +49,6 @@ from code_tutor_agent.trace import (
     list_thread_for_display,
     summarize_thread,
 )
-from code_tutor_agent.progress import _generation_progress
-from code_tutor_agent.schemas.api import CreateSessionRequest, NextProblemReq, NextProblemResp, SubmitRequest, SubmitResponse, SessionStateResponse
-from code_tutor_agent.schemas.state import SessionState, ProblemMeta, Message
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -225,6 +229,9 @@ async def delete_session(sid: str):
         except Exception as exc:
             logger.warning("delete_session_activity failed for %s: %s", sid, exc)
 
+        # 清理旁路数据（edit_traces / analysis_results / trace_summaries / trace_threads / submissions）
+        delete_session_sidecar_data(sid)
+
         return {"session_id": sid, "deleted": True}
     except Exception as exc:
         logger.exception("Failed to delete session %s", sid)
@@ -262,6 +269,7 @@ async def cleanup_sessions(
             if hasattr(checkpointer, "delete_thread"):
                 checkpointer.delete_thread(tid)
             delete_session_activity(tid)
+            delete_session_sidecar_data(tid)
             _generation_progress.pop(tid, None)
             cleaned += 1
         except Exception as exc:
@@ -775,10 +783,19 @@ async def next_problem(sid: str, body: NextProblemReq):
         cross_context = build_cross_problem_context(problem_history)
 
         # ── 2. 生成本题对话摘要（如果有对话内容） ──
-        _full_history = vals.get("tutor_messages") or vals.get("agent_dialog_history") or []
+        # 只压缩「自上次换题以来的增量」（tutor_messages_cutoff 起始），
+        # 避免每次换题都吃全量历史对话（N 题累计 O(N²) → O(N)）。
+        # 旧会话无 cutoff → 0，退化为全量历史（一次性成本，可接受）。
+        _cutoff = vals.get("tutor_messages_cutoff") or 0
+        _full_history = vals.get("tutor_messages") or []
+        _delta_history = (
+            list(_full_history)[_cutoff:]
+            if _full_history
+            else (vals.get("agent_dialog_history") or [])
+        )
         # 统一转为 Message 对象，避免混入 dict 导致后续处理报错
         _norm_history: list[Message] = []
-        for m in _full_history:
+        for m in _delta_history:
             if isinstance(m, Message):
                 _norm_history.append(m)
             elif isinstance(m, dict):
@@ -788,7 +805,7 @@ async def next_problem(sid: str, body: NextProblemReq):
 
         # 异步生成本题对话摘要
         dialogue_summary = ""
-        if problem_history:
+        if _norm_history and problem_history:
             try:
                 last_record = problem_history[-1] if problem_history else None
                 dialogue_summary = generate_summary(_norm_history, last_record)
@@ -861,6 +878,7 @@ async def next_problem(sid: str, body: NextProblemReq):
             "agent_dialog_complete": False,
             "agent_dialog_history": [guide_msg],
             "tutor_messages": _display_history,
+            "tutor_messages_cutoff": len(_display_history),
             "context_summary": new_summary,
             "topic": "",
             "difficulty": "",
