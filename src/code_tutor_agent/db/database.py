@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 from typing import Any, Optional
 
@@ -78,6 +79,7 @@ def _init_db_tables(cursor) -> None:
 
     for col_sql in [
     "ALTER TABLE problems ADD COLUMN starter_code TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE problems ADD COLUMN starter_code_norm TEXT DEFAULT ''",
         "ALTER TABLE problems ADD COLUMN visible_test_cases_json TEXT NOT NULL DEFAULT '[]'",
         "ALTER TABLE problems ADD COLUMN source TEXT NOT NULL DEFAULT 'generated'",
         "ALTER TABLE problems ADD COLUMN source_url TEXT DEFAULT ''",
@@ -292,11 +294,106 @@ def _row_to_db_submission(row: sqlite3.Row) -> DBSubmission:
     return DBSubmission(**data)
 
 
-# ── save ──
+# ── starter_code 归一化（去重用，纯确定性、无 LLM）──
+#
+# LLM 每次生成的 starter_code 会有微妙但非本质的差异：
+#   - 类型注解 List[int] vs list[int]
+#   - typing import（from typing import ...）的有无
+#   - 结构体定义（ListNode / TreeNode / Node 等）由运行时 prologue 注入，非题目本质
+#   - 占位符 ... / pass / 空行
+#   - 全半角、空白、注释前缀（# Definition for singly-linked list.）
+# 归一化后比对即可把「同一道题的不同形态」判为重复，复用旧 id。
+
+_TYPING_ALIASES = {
+    "List": "list", "Dict": "dict", "Set": "set", "Tuple": "tuple",
+    "FrozenSet": "frozenset", "Deque": "deque",
+}
+_STRUCT_CLASSES = ("ListNode", "TreeNode", "Node", "GraphNode")
 
 
-def save_problem(problem_dict: dict) -> int:
-    """Save a problem to the database. Returns the existing or new problem ID.
+def normalize_starter_code(code: str) -> str:
+    """对 starter_code 做确定性归一化，用于去重比对。
+
+    步骤：
+      1. 剥 ``from typing import ...`` 整行（运行时由 typing 提供，非本质）。
+      2. 剥结构体定义块（``# Definition for ...`` 注释 + ``class ListNode:`` 及其
+         方法体），这些是运行时 prologue 注入的。
+      3. typing 别名归一：``List[`` → ``list[`` 等。
+      4. ``Optional[X]`` → ``X | None``。
+      5. 占位符归一：``pass`` / ``...`` / 空语句 → 统一空。
+      6. 空白归一：CRLF→LF、折叠连续空白、去行尾空白、strip。
+
+    Returns:
+        归一化后的字符串；输入为空返回空串。
+    """
+    if not code:
+        return ""
+
+    lines = code.replace("\r\n", "\n").split("\n")
+
+    cleaned: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        raw = lines[i]
+        stripped = raw.strip()
+        # 跳过 typing import 行（完整行或行内 from ... import）
+        if stripped.startswith("from typing import"):
+            i += 1
+            continue
+        # 跳过结构体定义注释前缀
+        if stripped.startswith("# Definition for") or stripped.startswith("# ====="):
+            i += 1
+            continue
+        # 检测结构体 class 定义块：class ListNode / TreeNode / Node / GraphNode
+        m = re.match(r"^(\s*)class\s+(" + "|".join(_STRUCT_CLASSES) + r")\b", raw)
+        if m:
+            # 吞掉整个 class 定义块（直到缩进回到该 class 声明级别或文件结束）
+            base_indent = len(raw) - len(raw.lstrip())
+            i += 1
+            while i < n:
+                nxt = lines[i]
+                if nxt.strip() == "":
+                    i += 1
+                    continue
+                ind = len(nxt) - len(nxt.lstrip())
+                # 缩进比 class 声明浅 → 块结束
+                if ind <= base_indent:
+                    break
+                i += 1
+            continue
+        cleaned.append(raw)
+        i += 1
+
+    text = "\n".join(cleaned)
+
+    # typing 别名归一（含泛型参数）
+    for alias, repl in _TYPING_ALIASES.items():
+        text = re.sub(rf"\b{alias}\[", repl + "[", text)
+
+    # Optional[X] → X | None
+    def _opt_repl(mo):
+        return f"{mo.group(1)} | None"
+    text = re.sub(r"Optional\[(.*?)\]", _opt_repl, text)
+
+    # 占位符归一：独立的 pass / ... 行 → 空
+    text = re.sub(r"^\s*(pass|\.\.\.)\s*$", "", text, flags=re.MULTILINE)
+
+    # 空白归一
+    text = text.replace("\t", " ")
+    text = re.sub(r"[ \t]+", " ", text)        # 折叠行内连续空白
+    text = re.sub(r" ?\n ?", "\n", text)        # 去行首尾空格
+    text = re.sub(r"\n{2,}", "\n", text)        # 折叠空行
+    text = text.strip()
+    return text
+
+
+def save_problem(problem_dict: dict) -> tuple[int, bool]:
+    """Save a problem to the database.
+
+    去重策略（2026-08-20 改造）：按 ``starter_code`` 的**归一化**形态去重——
+    归一化后与库中已有题目命中即视为同一道题，直接复用旧 id，
+    **不插入新行、不触发测试用例生成**。
 
     Args:
         problem_dict: Dict with keys matching the logical problem schema
@@ -304,7 +401,10 @@ def save_problem(problem_dict: dict) -> int:
             Accepts both camelCase (test_cases) and snake_case (test_cases_json) keys.
 
     Returns:
-        The problem ID (existing if dedup'd, new otherwise).
+        ``(problem_id, reused)`` 二元组：
+        - ``problem_id``：复用的旧 id 或新插入的 id。
+        - ``reused``：True 表示命中归一化去重、复用了已有题目（调用方据此跳过
+          测试用例后台生成）。
     """
     logger.info("▶ save_problem()")
     init_db()
@@ -315,46 +415,42 @@ def save_problem(problem_dict: dict) -> int:
         raise
 
 
-def _same_content(existing_row, problem_dict: dict) -> bool:
-    """判断同名题目是否真的是同一道题（比对描述 / 签名 / 模板）。
-
-    只按 title 去重会出问题：LLM 重新出一道同名题时会复用旧 id，
-    造成「展示的题面是新的、判题用的测试用例/参考解却还是旧的」。
-    只有核心内容一致才算重复。
-    """
-    return (
-        (existing_row["description"] or "") == (problem_dict.get("description") or "")
-        and (existing_row["function_signature"] or "") == (problem_dict.get("function_signature") or "")
-        and (existing_row["starter_code"] or "") == (problem_dict.get("starter_code") or "")
-    )
-
-
-def _save_problem(cursor, problem_dict: dict) -> int:
+def _save_problem(cursor, problem_dict: dict) -> tuple[int, bool]:
     title = problem_dict.get("title", "")
     if not title:
         raise ValueError("save_problem() requires a 'title'")
 
-    cursor.execute(
-        "SELECT id, description, function_signature, starter_code FROM problems WHERE title = ?",
-        (title,),
-    )
-    existing = cursor.fetchone()
-    if existing:
-        if _same_content(existing, problem_dict):
-            logger.info("Problem '%s' exists with same content (id=%d), skipping insert",
-                        title, existing["id"])
-            return existing["id"]
-        # 同名但内容不同 → 是另一道题；title 有 UNIQUE 约束，改名后作为新行落库，
-        # 避免复用旧 id 造成题面/用例错位。改名写回 problem_dict，调用方据此展示。
-        base, n = title, 2
-        while True:
-            candidate = f"{base} ({n})"
-            if not cursor.execute("SELECT 1 FROM problems WHERE title = ?", (candidate,)).fetchone():
-                break
-            n += 1
-        logger.info("Problem '%s' exists with DIFFERENT content — inserting as '%s'", title, candidate)
-        title = candidate
-        problem_dict["title"] = candidate
+    # ── 归一化去重：starter_code 形态一致即复用旧 id ──
+    norm = normalize_starter_code(problem_dict.get("starter_code", ""))
+    if norm:
+        cursor.execute(
+            "SELECT id, starter_code_norm FROM problems WHERE starter_code_norm = ?",
+            (norm,),
+        )
+        hit = cursor.fetchone()
+        if hit:
+            logger.info(
+                "Problem '%s' dedup by normalized starter_code — reusing id=%d",
+                title, hit["id"],
+            )
+            return hit["id"], True
+
+    # ── source_url 精确去重（LeetCode 通道补强）──
+    # LeetCode 题 starter_code 归一化后基本恒等，但 prologue 注入顺序差异可能漏判；
+    # 同 slug 的 source_url 必然一致，用 url 精确兜底复用，彻底堵死重复落库。
+    src_url = (problem_dict.get("source_url") or "").strip()
+    if src_url:
+        cursor.execute(
+            "SELECT id FROM problems WHERE source_url = ?",
+            (src_url,),
+        )
+        url_hit = cursor.fetchone()
+        if url_hit:
+            logger.info(
+                "Problem '%s' dedup by source_url '%s' — reusing id=%d",
+                title, src_url, url_hit["id"],
+            )
+            return url_hit["id"], True
 
     alt = problem_dict.get("alternative_solutions", [])
     if not isinstance(alt, str):
@@ -380,9 +476,9 @@ def _save_problem(cursor, problem_dict: dict) -> int:
         INSERT INTO problems
             (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
              optimal_solution, brute_solution, function_signature, adversarial_spec_json,
-             time_complexity, space_complexity, novelty_score, starter_code,
+             time_complexity, space_complexity, novelty_score, starter_code, starter_code_norm,
              source, source_url, alternative_solutions, constraints_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         title,
         problem_dict.get("topic", ""),
@@ -398,14 +494,15 @@ def _save_problem(cursor, problem_dict: dict) -> int:
         problem_dict.get("space_complexity", ""),
         problem_dict.get("novelty_score", 7.0),
         problem_dict.get("starter_code", ""),
+        norm,
         problem_dict.get("source", "generated"),
         problem_dict.get("source_url", ""),
         alt,
         constraints,
     ))
     problem_id = cursor.lastrowid
-    logger.info("save_problem() — id=%d, title=%s", problem_id, title)
-    return problem_id
+    logger.info("save_problem() — id=%d, title=%s, reused=False", problem_id, title)
+    return problem_id, False
 
 
 # ── read ──
@@ -596,6 +693,7 @@ def get_unac_problem(
     topic: str | None = None,
     difficulty: str | None = None,
     profile_hint: str | None = None,
+    exclude_ids: set[int] | None = None,
 ) -> Optional[int]:
     """返回一道「历史做过但未 AC」的题目 id（HISTORY 兜底通道）。
 
@@ -605,6 +703,10 @@ def get_unac_problem(
     3. 最近提交的题目
 
     无未 AC 题目或查询失败返回 None。
+
+    Args:
+        exclude_ids: 排除的题目 id 集合（通常含当前会话正在做的题），避免把
+            刚失败的那道又捞回来重复出。
     """
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
@@ -614,7 +716,9 @@ def get_unac_problem(
             "ON s.problem_id = latest.problem_id AND s.id = latest.max_id "
             "JOIN problems p ON p.id = s.problem_id "
             "WHERE s.verdict IS NOT NULL AND s.verdict != 'AC' "
-            "ORDER BY s.id DESC"
+            + ("AND s.problem_id NOT IN (%s) " % ",".join("?" * len(exclude_ids)) if exclude_ids else "")
+            + "ORDER BY s.id DESC",
+            tuple(exclude_ids) if exclude_ids else (),
         ).fetchall())
         if not rows:
             return None
@@ -636,6 +740,31 @@ def get_unac_problem(
     except Exception as exc:
         logger.error("get_unac_problem() failed: %s", exc)
         return None
+
+
+def get_existing_norm_ids(exclude: set[int] | None = None) -> dict[str, int]:
+    """返回库中已存在题目的 ``(starter_code_norm, id)`` 映射（静态兜底预检用）。
+
+    静态兜底盲选 ``random.choice`` 会抽到用户已做过/正在做的题；这里把库里
+    已有题目（按归一化形态）的 norm→id 暴露给静态池，使其能避开这些题。
+
+    Args:
+        exclude: 排除的 id 集合（当前会话已出现的题），不计入"已存在"。
+    """
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT id, starter_code_norm FROM problems WHERE starter_code_norm <> ''"
+        ).fetchall())
+        out: dict[str, int] = {}
+        for r in rows:
+            pid = r["id"]
+            if exclude and pid in exclude:
+                continue
+            out.setdefault(r["starter_code_norm"], pid)
+        return out
+    except Exception as exc:
+        logger.error("get_existing_norm_ids() failed: %s", exc)
+        return {}
 
 
 # ── 会话活跃时间（TTL 自动清理）──

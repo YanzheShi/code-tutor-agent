@@ -240,8 +240,12 @@ async def _run_graph_and_generate_tests(graph, config, sid: str):
         problem = state.values.get("problem")
         if problem:
             pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
-            if pid:
+            reused = problem.reused if hasattr(problem, "reused") else (problem.get("reused") if isinstance(problem, dict) else False)
+            if pid and not reused:
+                logger.info("为 pid=%d 后台生成完整测试用例 (新题)", pid)
                 await _run_suite_safe(pid, sid)
+            else:
+                logger.info("pid=%s 为复用题/无 pid，跳过测试生成", pid)
     except Exception as e:
         logger.error("Background complex test generation failed for %s: %s", sid, e, exc_info=True)
 

@@ -175,11 +175,19 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
     sink = _SessionSink(sid, writer)
 
     lc_url = (state.leetcode or {}).get("url") or ""
+    # 排除集合：当前会话已出现/已做过的题，避免兜底重复出题给用户
+    exclude_ids: set[int] = set()
+    if getattr(state.problem, "problem_id", 0):
+        exclude_ids.add(state.problem.problem_id)
+    for sub in (state.submissions or []):
+        if getattr(sub, "problem_id", 0):
+            exclude_ids.add(sub.problem_id)
     ctx = GenerationContext(
         topic=state.topic,
         difficulty=state.difficulty,
         lc_url=lc_url or None,
         profile_hint=_profile_hint_from(state),
+        exclude_problem_ids=exclude_ids,
     )
     result = _GEN_AGENT.run(ctx, sink)
     record_generation_channel(sid, result.channel)
@@ -223,6 +231,7 @@ def _translate_to_command(
         novelty_score=9.0 if draft.from_leetcode else 7.0,
         tag_primary=tag_for(topic),
         prob_elo=elo_for(difficulty),
+        reused=result.reused,
     )
 
     if result.channel in _LC_CHANNELS:

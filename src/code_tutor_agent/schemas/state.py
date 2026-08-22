@@ -80,6 +80,8 @@ class ProblemMeta(BaseModel):
 
     # ── 暗数据 ──
     novelty_score: float = Field(default=7.0, ge=0.0, le=10.0, description="Novelty rating")
+    # 命中 starter_code 归一化去重、复用已有题目（后端据此跳过测试用例后台生成）
+    reused: bool = Field(default=False, description="reused from dedup")
 
 
 class JudgeResult(BaseModel):

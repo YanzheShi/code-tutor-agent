@@ -79,14 +79,22 @@ async def run_generation(sid: str, initial_dict: dict):
             problem = state.values.get("problem")
             if problem:
                 pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
-                if pid:
+                reused = problem.reused if hasattr(problem, "reused") else (problem.get("reused") if isinstance(problem, dict) else False)
+                if pid and not reused:
                     # 彻底独立于 run_generation 生命周期：题目就绪后即可进做题，
                     # 复杂测试用例在独立 task 中后台生成（不阻塞本协程返回）。
+                    # 复用已有题目（reused=True）时跳过：其测试用例已生成，重跑会覆盖。
+                    logger.info("为 pid=%d 后台生成完整测试用例 (新题)", pid)
                     asyncio.create_task(_run_suite_safe(pid, sid))
                 else:
-                    _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
+                    logger.info("pid=%s 为复用题/无 pid，跳过测试生成", pid)
+                    _generation_progress.setdefault(sid, []).append(
+                        "♻️ 复用已有题目，测试用例已存在，跳过测试生成"
+                        if reused else
+                        "✅ 题目已就绪"
+                    )
             else:
-                _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪")
+                _generation_progress.setdefault(sid, []).append("✅ 题目已就绪")
         except Exception as exc:
             logger.warning("Background test generation failed: %s", exc)
             _generation_progress.setdefault(sid, []).append("\u26a0\ufe0f 部分测试用例生成失败")
@@ -131,7 +139,7 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
         return
 
     try:
-        problem_id = save_problem(static)
+        problem_id, _reused = save_problem(static)
         meta = ProblemMeta(
             problem_id=problem_id,
             title=static["title"],

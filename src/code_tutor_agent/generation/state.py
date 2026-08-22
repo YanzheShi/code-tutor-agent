@@ -27,6 +27,8 @@ class GenerationContext:
     lc_url: str | None = None            # 用户贴的 LeetCode URL（导入通道，解析收口到 generation 包）
     profile_hint: str | None = None      # 用户画像弱项提示（HISTORY 优先级用）
     options: GenerationOptions = field(default_factory=GenerationOptions)
+    # 兜底选题时排除的题目 id 集合：当前会话已出现/已做过的题，避免重复出题给用户。
+    exclude_problem_ids: set[int] = field(default_factory=set)
 
 
 @dataclass
@@ -69,6 +71,8 @@ class GenerationResult:
     problem_id: int | None = None
     draft: ProblemDraft | None = None
     test_cases_ready: bool = False       # 后台补全契约
+    reused: bool = False                 # 命中 starter_code 归一化去重、复用已有题目
+    reused_from_id: int | None = None    # 复用的源题目 id（reused=True 时有值）
     fallback_chain: list[str] = field(default_factory=list)
     error: str = ""
 

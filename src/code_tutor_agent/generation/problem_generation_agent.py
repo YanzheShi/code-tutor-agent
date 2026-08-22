@@ -149,7 +149,7 @@ class ProblemGenerationAgent:
 
         # ── 先落库拿 id，用例后台补（不挡首屏）──
         try:
-            pid = self.store.save(draft)
+            pid, reused = self.store.save(draft)
         except Exception as exc:
             logger.error("持久化失败: %s", exc)
             return GenerationResult(
@@ -168,6 +168,8 @@ class ProblemGenerationAgent:
             problem_id=pid,
             draft=draft,
             test_cases_ready=False,  # 后台补全契约
+            reused=reused,
+            reused_from_id=pid if reused else None,
             fallback_chain=attempted_chain,
         )
 
@@ -345,7 +347,10 @@ class ProblemGenerationAgent:
     ) -> tuple[ProblemDraft | None, str]:
         """HISTORY：按主题/难度优先选历史未 AC 题。"""
         sink.event(GenEvent("progress", "🔄 正在从历史未 AC 题中选题…"))
-        draft = self.store.unac_problem(ctx.topic, ctx.difficulty, ctx.profile_hint)
+        draft = self.store.unac_problem(
+            ctx.topic, ctx.difficulty, ctx.profile_hint,
+            exclude_ids=ctx.exclude_problem_ids or None,
+        )
         return draft, ProblemChannel.DB_UNAC.value
 
     def _static_fallback(

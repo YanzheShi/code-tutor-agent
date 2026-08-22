@@ -55,28 +55,53 @@ def flat_to_draft(flat: dict | None, topic: str, difficulty: str) -> ProblemDraf
 
 
 class StoreGateway:
-    def save(self, draft: ProblemDraft) -> int:
-        """落库并返回 problem_id。"""
+    def save(self, draft: ProblemDraft) -> tuple[int, bool]:
+        """落库并返回 (problem_id, reused)。
+
+        reused=True 表示命中归一化去重、复用了已有题目（调用方据此跳过测试用例生成）。
+        """
         from code_tutor_agent.db.database import save_problem
 
         return save_problem(draft_to_problem_dict(draft))
 
     def static_problem(self, topic: str, difficulty: str) -> ProblemDraft | None:
-        """静态题库兜底：带参 → 无参。"""
+        """静态题库兜底：带参 → 无参。
+
+        补强（2026-08-20）：预检库里是否已存在本题（按归一化形态），避开已做/正在做的题；
+        库里已存在的题不重复塞给用户。返回 None 时调用方继续走后续通道。
+        """
+        from code_tutor_agent.db.database import get_existing_norm_ids
+        from code_tutor_agent.db.database import normalize_starter_code
         from code_tutor_agent.store.static_pool import get_static_problem
 
+        existing = get_existing_norm_ids()
         flat = get_static_problem(topic=topic, difficulty=difficulty)
         if flat is None:
             flat = get_static_problem()
+        if flat is None:
+            return None
+        # 若该静态题在库里已存在（说明用户已做过），返回 None 让上游换题
+        norm = normalize_starter_code(flat.get("starter_code", ""))
+        if norm and norm in existing:
+            logger.info("static fallback '%s' already exists in DB — skip to avoid dup", flat.get("title"))
+            return None
         return flat_to_draft(flat, topic, difficulty)
 
     def unac_problem(
-        self, topic: str, difficulty: str, profile_hint: str | None = None,
+        self,
+        topic: str,
+        difficulty: str,
+        profile_hint: str | None = None,
+        exclude_ids: set[int] | None = None,
     ) -> ProblemDraft | None:
-        """历史未 AC 题（HISTORY 通道）：按主题/难度优先选未 AC 题。"""
+        """历史未 AC 题（HISTORY 通道）：按主题/难度优先选未 AC 题。
+        补强（2026-08-20）：exclude_ids 排除当前会话正在做的题，避免重复出。"""
         from code_tutor_agent.db.database import get_unac_problem
 
-        pid = get_unac_problem(topic=topic, difficulty=difficulty, profile_hint=profile_hint)
+        pid = get_unac_problem(
+            topic=topic, difficulty=difficulty,
+            profile_hint=profile_hint, exclude_ids=exclude_ids,
+        )
         if pid is None:
             return None
         from code_tutor_agent.db.database import get_problem_by_id
