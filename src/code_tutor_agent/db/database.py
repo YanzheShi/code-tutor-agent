@@ -730,6 +730,7 @@ def get_all_submissions(limit: int = 100) -> list[dict]:
 def get_profile(user_id: str = "default"):
     """Read the user profile from the profiles table.
     Returns a dict with default values if no row exists yet.
+    AC rate is computed from submissions and injected into the result.
     """
     import json as _json
     from .models import DBProfile
@@ -740,13 +741,28 @@ def get_profile(user_id: str = "default"):
 
         if not row:
             logger.info("get_profile() — no profile for '%s', returning defaults", user_id)
-            return DBProfile()
+            return {"proficiency": 0.5, "stability": 0.5, "forget_days": 0,
+                    "common_errors": [], "attempts": 0, "error_modes": {}, "ac_rate": 0.0}
 
         data = _json.loads(row["profile_json"])
-        return DBProfile(**data)
+        profile = DBProfile(**data)
+
+        # Compute AC rate from submissions table.
+        # submissions has no user_id column — count across all rows (single-user mode).
+        sub_rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT verdict FROM submissions"
+        ).fetchall())
+        total_cnt = len(sub_rows)
+        ac_cnt = sum(1 for r in sub_rows if r[0] == "AC")
+        ac_rate = round(ac_cnt / total_cnt * 100, 1) if total_cnt else 0.0
+
+        result = profile.model_dump()
+        result["ac_rate"] = ac_rate
+        return result
     except Exception as exc:
         logger.error("get_profile(%s) failed: %s", user_id, exc)
-        return DBProfile()
+        return {"proficiency": 0.5, "stability": 0.5, "forget_days": 0,
+                "common_errors": [], "attempts": 0, "error_modes": {}, "ac_rate": 0.0}
 
 
 def save_profile(profile, user_id: str = "default"):

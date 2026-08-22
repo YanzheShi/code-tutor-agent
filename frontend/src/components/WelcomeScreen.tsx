@@ -281,14 +281,14 @@ export default function WelcomeScreen({
         <div className="mt-5 flex-1 overflow-y-auto">
           {/* ── 从题库选 ── */}
           {tab === 'existing' && (
-            <section className="flex min-h-full flex-col">
-              <h2 className="mb-3 text-sm font-semibold text-ct-text">已有题目</h2>
+            <section className="flex h-full flex-col">
+              <h2 className="mb-3 shrink-0 text-sm font-semibold text-ct-text">已有题目</h2>
               {problemsLoading ? (
                 <p className="text-sm text-ct-muted">加载中…</p>
               ) : problems.length === 0 ? (
                 <p className="text-sm text-ct-muted">题库为空，先用 AI 出几道题吧</p>
               ) : (
-                <div className="space-y-1">
+                <div className="flex-1 overflow-y-auto space-y-1 pr-1">
                   {problems.map(p => {
                     const verdictIcon = p.verdict === 'AC' ? '✅' : p.verdict ? '⏸' : '';
                     const verdictTitle = p.verdict === 'AC' ? '已通过' : p.verdict ? '已提交' : '';
@@ -305,7 +305,7 @@ export default function WelcomeScreen({
                 </div>
               )}
               <button onClick={() => selectedPid && onStartExisting?.(selectedPid)} disabled={!selectedPid}
-                className="mt-4 w-full rounded-lg bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
+                className="mt-3 w-full shrink-0 rounded-lg border-t border-ct-border bg-ct-accent py-3 text-base font-semibold text-white transition hover:opacity-90 disabled:opacity-40">
                 开始练习
               </button>
             </section>

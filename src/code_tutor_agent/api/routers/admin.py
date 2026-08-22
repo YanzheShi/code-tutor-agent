@@ -167,7 +167,7 @@ async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = Adm
 async def admin_get_profile():
     """Get the current user profile (old 5-dim)."""
     from code_tutor_agent.db.database import get_profile
-    return get_profile().model_dump()
+    return get_profile()
 
 
 @router.get("/profile/v2")

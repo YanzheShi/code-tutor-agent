@@ -189,7 +189,7 @@ function AdminProfileView() {
             <div className="grid grid-cols-3 gap-3 pt-1">
               <div><span className="text-ct-muted text-xs">做题数</span><p className="text-ct-text font-mono text-lg">{profile.attempts as number}</p></div>
               <div><span className="text-ct-muted text-xs">距上次</span><p className="text-ct-text font-mono text-lg">{profile.forget_days as number} 天</p></div>
-              <div><span className="text-ct-muted text-xs">AC率</span><p className="text-ct-text font-mono text-lg">{((profile.ac_rate as number ?? 0) * 100).toFixed(0)}%</p></div>
+              <div><span className="text-ct-muted text-xs">AC率</span><p className="text-ct-text font-mono text-lg">{(profile.ac_rate as number ?? 0).toFixed(1)}%</p></div>
             </div>
           </div>
         </div>
