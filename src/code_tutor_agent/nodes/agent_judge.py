@@ -231,6 +231,7 @@ def _apply_side_effects(
             verdict = analysis.verdict
             judge_tags = None
             if verdict != "AC":
+                # 画像用户画像和error_mode 指标
                 judge_tags = judge_failure_to_tags(verdict)
             fire_and_forget_error_mode_analysis(
                 state.session_id,

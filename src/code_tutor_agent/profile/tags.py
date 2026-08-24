@@ -1,4 +1,4 @@
-"""35 个 Tag 枚举 —— 覆盖常见算法/数据结构考点。"""
+"""32 个 Tag 枚举 —— 覆盖常见算法/数据结构考点。"""
 from __future__ import annotations
 
 from enum import Enum

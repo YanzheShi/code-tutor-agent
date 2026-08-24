@@ -53,6 +53,10 @@ from code_tutor_agent.trace import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# 提示深度阈值：hint_level_reached ≥ 此值视为"靠较深提示才拿下/没拿下"（R2 规则）。
+# 提示等级 0–4，≥3 表示已给到 L3/L4 仍吃力，掌握度不牢。
+HINT_DEEP_THRESHOLD = 3
+
 # ── checkpointer 辅助 ──
 
 CHECKPOINT_DB = get_checkpoint_db_path()
@@ -726,6 +730,60 @@ async def create_session_with_existing(problem_id: int):
     return serialize_state(state.values)
 
 
+def _build_next_problem_guide(prev_verdict: str | None, last_hint: int) -> str:
+    """构造"换一题"入口引导消息（Agent 模式）。
+
+    纯函数，便于单测。R2 规则（紧急修复 2026-08-24）：
+    hint_level_reached 反映上一题"靠多少提示才拿下/没拿下"，是掌握度硬信号。
+
+    优先级：ABANDON(None) > WA > AC。
+    - None：用户未提交就放弃，中性措辞、不评价不推难度。
+    - WA 且 hint 高(≥HINT_DEEP_THRESHOLD)：提示给到 L3/L4 仍没拿下 → 换方向/同类型降难度。
+    - WA 且 hint 低：几乎没要提示就 WA，思路有偏差 → 同类型重做。
+    - AC 且 hint 高：过了但基础不牢 → 同类型巩固。
+    - AC 且 hint 低：真掌握 → 鼓励自由进阶/换类型。
+
+    注：引导文案只"建议"，不强制导师出题方向（强制由方案2 prompt 注入负责）。
+    """
+    # 通用药尾：引导用户选类型或发 LeetCode 链接
+    _suffix = (
+        "\n\n也可以直接把一道 LeetCode 题目链接发给我，我们接着练 👇"
+    )
+
+    # ABANDON / 无 verdict：中性，不评价上一题
+    if prev_verdict not in ("AC", "WA"):
+        return (
+            "好的，这道题先放一放。接下来想练习什么类型的算法题？"
+            "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？"
+            + _suffix
+        )
+
+    if prev_verdict == "WA":
+        if last_hint >= HINT_DEEP_THRESHOLD:
+            return (
+                "这道题提示给到比较深还没完全拿下，说明这个方向暂时有点吃力。"
+                "要不要换个思路转换一下（比如换一类题型），或者同一类型降一档难度再来一道？"
+                + _suffix
+            )
+        return (
+            "这道题还差一点，不过没关系——几乎没怎么要提示就卡住，通常是某个思路细节没转过弯。"
+            "建议同类型再来一道巩固，换个角度就能解开～"
+            + _suffix
+        )
+
+    # prev_verdict == "AC"
+    if last_hint >= HINT_DEEP_THRESHOLD:
+        return (
+            "上一题拿下了！不过提示用得比较深，说明基础还可以再夯实一下。"
+            "建议同类型再来一道巩固，或者稍微进阶一点也行～"
+            + _suffix
+        )
+    return (
+        "上一题完美拿下，而且提示用得很少，掌握得很扎实！"
+        "接下来想挑战什么？同类型进阶、换一类拓展，或者发我一道 LeetCode 题目都可以 👇"
+    )
+
+
 @router.post("/{sid}/next-problem", response_model=NextProblemResp)
 async def next_problem(sid: str, body: NextProblemReq):
     """Continue to the next problem within the same session.
@@ -843,27 +901,23 @@ async def next_problem(sid: str, body: NextProblemReq):
             logger.warning("failed to load trace summary for next-problem: %s", exc)
 
         # ── 4. 构造"下一题"引导消息，重置对话 ──
-        # 根据上一题的 verdict 选择不同措辞
+        # 根据上一题的 verdict + 提示消耗深度（hint_level_reached）选择不同措辞。
+        # R2 规则（紧急修复，2026-08-24）：
+        #   hint_level_reached 反映"上一题靠多少提示才拿下/没拿下"——
+        #   它是衡量掌握度的硬信号（critic 已在 flush 时写入 ProblemAttemptRecord）。
+        #   - AC 但 hint 高(≥HINT_DEEP_THRESHOLD)：过了但基础不牢 → 建议同类型巩固
+        #   - AC 且 hint 低：真掌握 → 鼓励自由进阶/换类型
+        #   - WA 但 hint 高：给到 L3/L4 仍没拿下 → 建议换方向或同类型降难度
+        #   - WA 且 hint 低：几乎没要提示就 WA，思路有偏差 → 建议同类型重做
+        #   注：ABANDON 路径（prev_verdict 为 None）不评价、不推难度（R1 优先级最高），
+        #   此处 prev_verdict 取不到时走中性措辞。
         prev_verdict = vals.get("last_verdict")
-        if prev_verdict == "AC":
-            _guide_content = (
-                "上一题完美拿下！接下来想练习什么类型的算法题？"
-                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n"
-                "也可以直接把一道 LeetCode 题目链接发给我，我们接着练 👇"
-            )
-        elif prev_verdict == "WA":
-            _guide_content = (
-                "这道题还差一点，不过没关系，换个方向转换一下思路。"
-                "接下来想练什么类型？数组、链表、双指针、动态规划都可以~\n\n"
-                "或者直接发我一道 LeetCode 题目链接也行～"
-            )
-        else:
-            # 用户未提交就放弃，或没有 verdict
-            _guide_content = (
-                "好的，这道题先放一放。接下来想练习什么类型的算法题？"
-                "比如数组、链表、双指针、动态规划……你对哪个方向感兴趣？\n\n"
-                "也可以直接把一道 LeetCode 题目链接发给我哦～"
-            )
+        _last_hint = (
+            problem_history[-1].hint_level_reached
+            if problem_history and getattr(problem_history[-1], "hint_level_reached", None) is not None
+            else 0
+        )
+        _guide_content = _build_next_problem_guide(prev_verdict, _last_hint)
         guide_msg = Message(role="tutor", content=_guide_content)
 
         # tutor_messages 不清空：保留完整对话历史供前端展示，
