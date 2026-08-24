@@ -4,7 +4,6 @@
 #    make server      启动后端 FastAPI (hot-reload)
 #    make frontend    启动前端 Vite dev server
 #    make all         同时启动前后端 (前端前台，后端后台)
-#    make cli         运行 CLI 交互模式
 #    make test        运行 pytest
 #    make db          初始化数据库
 #    make clean       清理缓存文件
@@ -12,7 +11,7 @@
 #    help             显示本帮助
 # ──────────────────────────────────────────────────────────
 
-.PHONY: server frontend all cli test db clean install help
+.PHONY: server frontend all server-bg test test-failed db clean install docker docker-prod docker-down help
 
 # ── 默认目标 ──
 help:
@@ -21,7 +20,6 @@ help:
 	@echo "  make server      启动后端 API (localhost:8765)"
 	@echo "  make frontend    启动前端 dev (localhost:5173)"
 	@echo "  make all         同时启动前后端"
-	@echo "  make cli         运行 CLI 交互模式"
 	@echo "  make test        运行 pytest"
 	@echo "  make db          初始化数据库"
 	@echo "  make install     安装全部依赖"
@@ -64,10 +62,6 @@ all:
 	$(MAKE) server &
 	@sleep 3
 	$(MAKE) frontend
-
-# ── CLI ──
-cli:
-	uv run python src/code_tutor_agent/main.py
 
 # ── 测试 ──
 test:
