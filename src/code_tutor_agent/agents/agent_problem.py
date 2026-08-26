@@ -165,12 +165,19 @@ def verify_problem(problem_dict: dict) -> bool:
         return False
     brute = _extract_code(problem_dict.get("brute_solution", ""))
     problem_dict["brute_solution"] = brute
-    if not brute:
-        logger.warning("No brute_solution — rejecting")
-        return False
-    if _is_stub_solution(brute):
-        logger.warning("brute_solution is a stub (no real logic) — rejecting")
-        return False
+    # 需求：允许题目没有暴力解；无暴力解时仅跳过交叉验证、不拦截。
+    # 因此 brute_solution 为空或仅占位（stub）均视为「无暴力解」，通过校验，
+    # 由下游 problem_generation_agent 的 `if draft.brute_solution:` 决定跳过交叉验证。
+    if brute and _is_stub_solution(brute):
+        logger.warning("brute_solution is a stub (no real logic) — treated as no brute_solution, skip")
+    # 仅当存在真实暴力解时才编译校验（无暴力解则跳过，不拦截）
+    if brute:
+        try:
+            compile(brute, "<brute_solution>", "exec")
+            logger.info("✓ brute_solution compiles OK")
+        except SyntaxError as exc:
+            logger.warning("brute_solution syntax error: %s", exc)
+            return False
 
     # 检查描述中是否有思考过程泄漏（desc 已在上方取过）
     # 注意：只拦截真正的思维链泄露，不要误伤正常描述用语。
@@ -185,14 +192,6 @@ def verify_problem(problem_dict: dict) -> bool:
         logger.info("✓ optimal_solution compiles OK")
     except SyntaxError as exc:
         logger.warning("optimal_solution syntax error: %s", exc)
-        return False
-
-    # P0-3: 验证 brute_solution 也能编译
-    try:
-        compile(brute, "<brute_solution>", "exec")
-        logger.info("✓ brute_solution compiles OK")
-    except SyntaxError as exc:
-        logger.warning("brute_solution syntax error: %s", exc)
         return False
 
     # 先去掉 LLM 结构化输出里可能夹带的 ```python 代码围栏

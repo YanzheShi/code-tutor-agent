@@ -26,6 +26,7 @@ import logging
 from typing import Callable
 
 from code_tutor_agent.agents.agent_problem import ProblemChannel
+from code_tutor_agent import config as cfg
 from code_tutor_agent.generation.gateways import (
     LeetCodeGateway,
     LlmGateway,
@@ -266,8 +267,19 @@ class ProblemGenerationAgent:
         )
 
     def _ensure_dual(self, draft: ProblemDraft, sink: ProgressSink) -> ProblemDraft:
-        """（可选）为导入题补暴力解，形成双参考解对拍。"""
+        """（可选）为导入题补暴力解，形成双参考解对拍。
+
+        受全局开关 ``cfg.ENSURE_DUAL_BRUTE`` 控制：
+        - 关闭（默认）：题目已带暴力解则保留；未带则不额外调用 LLM 现补，
+          直接返回（保持单解验证）。符合需求「允许没有暴力解，仅跳过交叉验证」。
+        - 开启（ENSURE_DUAL_BRUTE=1）：未带暴力解时调用 LLM 现补一道用于对拍。
+        注意：本方法仍仅在调用方 ``ctx.options.dual_solution`` 为真时才会被触发；
+        本开关控制的是「缺 brute 时是否现补」这一实现细节。
+        """
         if draft.brute_solution:
+            return draft
+        # 默认不现补暴力解（避免每次出题额外烧一次 LLM）
+        if not cfg.ENSURE_DUAL_BRUTE:
             return draft
         code = self.llm.generate_dual(draft.description, draft.starter_code, mode="brute")
         if code and self.sandbox.compile(code):
