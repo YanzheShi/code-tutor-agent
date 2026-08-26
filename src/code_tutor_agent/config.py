@@ -33,6 +33,12 @@ LLM_CONFIGS = {
         "base_url": os.getenv("LLM_BASE_URL_ALT"),
         "api_key": os.getenv("LLM_API_KEY_ALT"),
     },
+    "gmi": {
+        "model": os.getenv("GMI_OPENAI_MODEL"),
+        "model_provider": "openai",
+        "base_url": os.getenv("GMI_BASE_URL"),
+        "api_key": os.getenv("GMI_API_KEY"),
+    },
 }
 
 # ── 业务用途 → 模型配置映射 ──
@@ -209,3 +215,11 @@ def get_token_user_daily_budget() -> float:
     单用户实例下,用户日预算用于演示层级语义,与平台日预算解耦可独立配置。
     """
     return _budget_env("TOKEN_USER_DAILY_BUDGET", "20.0")
+
+
+# ── 出题双解对拍：是否调用 LLM 现补暴力解 ──
+# 出题允许没有暴力解（需求：无暴力解仅跳过交叉验证、不拦截）。当题目未带暴力解时，
+# 下游 _ensure_dual 是否额外调用一次 LLM 现补暴力解用于对拍。默认关闭（不额外烧 LLM），
+# 需要时置 ENSURE_DUAL_BRUTE=1 开启。请求级开关 ctx.options.dual_solution 仍控制
+# “是否要双解对拍”这一能力诉求；本开关控制“缺 brute 时是否现补”的实现细节。
+ENSURE_DUAL_BRUTE = os.getenv("ENSURE_DUAL_BRUTE", "0") == "1"
