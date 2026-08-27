@@ -256,6 +256,7 @@ def generate_problem(
     difficulty: str,
     purpose: str = "problem",
     max_retries: int =2,
+    user_suffix: str | None = None,
 ) -> Problem:
     """（主通道）调用 LLM 结构化生成一道题，返回 ``Problem`` 对象。
 
@@ -266,6 +267,15 @@ def generate_problem(
       skill-engine 慢通道）。8192 留足余量且仍远低于 16384 token 硬上限（Bug7 截断风险）。
     * ``temperature=0.7``：增加多样性，减少 AC 题目重复出题。
     * 全部尝试（含重试）均失败（problem 为 None）时抛 ``RuntimeError``，交由上层降级。
+
+    参数
+    -----
+    topic / difficulty: 知识点与难度。
+    purpose: LLM 用途别名（见 config.LLM_CONFIGS）。
+    max_retries: 结构化输出重试次数。
+    user_suffix: 可选注入文本，追加到 USER prompt 末尾（如方案 H 的
+        F/G 随机二选一注入段）。调用方须确保其中花括号已转义为 ``{{ }}``，
+        以免与 ``{topic}`` / ``{difficulty}`` 占位符冲突。
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
     # 限制输出长度：8192 足以容纳含完整题解的 Problem 结构化输出，同时远低于 16384 硬上限
@@ -277,7 +287,7 @@ def generate_problem(
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", GENERATE_PROBLEM_SYSTEM),
-        ("human", GENERATE_PROBLEM_USER),
+        ("human", GENERATE_PROBLEM_USER + (user_suffix or "")),
     ])
 
     chain = prompt | structured_llm

@@ -27,6 +27,7 @@ from typing import Callable
 
 from code_tutor_agent.agents.agent_problem import ProblemChannel
 from code_tutor_agent import config as cfg
+from code_tutor_agent.generation.injection import decide_injection
 from code_tutor_agent.generation.gateways import (
     LeetCodeGateway,
     LlmGateway,
@@ -291,7 +292,17 @@ class ProblemGenerationAgent:
 
     # ── 通道 B：LLM 生成 ──
     def _llm_generate(self, ctx: GenerationContext, sink: ProgressSink) -> ProblemDraft | None:
-        draft = self.llm.generate_problem(ctx.topic, ctx.difficulty)
+        # 方案 H：每次出题随机二选一注入 F（场景）或 G（维度），二者不混用；
+        # 选 G 无维度文件时 decide_injection 内部自动 fallback 到 F。
+        mode, suffix = decide_injection(ctx.topic)
+        logger.info("方案 H 注入决策：mode=%s topic=%s", mode, ctx.topic)
+        if mode:
+            sink.event(GenEvent(
+                "progress",
+                f"🎲 本次出题采用方案 {mode} 注入（随机二选一，F=场景/G=维度）",
+            ))
+        draft = self.llm.generate_problem(
+            ctx.topic, ctx.difficulty, user_suffix=suffix or None)
         if draft is None:
             return None
         sink.event(GenEvent("progress", "🧪 正在解析示例测试用例…"))

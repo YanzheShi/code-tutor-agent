@@ -24,12 +24,11 @@ _BOUNDARY_MAX_INPUT_CHARS = 300
 # （graph theory）。这里把口语归一化为明确的出题描述后再喂给 LLM。
 _TOPIC_GEN_MAP: dict[str, str] = {
     "图": (
-        "图论（graph theory：顶点与边的数据结构与算法，例如图的 DFS/BFS 遍历、"
-        "连通分量、最短路径、拓扑排序；注意：不是图片/图像/像素，也不是二维网格矩阵 grid）"
+        "图论（graph theory：顶点与边的数据结构与算法；"
+        "注意：不是图片/图像/像素，也不是二维网格矩阵 grid）"
     ),
     "图论": (
-        "图论（graph theory：顶点与边的数据结构与算法，例如图的 DFS/BFS 遍历、"
-        "连通分量、最短路径、拓扑排序）"
+        "图论（graph theory：顶点与边的数据结构与算法）"
     ),
     "图遍历": "图论遍历（图的 DFS/BFS，邻接表/邻接矩阵表示，含 visited 集合防环）",
     "图的bfs": "图的广度优先搜索（BFS，队列实现，邻接表/邻接矩阵表示）",
@@ -37,14 +36,14 @@ _TOPIC_GEN_MAP: dict[str, str] = {
     "拓扑排序": "拓扑排序（topological sort，有向无环图 DAG，Kahn 算法或 DFS 后序）",
     "最短路径": "最短路径（图论，Dijkstra / Bellman-Ford / Floyd）",
     "并查集": "并查集（union-find / disjoint set，路径压缩 + 按秩合并）",
-    "树": "二叉树/树结构（tree，例如遍历、LCA、路径和、直径）",
-    "二叉树": "二叉树（binary tree，例如前中后序遍历、层序、LCA）",
-    "堆": "堆 / 优先队列（heap / priority queue，例如堆排序、Top-K、中位数）",
+    "树": "树 / 二叉树（tree：节点含子指针的层级结构，含根/叶/深度/子树等概念）",
+    "二叉树": "二叉树（binary tree：每个节点至多两个子节点的树形结构）",
+    "堆": "堆 / 优先队列（heap / priority queue：完全二叉树结构，支持取最值）",
     "优先队列": "优先队列（priority queue，heap 实现）",
-    "回溯": "回溯（backtracking，例如排列/组合/子集、N 皇后）",
-    "贪心": "贪心（greedy，局部最优推导全局最优）",
-    "位运算": "位运算（bit manipulation，异或、掩码、lowbit）",
-    "数论": "数论（number theory，质数、GCD、模运算）",
+    "回溯": "回溯（backtracking：通过尝试与撤销选择搜索解空间的算法范式）",
+    "贪心": "贪心（greedy：每步取局部最优以推导全局最优的算法范式）",
+    "位运算": "位运算（bit manipulation：按位与或异或、移位、掩码、lowbit 等）",
+    "数论": "数论（number theory：质数、GCD、模运算等整数性质）",
 }
 
 
@@ -102,19 +101,27 @@ def _extract_code(text: str) -> str:
 class LlmGateway:
     """LLM 薄封装：出题 / 补解（optimal、brute）/ 边界用例。"""
 
-    def generate_problem(self, topic: str, difficulty: str) -> ProblemDraft | None:
+    def generate_problem(
+        self, topic: str, difficulty: str,
+        user_suffix: str | None = None,
+    ) -> ProblemDraft | None:
         """单次结构化出题尝试；失败（异常或自校验不过）返回 None，由上层重试。
 
         注意 max_retries=1（一次真实 LLM 调用）：外层 ``ProblemGenerationAgent.run``
         的 for 循环负责重试（默认 MAX_RETRIES 次），这里传 0 会让
         ``agent_problem.generate_problem`` 的 ``range(0)`` 一次都不执行、直接抛错，
         导致整个 LLM 原创通道永远失败（2026-08-10 修复）。
+
+        user_suffix：方案 H（F/G 随机二选一）注入段，追加到 USER prompt 末尾。
         """
         from code_tutor_agent.agents.agent_problem import generate_problem as _llm_generate_problem
 
         gen_topic = normalize_topic_for_generation(topic)
         try:
-            p = _llm_generate_problem(gen_topic, difficulty, purpose="problem", max_retries=1)
+            p = _llm_generate_problem(
+                gen_topic, difficulty, purpose="problem", max_retries=1,
+                user_suffix=user_suffix,
+            )
             return _problem_to_draft(p, topic, difficulty)
         except Exception as exc:
             logger.warning("LLM 出题单次尝试失败: %s", exc)
