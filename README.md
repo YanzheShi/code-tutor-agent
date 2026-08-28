@@ -148,6 +148,16 @@ flowchart TB
 
 ---
 
+## 已知限制
+
+- **暂不支持设计类题目**：判题引擎（本地沙箱 / Judge0）目前按 LeetCode「单方法 `class Solution`」契约执行用例——即实例化 `Solution` 后单次调用其方法比对结果。需要实现**带多个方法的类并按操作序列多次调用**的设计类题目（如 LRU 缓存、最小栈、实现前缀树）无法被正确执行。因此出题侧已主动拦截此类题目：
+  - LLM 原创出题：prompt 禁止生成 + 校验器拦截（`generation/verifier.py`、`agents/agent_problem.py`）；
+  - LeetCode 链接导入 / 按主题拉题：识别到顶层非 `Solution` 类（如 `class LRUCache`）时拒绝导入并给出明确提示。
+
+  支持设计类题目（操作序列格式的测试用例 + 对应判题分支）已在后续规划中。
+
+---
+
 ## 项目结构
 
 ```
