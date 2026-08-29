@@ -33,7 +33,7 @@ class TestFunctionSignaturePersistence:
         """function_signature should survive save → read."""
         from code_tutor_agent.db.database import save_problem, get_problem_by_id
 
-        pid = save_problem({
+        pid, _ = save_problem({
             "title": "test_func_sig",
             "topic": "数组",
             "difficulty": "medium",
@@ -51,7 +51,7 @@ class TestFunctionSignaturePersistence:
         """Problems without function_signature should default to empty string."""
         from code_tutor_agent.db.database import save_problem, get_problem_by_id
 
-        pid = save_problem({
+        pid, _ = save_problem({
             "title": "test_no_func_sig",
             "topic": "数组",
             "difficulty": "easy",
@@ -68,7 +68,7 @@ class TestFunctionSignaturePersistence:
         from code_tutor_agent.db.database import save_problem, get_problem_by_id
 
         starter = "class Solution:\n    def twoSum(self, nums: List[int], target: int) -> List[int]: pass"
-        pid = save_problem({
+        pid, _ = save_problem({
             "title": "test_separate",
             "topic": "数组",
             "difficulty": "medium",
@@ -116,7 +116,7 @@ class TestLeetCodeImportWithFunctionSignature:
             ],
             "brute_solution": "",
         }
-        pid = save_problem(problem_dict)
+        pid, _ = save_problem(problem_dict)
         r = get_problem_by_id(pid)
         assert r is not None
         assert r["function_signature"] == "nums:List[int],target:int -> List[int]"
@@ -125,7 +125,7 @@ class TestLeetCodeImportWithFunctionSignature:
         """update_problem_test_cases should only change test_cases_json, not visible_test_cases."""
         from code_tutor_agent.db.database import save_problem, get_problem_by_id, update_problem_test_cases
 
-        pid = save_problem({
+        pid, _ = save_problem({
             "title": "test_visible_preserved",
             "topic": "数组",
             "difficulty": "medium",

@@ -16,7 +16,7 @@ class TestStarterCodePersistence:
         tp = os.path.join(tempfile.gettempdir(), f"test_st_{os.getpid()}.db")
         dbmod.DB_PATH = tp
         try:
-            pid = save_problem({
+            pid, _ = save_problem({
                 "title": "test_starter_persist",
                 "topic": "数组", "difficulty": "easy",
                 "description": "<p>test</p>",
@@ -37,7 +37,7 @@ class TestStarterCodePersistence:
         tp = os.path.join(tempfile.gettempdir(), f"test_st2_{os.getpid()}.db")
         dbmod.DB_PATH = tp
         try:
-            pid = save_problem({
+            pid, _ = save_problem({
                 "title": "test_starter_empty",
                 "topic": "数组", "difficulty": "easy",
                 "description": "<p>test</p>",
@@ -71,7 +71,7 @@ class TestTestCaseSeparation:
         """Visible test cases should be stored independently from full test cases."""
         dbmod, orig, tpath = self._setup()
         try:
-            pid = dbmod.save_problem({
+            pid, _ = dbmod.save_problem({
                 "title": "test_sep_tcs",
                 "topic": "数组",
                 "difficulty": "easy",
@@ -115,7 +115,7 @@ class TestTestCaseSeparation:
         """When no visible_test_cases provided, fallback to test_cases."""
         dbmod, orig, tpath = self._setup()
         try:
-            pid = dbmod.save_problem({
+            pid, _ = dbmod.save_problem({
                 "title": "test_fallback_tcs",
                 "topic": "数组",
                 "difficulty": "easy",

@@ -64,9 +64,9 @@ class _RecordingStore:
         self.unac: ProblemDraft | None = None
         self.static: ProblemDraft | None = _static_draft()
 
-    def save(self, draft: ProblemDraft) -> int:
+    def save(self, draft: ProblemDraft) -> tuple[int, bool]:
         self.saved.append(draft)
-        return len(self.saved)
+        return len(self.saved), False
 
     def unac_problem(self, *a, **k):
         return self.unac

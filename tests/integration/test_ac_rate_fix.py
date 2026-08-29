@@ -34,8 +34,8 @@ def test_ac_rate_matches_submissions_count():
     conn.close()
 
     result = get_profile()
-    assert result["ac_rate"] == expected, (
-        f"ac_rate mismatch: expected={expected}, got={result['ac_rate']}, "
+    assert result.ac_rate == expected, (
+        f"ac_rate mismatch: expected={expected}, got={result.ac_rate}, "
         f"submissions_total={total}, ac={ac}"
     )
 
@@ -47,7 +47,7 @@ def test_ac_rate_zero_when_no_submissions(tmp_path, monkeypatch):
     init_db()
 
     result = get_profile()
-    assert result["ac_rate"] == 0.0, f"Expected 0.0 with no submissions, got {result['ac_rate']}"
+    assert result.ac_rate == 0.0, f"Expected 0.0 with no submissions, got {result.ac_rate}"
 
 
 def test_ac_rate_nonzero_with_ac_submissions(tmp_path, monkeypatch):
@@ -75,4 +75,4 @@ def test_ac_rate_nonzero_with_ac_submissions(tmp_path, monkeypatch):
 
     result = get_profile()
     expected = round(2 / 3 * 100, 1)  # ~66.7
-    assert result["ac_rate"] == expected, f"Expected {expected}, got {result['ac_rate']}"
+    assert result.ac_rate == expected, f"Expected {expected}, got {result.ac_rate}"

@@ -59,6 +59,7 @@ def wait_for_session(c, sid: str, timeout: float = 120.0) -> dict:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
+@pytest.mark.integration
 class TestSessionLeetCodeUrlImport:
     """POST /session + leetcode_url — import path goes through background generation.
 

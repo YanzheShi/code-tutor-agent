@@ -114,13 +114,19 @@ async def test_judge_check_health_passthrough():
 
 
 def test_agent_tools_registry():
+    from code_tutor_agent.mcp.search_client import search_mcp_configured
+
     names = {t.name for t in AGENT_TOOLS}
-    # LeetCode 解析已收口到 generation 包，不再作为 agent 工具
-    assert names == {
+    # LeetCode 解析已收口到 generation 包，不再作为 agent 工具；
+    # web_search 仅在配置了 SEARCH_MCP_TOKEN 时注册。
+    expected = {
         "judge_run_code",
         "judge_code",
         "judge_check_health",
     }
+    if search_mcp_configured():
+        expected.add("web_search")
+    assert names == expected
 
 
 def test_extract_leetcode_url():

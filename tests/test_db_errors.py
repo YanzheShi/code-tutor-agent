@@ -28,7 +28,7 @@ class TestUpdateProblemOptimalSolution:
     def test_update_populates_field(self):
         dbmod, orig, tpath = self._setup()
         try:
-            pid = dbmod.save_problem({
+            pid, _ = dbmod.save_problem({
                 "title": "test_opt_update",
                 "topic": "数组", "difficulty": "easy",
                 "description": "test",
@@ -46,7 +46,7 @@ class TestUpdateProblemOptimalSolution:
     def test_update_overwrites_existing(self):
         dbmod, orig, tpath = self._setup()
         try:
-            pid = dbmod.save_problem({
+            pid, _ = dbmod.save_problem({
                 "title": "test_opt_overwrite",
                 "topic": "数组", "difficulty": "easy",
                 "description": "test",

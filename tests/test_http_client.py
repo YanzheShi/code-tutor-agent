@@ -26,8 +26,13 @@ import uuid
 from typing import Any
 
 import httpx
+import pytest
 
 BASE_URL = "http://localhost:8765"
+
+# 需要后端服务真实在跑（localhost:8765）才能测；服务未启动会 ConnectError。
+# 归为 integration，日常用 `pytest -m "not integration"` 跳过。
+pytestmark = pytest.mark.integration
 
 # ──────────────────────────────────────────────
 #  Helpers
