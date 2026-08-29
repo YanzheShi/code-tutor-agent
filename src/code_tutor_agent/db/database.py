@@ -1129,7 +1129,7 @@ def get_edit_trace_by_problem(session_id: str, problem_id: Optional[str] = None)
         return []
 
 
-def purge_trace_data(days: int = 30) -> dict:
+def purge_trace_data(days: int = 30, dry_run: bool = False) -> dict:
     """清理过期的细粒度轨迹数据（全量方案下 edit_traces 增长较快，需定期瘦身）。
 
     只删「轨迹分析派生数据」，绝不碰 submissions / profiles / problems 等核心业务表：
@@ -1141,6 +1141,11 @@ def purge_trace_data(days: int = 30) -> dict:
 
     删除依据：各表 updated_at / created_at < (now - days)。默认保留 30 天。
     返回被删行数统计，便于观测与审计。
+
+    Args:
+        days: 保留天数，早于 (now - days) 的行会被清理，默认 30。
+        dry_run: 为 True 时只统计待删行数、不执行 DELETE（供 CLI 预览复用同一份
+            targets 定义，避免表/列名在两处漂移）。默认 False，即真实删除。
 
     触发方式（二选一，均已在设计文档约定）：
     - 管理端点  GET /admin/purge-trace?days=30  （运维手动触发）
@@ -1157,11 +1162,17 @@ def purge_trace_data(days: int = 30) -> dict:
     stats: dict[str, int] = {}
     try:
         for table, col in targets:
-            n = _with_conn(lambda cursor, t=table, c=col: cursor.execute(
-                f"DELETE FROM {t} WHERE {c} < {cutoff}"
-            ).rowcount)
+            if dry_run:
+                n = _with_conn(lambda cursor, t=table, c=col: cursor.execute(
+                    f"SELECT COUNT(*) FROM {t} WHERE {c} < {cutoff}"
+                ).fetchone()[0])
+            else:
+                n = _with_conn(lambda cursor, t=table, c=col: cursor.execute(
+                    f"DELETE FROM {t} WHERE {c} < {cutoff}"
+                ).rowcount)
             stats[table] = n
-        logger.info("purge_trace_data: 清理 %d 天前轨迹数据 -> %s", days, stats)
+        logger.info("purge_trace_data: %s %d 天前轨迹数据 -> %s",
+                    "预演统计" if dry_run else "清理", days, stats)
     except Exception as exc:
         logger.error("purge_trace_data(%d) failed: %s", days, exc)
     return stats

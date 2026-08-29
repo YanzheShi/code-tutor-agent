@@ -419,6 +419,58 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ---
 
+## 轨迹数据定期清理（运维）
+
+细粒度编辑轨迹（edit-trace）数据增长较快，需定期瘦身。清理能力已内置：
+
+- 清理函数：`src/code_tutor_agent/db/database.py` 的 `purge_trace_data(days=30, dry_run=False)`，只删「轨迹派生数据」，绝不碰 `submissions` / `profiles` / `problems` 等核心业务表：
+  - `edit_traces`：前端全量采集的细粒度编辑事件（数据量最大）
+  - `trace_threads`：多轮分析线程 transcript
+  - `trace_analysis`：首轮结构化结论缓存
+  - `analysis_results`：按题分析结果
+  - `trace_summaries`：过渡摘要
+  - 删除依据：各表 `updated_at` / `created_at` < `now - days`（默认 30 天）。
+- `dry_run=True` 时只 `SELECT COUNT(*)` 统计待删行数、不执行删除；（默认 `False`）删除与统计共用同一份表/列定义，避免两处漂移。
+
+### 一键清理脚本
+
+`scripts/cleanup_traces.py` 封装了上述函数，供运维 / 定时任务调用：
+
+```bash
+# 清理 30 天前的轨迹数据（默认）
+uv run python scripts/cleanup_traces.py
+
+# 只保留最近 7 天
+uv run python scripts/cleanup_traces.py --days 7
+
+# 预览：只统计待删行数，不删除
+uv run python scripts/cleanup_traces.py --dry-run
+
+# JSON 输出（便于日志采集 / 监控）
+uv run python scripts/cleanup_traces.py --json
+```
+
+退出码：`0` 成功 / `1` 清理失败 / `2` 参数或环境错误（供任务调度判成败）。
+运行结果会追加到 `logs/cleanup_traces.log`。
+
+### 注册系统定时任务（可选，当前未启用）
+
+> 本项目默认**不注册**任何自动执行。如需定期运行，二选一：
+
+**方式 A — Windows 任务计划程序**（系统级，需当前用户授权）：
+
+```powershell
+schtasks /Create /TN "CodeTutor-CleanupTraces" /SC DAILY /ST 03:00 /F /TR "D:\Code\PycharmProjects\code-tutor-agent\scripts\run_cleanup_traces.bat"
+```
+
+`scripts/run_cleanup_traces.bat` 已封装 `cd` + 调 `.venv\Scripts\python.exe`，避免路径/环境变量陷阱。如需锁屏/未登录也执行，再加 `/RU Andre`（会提示输入密码）。
+
+**方式 B — WorkBuddy 自动化 / cron**：用 WorkBuddy 自动化（recurring，每天）或系统 cron 跑上面的 Python 命令即可。
+
+管理命令：`schtasks /Query /TN "CodeTutor-CleanupTraces"`（查看）、`/Run`（手动跑一次）、`/Delete /F`（删除）。
+
+---
+
 ## Roadmap（详细）
 
 详细的炸场功能优先级与设计文档见本地 `docs/` 目录（设计评审用，未纳入 git 追踪）。
