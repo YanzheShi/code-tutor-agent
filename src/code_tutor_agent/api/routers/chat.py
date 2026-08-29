@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.mcp.search_client import search_mcp_configured
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.state import Message
 
@@ -213,13 +214,25 @@ _RESULT_HINT = (
     "- 不要臆造用户没有遇到的错误；如果用户贴了代码请结合其真实运行结果回应。"
 )
 
+# 联网搜索工具引导：仅在配置了搜索 MCP 时注入（与 TUTOR_CHAT_TOOLS 是否含
+# search 工具保持一致），避免向模型描述一个实际未绑定的工具。
+_SEARCH_HINT = (
+    "\n\n你可以使用 web_search(query, max_results) 工具联网搜索。使用规则：\n"
+    "- 用户明确要求联网搜索 / 查最新信息（如「你搜一下」「联网查查」「最新版本是多少」）时，"
+    "必须先调用 web_search，再据返回结果作答，禁止凭记忆直接回答。\n"
+    "- 涉及时效性的事实（语言/库/框架的最新版本号、发布时间、近期资讯等）一律先搜再答，"
+    "不要依赖你可能已过时的内置知识。\n"
+    "- 搜索不可用或无结果时，如实说明未能联网检索，再基于已有知识作答。\n"
+    "- 搜索与当前算法题无关的知识问题后，简短作答并自然地把话题带回题目。"
+)
+
 # 导师人设（全静态，收敛为单一变体：phase/verdict 变化不再制造新的 system 缓存线，
 # 状态差异改为放当轮 human 消息开头，见 _build_state_note）
 _TUTOR_SYSTEM = (
     "你是 AI 编程导师，语气温暖鼓励。用户正在做算法题，"
     "根据对话上下文分析问题、给出针对性建议。"
     "\n回复控制在 200 字以内。"
-) + _JUDGE_HINT + _RESULT_HINT + _FORMAT_HINT
+) + _JUDGE_HINT + (_SEARCH_HINT if search_mcp_configured() else "") + _RESULT_HINT + _FORMAT_HINT
 
 
 async def _run_graph_and_generate_tests(graph, config, sid: str):

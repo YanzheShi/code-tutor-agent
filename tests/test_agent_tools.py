@@ -311,15 +311,15 @@ async def test_run_tool_loop_ignores_unbound_tool():
 
 
 @pytest.mark.asyncio
-async def test_tutor_chat_tools_are_judge_only():
-    """TUTOR_CHAT_TOOLS 仅含 judge 工具，不含解析出题工具。"""
+async def test_tutor_chat_tools_are_judge_plus_optional_search():
+    """TUTOR_CHAT_TOOLS = judge 工具 +（配置了搜索 MCP 时的）web_search。"""
     from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, JUDGE_TOOLS
+    from code_tutor_agent.mcp.search_client import search_mcp_configured
 
     names = {t.name for t in TUTOR_CHAT_TOOLS}
-    assert names == {
-        "judge_run_code",
-        "judge_code",
-        "judge_check_health",
-    }
+    expected = {t.name for t in JUDGE_TOOLS}
+    if search_mcp_configured():
+        expected.add("web_search")
+    assert names == expected
     assert set(names) >= {t.name for t in JUDGE_TOOLS}
     assert "parse_leetcode" not in names

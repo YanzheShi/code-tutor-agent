@@ -53,6 +53,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 
 - **做题主页面**：内置 Monaco 在线代码编辑器，提交后走「Judge0 判题 → LLM 温暖反馈 → 下一轮」闭环。
 - **导师引导**：渐进式提示 + 误解诊断；辅导 Agent 同时消费编辑轨迹与最终代码，动态给提示。
+- **联网搜索（可选）**：导师配有 `web_search` 工具，被要求「联网搜/查最新版本」或涉及时效性事实时会先搜再答；对接自建搜索 MCP（详见下方「联网搜索」小节），未配置时该工具自动不暴露。
 
 ### 🔥 链路追踪辅导（核心亮点）
 
@@ -200,7 +201,7 @@ code-tutor-agent/
 │       ├── token_usage/   # Token 成本统计 / 预算 / 看板
 │       ├── sandbox/       # 代码沙箱（runner / judge0_client / 结构转换）
 │       ├── leetcode/      # LeetCode 同步 / 题源
-│       ├── mcp/           # MCP 工具与服务
+│       ├── mcp/           # MCP 工具与服务（judge0 server / 自建搜索 MCP 客户端）
 │       ├── store/         # 画像 / session 状态存取
 │       ├── schemas/       # Pydantic State + Request/Response
 │       ├── prompts/       # Prompt 模板
@@ -344,6 +345,10 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 | `LLM_API_KEY` | 是 | — | LLM API 密钥 |
 | `JUDGE0_URL` | 否 | `http://localhost:2358` | Judge0 沙箱地址（设为 `http://judge0:2358` 由 compose 自动注入） |
 | `JUDGE_BACKEND` | 否 | `self` | 判题后端切换：`self`（本地 subprocess）/ `judge0` |
+| `SEARCH_MCP_URL` | 否 | `http://127.0.0.1:8080/mcp` | 搜索 MCP 端点（Streamable HTTP）；配置后导师获得联网搜索工具 |
+| `SEARCH_MCP_TOKEN` | 否 | — | 搜索 MCP 的 Bearer token；未设置则不暴露 `web_search` 工具 |
+| `SEARCH_MCP_TOOL_NAME` | 否 | `web_search` | 要调用的搜索工具名（对接非默认命名的搜索 MCP 时改这里） |
+| `SEARCH_MCP_TIMEOUT_SECONDS` | 否 | `20` | 搜索单次调用超时秒数 |
 | `CORS_ORIGINS` | 否 | `http://localhost:3000,...` | 前端跨域来源 |
 | `VITE_API_BASE` | 否 | `http://localhost:8765` | 前端 API 基础 URL（构建时注入；生产模式设为 `/` 走同源代理） |
 
@@ -399,6 +404,18 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 - **挫败情绪检测**：识别用户放弃 / 急躁信号（`R04_FRUSTRATION_KEYWORDS`），供辅导策略切换（安抚 + 放宽到 L4）。
 
 此外出题侧有独立的题目新颖性评审（`prompts/generate_problem.py` 的 `CRITIC_NOVELTY_SYSTEM`）。
+
+### 联网搜索：自建搜索 MCP（可选，厂商无关）
+
+导师辅导对话可挂一个联网搜索工具 `web_search`，用于查最新版本、时效性资讯或对不确定事实做外部检索。接入是**厂商无关**的：任何以 Streamable HTTP 暴露、带 Bearer 鉴权、并提供兼容搜索工具的 MCP 服务都能用，配置即插即用，无需改代码。
+
+- **按需暴露**：仅当配置了 `SEARCH_MCP_TOKEN` 时才把 `web_search` 注册进导师工具集，否则导师工具集保持原样（`agents/tools.py`）。
+- **传输与鉴权**：走官方 `mcp` SDK 的 Streamable HTTP 客户端（JSON-RPC 2.0 / SSE 帧），Bearer token 由自建 `httpx.AsyncClient` 注入；`GET /healthz` 探活不需 token（`mcp/search_client.py`）。
+- **工具名可配**：默认调 `web_search`；对接其他命名的搜索 MCP（如官方 Tavily 的 `tavily-search`）改 `SEARCH_MCP_TOOL_NAME` 即可。
+- **失败降级**：搜索不可用 / 配额耗尽 / 上游失败时返回带提示的 JSON，引导导师回退到自身知识作答，而非空回复或误报。
+- **明确触发**：系统 prompt 注入搜索使用规则（`api/routers/chat.py` 的 `_SEARCH_HINT`），用户要求「联网搜/查最新版本」或涉及时效性事实时先搜再答，避免凭过时记忆作答。
+
+> 说明：官方原版 Tavily MCP（stdio、`tavily-search`、key 放服务端）与本接入默认「HTTP + Bearer + `web_search`」契约不同，直接对接需套网关或改传输方式，详见 `.env.example` 注释。
 
 ---
 

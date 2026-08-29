@@ -35,6 +35,13 @@ from code_tutor_agent.sandbox.judge0_client import (
     SandboxNotExecuted,
 )
 
+from code_tutor_agent.mcp.search_client import (
+    SearchMCPUnavailable,
+    call_search_tool,
+    search_mcp_configured,
+    search_tool_name,
+)
+
 import logging as _logging
 logger = _logging.getLogger(__name__)
 
@@ -119,6 +126,50 @@ async def judge_check_health() -> str:
 
 
 # ──────────────────────────────────────────────
+#  联网搜索（自建搜索 MCP）
+# ──────────────────────────────────────────────
+
+_SEARCH_DOWN_MSG = (
+    "联网搜索服务当前不可用。请直接基于你已有的知识回答用户的问题，"
+    "并在回复中如实说明本次未能联网检索最新信息。"
+)
+
+
+async def web_search(query: str, max_results: int = 5) -> str:
+    """联网搜索，返回经清洗的网页摘要（标题/URL/内容/评分）的 JSON 字符串。
+
+    用于查询时效性信息（新版本用法、最新库文档、近期资讯）或对不确定事实
+    做外部检索。搜索服务不可用 / 配额耗尽 / 上游失败时，返回带明确提示的
+    JSON，引导导师回退到自身知识作答，而不是空回复。
+    """
+    try:
+        return await call_search_tool(
+            search_tool_name(), {"query": query, "max_results": int(max_results)}
+        )
+    except SearchMCPUnavailable as exc:
+        logger.warning("web_search unavailable: %s", exc)
+        return json.dumps(
+            {"status": "search_unavailable", "error": str(exc), "message": _SEARCH_DOWN_MSG},
+            ensure_ascii=False,
+        )
+
+
+# 仅在配置了 SEARCH_MCP_TOKEN 时才暴露搜索工具；未配置则该工具不进入导师工具集。
+SEARCH_TOOLS = [
+    StructuredTool.from_function(
+        func=web_search,
+        name="web_search",
+        description=(
+            "联网搜索最新信息。用户明确要求联网搜索（「你搜一下」「联网查查」）时"
+            "必须调用；涉及库/框架新版本用法、时效性资讯，或你对某具体事实不确定、"
+            "自身知识可能过时时也应调用。返回若干条清洗后的网页摘要（标题/URL/内容/评分），"
+            "据此作答。不要用于你已确定的算法基础问题。"
+        ),
+    ),
+] if search_mcp_configured() else []
+
+
+# ──────────────────────────────────────────────
 #  导出给 agent 绑定
 # ──────────────────────────────────────────────
 
@@ -139,7 +190,7 @@ AGENT_TOOLS = [
         name="judge_check_health",
         description="检查判题后端(Judge0)是否存活。",
     ),
-]
+] + SEARCH_TOOLS
 
 
 def get_tool(name: str) -> StructuredTool | None:
@@ -242,6 +293,7 @@ async def run_tool_loop(
 #  导师辅导环节工具集
 # ──────────────────────────────────────────────
 
-# 交互式聊天循环用的轻量工具集：仅含本地沙箱判题验证工具（judge_*）。
+# 交互式聊天循环用的轻量工具集：本地沙箱判题验证工具（judge_*）+
+# 联网搜索工具（search_*，仅当配置了 SEARCH_MCP_TOKEN 时非空）。
 # 导师本身就能在回复里直接写代码 / 讲解，无需额外生成工具。
-TUTOR_CHAT_TOOLS = JUDGE_TOOLS
+TUTOR_CHAT_TOOLS = JUDGE_TOOLS + SEARCH_TOOLS

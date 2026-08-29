@@ -50,6 +50,9 @@ select = ["E", "F", "I", "N", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: 真实端到端集成测试（真调 LLM / 沙箱，慢）。日常用 `pytest -m \"not integration\"` 跳过，CI 或需要时再全量跑。",
+]
 
 [dependency-groups]
 dev = [
