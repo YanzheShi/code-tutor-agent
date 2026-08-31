@@ -16,6 +16,7 @@
     "@monaco-editor/react": "^4.7.0",
     "echarts": "^6.1.0",
     "katex": "^0.16.47",
+    "mermaid": "^11.17.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",

@@ -223,7 +223,9 @@ def _translate_to_command(
         topic=topic,
         difficulty=difficulty,
         description=draft.description,
-        description_html=draft.description_html or draft.description,
+        # 注意：无真 HTML 时保持空串，让前端走 Markdown 解析分支；
+        # 不可回退为 draft.description（markdown 塞进 description_html 会导致前端原样裸露）。
+        description_html=draft.description_html,
         starter_code=starter,
         visible_test_cases=visible_tcs,
         constraints=draft.constraints,

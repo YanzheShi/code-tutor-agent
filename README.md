@@ -1,7 +1,7 @@
 # CodeTutor Agent
 
 > AI 编程导师，不是 OJ。
-> 具备"自主出题 → 执行判题 → 渐进辅导 → 轨迹分析 → 长期画像"完整认知循环的 **Agent 级**刷题系统。
+> 具备"自主出题 → 执行判题 → 渐进辅导 → 轨迹分析 → 长期画像"完整认知闭环的刷题系统。
 
 ![Python](https://img.shields.io/badge/Python-3.12+-blue)
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.x-orange)
@@ -16,13 +16,13 @@
 传统 OJ 的逻辑是线性的：`用户提交 → 跑用例 → 对答案 → 结束`。
 CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道能够帮助用户分析在写解题过程中出现的卡壳问题、分析思考过程，给出专家级的指导和提升意见。并记录用户画像。做到一个真正的代码编程导师。
 
-几个真正"Agent 级"的差异点：
+几个真正区别于普通 OJ 的差异点：
 
-- **出题 Agent 自验证闭环**：题是自己出的，参考解是自己写的，测试用例是自己跑的——发现自己参考解跑不过某个用例，回去修题目描述歧义，再跑，全绿才交付。**盲信 LLM 的反面。**
-- **判题 Agent 执行 + 温暖反馈**：用户代码提交后由 Judge0 沙箱跑全量测试用例，再由 LLM 解读结果，给出**温暖、面试导向**的反馈与修复建议；AC 时还会做时空复杂度分析与优化方向提示。verdict 永远以执行引擎客观结果为准，LLM 只负责文案，不臆造失败输出。
-- **🔥 辅导 Agent 渐进提示 + 误解诊断**：不是 "WA at #3"，而是结合**编辑轨迹（edit-trace）**与最终代码，反推用户的思考路径与卡点，按 L0~L4 渐进给提示。
-- **规划 Agent 长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
-- **评审 Agent 旁路守门**：对辅导输出做代码泄露过滤（低提示等级下不展示完整代码）与挫败情绪检测，纯旁路监听，不干预主流程。
+- **出题器自验证闭环**：题是自己出的，参考解是自己写的，测试用例是自己跑的——发现自己参考解跑不过某个用例，回去修题目描述歧义，再跑，全绿才交付。**盲信 LLM 的反面。**
+- **判题节点执行 + 温暖反馈**：用户代码提交后由 Judge0 沙箱跑全量测试用例，再由 LLM 解读结果，给出**温暖、面试导向**的反馈与修复建议；AC 时还会做时空复杂度分析与优化方向提示。verdict 永远以执行引擎客观结果为准，LLM 只负责文案，不臆造失败输出。
+- **🔥 导师对话 Agent 渐进提示 + 误解诊断**（唯一真正带工具循环的组件）：不是 "WA at #3"，而是结合**编辑轨迹（edit-trace）**与最终代码，反推用户的思考路径与卡点，按 L0~L4 渐进给提示。
+- **规划节点（选题器）长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
+- **护栏节点旁路守门**：对导师输出做代码泄露过滤（低提示等级下不展示完整代码）与挫败情绪检测，纯旁路监听，不干预主流程。
 
 ---
 
@@ -37,13 +37,13 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![出题主页面](demo/出题主页面.png) | ![选题](demo/选题.png) |
 
 - **出题主页面**：AI 自主出题 + 自验证闭环（双解 + 示例 → 结构/编译/无思维链泄露校验 → 本地沙箱跑参考解全绿才交付），并展示题面、参考解与测试用例。出题内置防碰撞机制：每次随机二选一注入「场景灵感（F）」或「算法维度（G）」，避免重复产出经典原题。
-- **选题**：规划 Agent 依据用户画像（最弱知识点 / 错误模式）智能选题，而非随机出题。
+- **选题**：规划节点（选题器）依据用户画像（最弱知识点 / 错误模式）智能选题，而非随机出题。
 
 ### 出题子流程
 
 ![出题子流程](demo/出题子流程.png)
 
-> 出题 Agent 的决策树：原创 LLM 生成（双解 + 示例）→ verify 结构 / 编译 / 无思维链泄露 → 本地沙箱跑参考解全绿才交付；未命中则回退 LeetCode 按主题拉题 → 历史未 AC 题 → 静态题库兜底。
+> 出题器（Generator）的决策树：原创 LLM 生成（双解 + 示例）→ verify 结构 / 编译 / 无思维链泄露 → 本地沙箱跑参考解全绿才交付；未命中则回退 LeetCode 按主题拉题 → 历史未 AC 题 → 静态题库兜底。
 
 ### 做题 & 导师辅导
 
@@ -52,7 +52,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![做题主页面](demo/做题主页面.png) | ![导师引导](demo/导师引导.png) |
 
 - **做题主页面**：内置 Monaco 在线代码编辑器，提交后走「Judge0 判题 → LLM 温暖反馈 → 下一轮」闭环。
-- **导师引导**：渐进式提示 + 误解诊断；辅导 Agent 同时消费编辑轨迹与最终代码，动态给提示。
+- **导师引导**：渐进式提示 + 误解诊断；导师对话 Agent 同时消费编辑轨迹与最终代码，动态给提示。
 - **联网搜索（可选）**：导师配有 `web_search` 工具，被要求「联网搜/查最新版本」或涉及时效性事实时会先搜再答；对接自建搜索 MCP（详见下方「联网搜索」小节），未配置时该工具自动不暴露。
 
 ### 🔥 链路追踪辅导（核心亮点）
@@ -61,7 +61,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | --- | --- |
 | ![轨迹分析](demo/轨迹分析.png) | ![导师于轨迹分析同屏](demo/导师于轨迹分析同屏.png) |
 
-- **轨迹分析**：全流程采集用户的**编辑轨迹（edit-trace）**——每一次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨，由 Agent 做轨迹分析（edit-trace analysis / summarize），反推真实思考路径与卡点，把"为什么卡住"变成可观测数据。
+- **轨迹分析**：全流程采集用户的**编辑轨迹（edit-trace）**——每一次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨，由轨迹分析模块做分析（edit-trace analysis / summarize），反推真实思考路径与卡点，把"为什么卡住"变成可观测数据。
 - **导师与轨迹分析同屏**：导师辅导界面与轨迹分析**联动展示**，提示等级（L0~L4）结合轨迹证据与提示依赖度动态推进，而非凭空给，能精准区分"不会用哈希表"还是"知道但写不对 dict"。
 
 ### 用户画像（六维错误模式 + 知识点画像）& 成本中心
@@ -71,7 +71,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![我的画像](demo/我的画像.png) | ![用户画像](demo/用户画像.png) | ![用户画像2](demo/用户画像2.png) | ![成本中心](demo/成本中心.png) |
 
 - **六维错误模式画像**：跨知识点的通病画像，覆盖 **正确性 & 边界 / 数据结构操作 / 复杂度 & 性能 / 算法思维 / 实现质量与鲁棒性 / 自测与调试** 共 6 个维度（`correctness / datastruct / perf / algo / impl / debug`）。由判题失败与轨迹分析双路 feeder 写入，时间衰减 + 叠加聚合，前端以纯 SVG **六维雷达图**呈现。
-- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护熟练度 ELO / 稳定性 / 遗忘衰减 / 错误指纹 / 提交记录，规划 Agent 据此选题。
+- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护熟练度 ELO / 稳定性 / 遗忘衰减 / 错误指纹 / 提交记录，规划节点（选题器）据此选题。
 - **成本中心**：Token 用量与预算看板（调用 `/admin/token` 接口），可逐目的、逐模型、逐会话下钻。
 
 ---
@@ -82,14 +82,14 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 |---|---|---|
 | 语言 | Python 3.12+ | LG 1.x / LC 1.x 锁 3.11+ |
 | 包管理 | uv | 快，pyproject.toml 驱动 |
-| Agent 编排 | LangGraph 1.x StateGraph + checkpointer + store | Loop / 状态持久化 / human-in-the-loop (interrupt) |
+| 流程编排 | LangGraph 1.x StateGraph + checkpointer + store | 状态机 / 状态持久化 / human-in-the-loop (interrupt) |
 | LLM 调用 | langchain-openai + base_url  | OpenAI 兼容口，DeepSeek / 通义 / 自建都能走 |
 | API 层 | FastAPI + uvicorn | /session /submit /chat /admin |
 | 前端 | React 19 + Vite 6 + TypeScript | SPA，Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
 | 判题沙箱 | Judge0（Docker）/ 本地 subprocess 兜底 | 资源隔离 + 用例执行 |
 | 状态持久化 | langgraph-checkpoint-sqlite（会话级 checkpointer） | 单机会话恢复 |
 | 长期记忆 | LG InMemoryStore → 中期 sqlite → 长期 RedisStore | 画像跨会话 |
-| Observability | LangSmith | 多 Agent 没 trace 会疯 |
+| 可观测性 | LangSmith | 多节点链路追踪，便于调试排障 |
 | 数据建模 | Pydantic v2 | LC/LG 原生 |
 
 ---
@@ -98,13 +98,13 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 
 ```mermaid
 flowchart TB
-    PG[出题 Agent<br/>Generator<br/>自验证闭环]
-    PJ[判题 Agent<br/>Judge<br/>Judge0 执行 + LLM 反馈]
-    PT[辅导 Agent<br/>Tutor<br/>渐进提示 + 轨迹分析]
-    PP[规划 Agent<br/>Planner<br/>画像驱动选题]
-    PC[评审 Agent<br/>Critic<br/>旁路守门<br/>代码泄露过滤 + 情绪检测]
+    PG[出题器<br/>Generator<br/>自验证闭环]
+    PJ[判题节点<br/>Judge<br/>Judge0 执行 + LLM 反馈]
+    PT[导师对话 Agent<br/>Tutor<br/>渐进提示 + 轨迹分析]
+    PP[规划节点<br/>Planner<br/>画像驱动选题]
+    PC[护栏节点<br/>Critic<br/>旁路守门<br/>代码泄露过滤 + 情绪检测]
 
-    TR[轨迹分析<br/>edit-trace → Agent 分析<br/>6 维错误模式]
+    TR[轨迹分析<br/>edit-trace → 模块分析<br/>6 维错误模式]
     UPS[共享状态中心<br/>用户画像服务<br/>per-tag 知识点 + 6 维错误模式<br/>checkpointer + store]
 
     PG --> PJ
@@ -123,6 +123,8 @@ flowchart TB
     PP <--> UPS
 ```
 
+> **术语说明**：本系统是一个 LangGraph **状态机**，上图方框均为单一职责的**编排节点**。其中仅「导师对话 Agent」真正使用工具循环（`judge_run_code` / `web_search`）；出题器是带多通道降级的出题流水线；判题节点是「沙箱执行 + LLM 反馈文案」；规划节点是**规则引擎（非 LLM）**；护栏节点是**正则校验 + 路由**。把它们统称为"Agent"会夸大系统的自治程度。
+
 **调用契约（产品态）**：
 
 - 规划 → 可下调出题（下发选题偏好）
@@ -139,7 +141,7 @@ flowchart TB
 | 阶段 | 范围 | 状态 |
 |---|---|---|
 | 核心闭环 | 出题自验证 + 判题（Judge0 执行 + LLM 温暖反馈）+ 辅导 + 评审旁路守门 | ✅ 已实现 |
-| 🔥 链路追踪辅导 | edit-trace 采集 + Agent 轨迹分析 / 复盘 + 导师同屏联动 | ✅ 已实现 |
+| 🔥 链路追踪辅导 | edit-trace 采集 + 轨迹分析 / 复盘 + 导师同屏联动 | ✅ 已实现 |
 | 用户画像 | per-tag 知识点画像（ELO / 稳定 / 遗忘）+ 6 维错误模式画像 + 智能选题 | ✅ 已实现 |
 | 出题防碰撞 | 随机二选一注入场景（F）/ 维度（G），维度数据覆盖 20 个知识点 | ✅ 已实现 |
 | 成本中心 | Token 用量 / 预算看板（按目的 / 模型 / 会话下钻） | ✅ 已实现 |
@@ -182,22 +184,22 @@ code-tutor-agent/
 │       │   └── routers/       # session / chat / run / problems / admin / token
 │       ├── db/            # 数据库模块（用户画像 / 轨迹 / 题目落库）
 │       ├── graph/         # LangGraph StateGraph 定义
-│       ├── nodes/         # Agent node 函数
+│       ├── nodes/         # LangGraph 节点函数（编排步骤）
 │       │   ├── planner.py     # 规划（画像驱动选题）
-│       │   ├── generator.py   # 出题（调用 generation 子 Agent）
+│       │   ├── generator.py   # 出题（调用 generation 出题子系统）
 │       │   ├── agent_judge.py # 判题（Judge0 执行 + LLM 温暖反馈）
 │       │   ├── agent_tutor.py # 辅导路由（非 AC 循环等待重提交）
 │       │   ├── critic.py      # 评审（旁路守门：代码泄露过滤 + 情绪检测）
-│       │   ├── agent_dialog.py # 对话
+│       │   ├── agent_dialog.py # 导师对话 Agent（唯一带工具循环的组件）
 │       │   └── wait_for_submit.py
-│       ├── agents/        # LLM Agent 封装（dialog / judge / problem / tools）
+│       ├── agents/        # LLM 调用封装（dialog 为唯一带工具循环的 Agent；judge / problem 为结构化输出封装）
 │       ├── generation/    # 出题子流程（原创 LLM → 双解+示例 → verify → 跑参考解）
 │       ├── profile/       # 用户画像
 │       │   ├── schema.py      # 知识点画像（per-tag 5 字段）
 │       │   ├── weakness.py    # 6 维错误模式画像（枚举 + 聚合）
 │       │   ├── scoring.py     # ELO / 稳定 / 遗忘 打分纯函数
 │       │   └── edit_trace_analyzer.py  # 轨迹 → 6 维错误模式增量
-│       ├── trace/         # 编辑轨迹采集 / 预处理 / Agent 分析 / 复盘
+│       ├── trace/         # 编辑轨迹采集 / 预处理 / 轨迹分析 / 复盘
 │       ├── token_usage/   # Token 成本统计 / 预算 / 看板
 │       ├── sandbox/       # 代码沙箱（runner / judge0_client / 结构转换）
 │       ├── leetcode/      # LeetCode 同步 / 题源
@@ -213,7 +215,7 @@ code-tutor-agent/
 │       ├── topics.py      # 知识点 / 标签（32 个 Tag）
 │       └── config.py
 ├── frontend/              # React 19 + Vite 6 + TypeScript SPA
-│   └── src/components/    # MainLayout / CodeEditor / AgentChat / AdminPanel(六维雷达) / CostCenter / 轨迹分析
+│   └── src/components/    # MainLayout / CodeEditor / 导师对话面板 / AdminPanel(六维雷达) / CostCenter / 轨迹分析
 ├── tests/
 └── docs/                  # 设计文档（本地评审用，未纳入 git 追踪）
 ```
@@ -380,14 +382,14 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 🔥 链路追踪辅导：edit-trace 即"教学可观测性"
 
-- 辅导 Agent 不只看最终代码，而是消费**全量编辑轨迹（edit-trace）**：每次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨（`POST /session/{sid}/edit-trace`），由 `trace/` 模块做预处理 + Agent 轨迹分析（`/analyze` → `/analysis` → `/analyze/summarize`）。
+- 导师对话 Agent 不只看最终代码，而是消费**全量编辑轨迹（edit-trace）**：每次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨（`POST /session/{sid}/edit-trace`），由 `trace/` 模块做预处理 + 轨迹分析（`/analyze` → `/analysis` → `/analyze/summarize`）。
 - 轨迹分析反推**真实思考路径与卡点**：是"不会用哈希表"还是"知道但写不对 dict"，从行为而非结果判定，避免误判。
 - **同屏联动**：导师辅导界面与轨迹分析并排展示，提示等级（L0~L4）结合轨迹证据与提示依赖度动态推进，而非凭空给。
 - 这是把"为什么教不会"从玄学变成**可观测、可复盘数据**的核心——也是区别于一切 OJ / 答题器的关键能力。
 
 ### 双画像体系：知识点画像 × 错误模式画像
 
-- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护 `prof`（ELO 熟练度 1000~4000）、`stab`（稳定性滑动窗 + 方差）、`forget`（遗忘衰减）、`errors`（错误指纹）、`attempts`（提交记录）。规划 Agent 据此选"最弱 tag"出题。
+- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护 `prof`（ELO 熟练度 1000~4000）、`stab`（稳定性滑动窗 + 方差）、`forget`（遗忘衰减）、`errors`（错误指纹）、`attempts`（提交记录）。规划节点（选题器）据此选"最弱 tag"出题。
 - **6 维错误模式画像（weakness）**：跨知识点的通病，维度为 `correctness / datastruct / perf / algo / impl / debug`。由**判题失败提取** + **轨迹分析**双路 feeder 写入，采用时间衰减 + 叠加聚合（久不犯自然淡出），LLM 输出被约束到固化 slug 防幻觉。前端以纯 SVG **六维雷达图**展示。
 
 ### checkpointer vs store（LG 1.x 两件套别混）
@@ -397,13 +399,13 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 评审约束（旁路守门，非集中式宪法引擎）
 
-评审 Agent 以旁路方式监听辅导输出，不做一票打回，仅落两类硬约束：
+护栏节点以旁路方式监听导师输出，不做一票打回，仅落两类硬约束：
 
 - **代码泄露过滤（post-guard）**：低提示等级（< 4）下若辅导消息包含完整代码块，正则拦截并替换为占位提示，强制苏格拉底式引导，不直接给答案（`critic.py` 的 `R01_CODE_LEAK_PATTERNS` + `prompts/tutor.py` 的 prompt 层约束）。
-- **代写 / 答案泄露拦截**：prompt 层约束辅导 Agent 拒绝代写与直接给答案；关键词命中即拦截（`prompts/tutor.py` 的 `R10_CODE_WRITE_PATTERNS` / `R01_ANSWER_LEAK_PATTERNS`）。
+- **代写 / 答案泄露拦截**：prompt 层约束导师对话 Agent 拒绝代写与直接给答案；关键词命中即拦截（`prompts/tutor.py` 的 `R10_CODE_WRITE_PATTERNS` / `R01_ANSWER_LEAK_PATTERNS`）。
 - **挫败情绪检测**：识别用户放弃 / 急躁信号（`R04_FRUSTRATION_KEYWORDS`），供辅导策略切换（安抚 + 放宽到 L4）。
 
-此外出题侧有独立的题目新颖性评审（`prompts/generate_problem.py` 的 `CRITIC_NOVELTY_SYSTEM`）。
+此外出题侧定义了独立的题目新颖性评审模板（`prompts/generate_problem.py` 的 `CRITIC_NOVELTY_SYSTEM`），但**暂未实现接入**——`novelty_score` 当前仍为硬编码（自出题 7 分 / LeetCode 导入 9 分），R03 新颖度评审未启用，该模板属待清理死代码。
 
 ### 联网搜索：自建搜索 MCP（可选，厂商无关）
 
@@ -476,7 +478,7 @@ schtasks /Create /TN "CodeTutor-CleanupTraces" /SC DAILY /ST 03:00 /F /TR "D:\Co
 详细的炸场功能优先级与设计文档见本地 `docs/` 目录（设计评审用，未纳入 git 追踪）。
 
 > 简历向一句话标题：
-> **CodeTutor-Agent: A Self-Verifying, Long-Term Adaptive Coding Mentor with Multi-Agent Collaboration and Edit-Trace Observability**
+> **CodeTutor: A Self-Verifying, Long-Term Adaptive Coding Mentor with Closed-Loop Tutoring and Edit-Trace Observability**
 
 ---
 
@@ -490,4 +492,4 @@ schtasks /Create /TN "CodeTutor-CleanupTraces" /SC DAILY /ST 03:00 /F /TR "D:\Co
 
 Andre
 
-> ⚠️ 项目处于活跃开发阶段。API / State schema / Agent 拓扑仍可能演进，但核心闭环（出题 → 判题 → 辅导 → 轨迹分析 → 规划出题）已可端到端跑通。
+> ⚠️ 项目处于活跃开发阶段。API / State schema / 节点拓扑仍可能演进，但核心闭环（出题 → 判题 → 辅导 → 轨迹分析 → 规划出题）已可端到端跑通。
