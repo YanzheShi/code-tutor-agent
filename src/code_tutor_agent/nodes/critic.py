@@ -1,12 +1,31 @@
-"""critic_node — 宪法约束独立评审 + flush 当前题 → problem_history。
+"""critic_node — episode 收尾 flush + 路由。**不是**导师输出的守门节点。
+
+真实触发时机（见 graph/graph.py 连线）：
+    1. agent_judge AC（full 提交）→ update_profile_node → critic_node
+    2. wait_for_submit_node 收到 abandon resume（/next-problem）→ critic_node
+  即**一题终结时才跑一次**。做题阶段每轮的导师回复由
+  api/routers/chat.py::_handle_normal_chat_stream 直出并落库，**不经过本节点**。
 
 流程：
-    tutor_node 产出提示草稿 → critic_node
-      1. flush 当前题 → ProblemAttemptRecord → push problem_history
-      2. 宪法评审（R01 / R04）
-      3. 路由：AC / ABANDON → planner_node（下一题），WA → wait_for_submit_node（继续改）
+    1. flush 当前题 → ProblemAttemptRecord → push problem_history
+    2. R01 代码泄露检查（⚠️ 当前无效，见下）
+    3. R04 挫败情绪检测（仅 logger.info，无后续动作）
+    4. 路由：AC → wait_for_submit_node（重新暂停）
+             ABANDON → planner_node（下一题）
+             其他 → wait_for_submit_node（继续改）
 
-评审规则：
+⚠️ 已知缺陷 —— 下方「2. R01 检查」是一段**从未生效过**的死逻辑：
+    - `state.tutor_messages[-1] = ...` 原地改写 pydantic state 不被 LangGraph
+      采纳（只有返回的 update 会应用），故 AC 分支末条仍是原始内容；
+    - WA / ABANDON 分支紧接着把 tutor_messages 整体置空，改写结果一并丢弃；
+    - 只检查 [-1] 最后一条，而本节点跑时泄露那条早已不是末条；
+    - re.sub 只删 ``` 围栏，围栏外的 class Solution / 算法正文照留；
+    - 判据 `hint_level < 4` 读的 hint_level 全仓库从未递增，恒为 0。
+  宪法式后置守卫（constitutional_guard）已随 normal 模式在 commit 9eba969 删除。
+  要恢复「prompt 约束 + post-check」双层防护，闸门须加在 chat.py 的回复通路上，
+  而非此处。详见 README「已知限制」与「评审约束（设计意图 vs 实测现状）」。
+
+评审规则（设计意图，当前均未接通）：
     - R01: 低等级（<4）下不能泄露完整代码
     - R04: 检测用户挫败情绪
 """
@@ -93,7 +112,7 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
     record = _build_record(state, verdict)
     new_history = list(state.problem_history) + [record]
 
-    # ── 2. R01 检查 ──
+    # ── 2. R01 检查（⚠️ 整段为 no-op：下方原地改写不落库，且本节点看不到做题期回复）──
     if state.tutor_messages:
         last_msg = state.tutor_messages[-1]
         hint_level = state.hint_level
@@ -112,7 +131,7 @@ def critic_node(state: SessionState) -> Command[Literal["wait_for_submit_node", 
                     logger.warning("R01: sanitized tutor message (pattern=%s, level=%d)", pattern, hint_level)
                     break
 
-    # ── 3. R04 情绪检测 ──
+    # ── 3. R04 情绪检测（仅记日志，不改变路由/文案；关键词表不含「懒得」等真实表述）──
     user_msgs = [m for m in state.tutor_messages if m.role == "user"]
     if user_msgs:
         last_user = user_msgs[-1].content

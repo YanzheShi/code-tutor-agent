@@ -1,6 +1,17 @@
 """辅导 Agent 的 Prompt 模板（D4）。
 
-三类 prompt：
+⚠️ **本文件当前为整体死代码**：其中每个符号——`TUTOR_SYSTEM_PROMPT`、
+`DIRECTION_ANALYSIS_*`、`MISCONCEPTION_*`、`R01_CODE_LEAK_PATTERNS`、
+`R01_ANSWER_LEAK_PATTERNS`、`R10_CODE_WRITE_PATTERNS`、`EMOTION_SIGNAL_KEYWORDS`
+——在全仓库**零引用**（无任何 import / 无任何一处 format 调用）。
+
+后果：做题阶段导师**实际使用的 system prompt** 是
+`api/routers/chat.py` 的静态 `_TUTOR_SYSTEM` + 当轮 human 的 `_build_state_note`。
+那份 prompt **不含 hint_level 概念**，且其内部的 `_JUDGE_HINT` 明确要求
+「用户要代码时请直接在回复里写出」——与本文件想表达的宪法约束正好相反。
+这正是「用户一句『直接给我答案』就能拿到完整 `class Solution`」的根因之一。
+
+原三类 prompt（均未接入，保留作待实现规格）：
 1. tutor_system — 主 prompt，含宪法 R01/R09/R10 约束
 2. direction_analysis — 判断用户改的方向对不对（LLM）
 3. misconception_diagnosis — 反推用户误解类型（LLM）
@@ -9,6 +20,9 @@
     — 双重防护：prompt 约束防 LLM 主动越界，post-guard 防 jailbreak。
       只靠 prompt → LLM 可能被用户 prompt injection 绕过去。
       只靠 post-guard → LLM 可能已经输出违规内容了，发出去就收不回。
+  ⚠️ 该论述成立，但它所描述的机制**目前只存在于本段文字里**：
+     prompt 层未接入（本文件零引用），post-guard 层随 constitutional_guard
+     在 commit 9eba969 一并删除。现状恢复计划见 README「Roadmap · P0」。
 """
 
 # ──────────────────────────────────────────────
@@ -147,6 +161,12 @@ MISCONCEPTION_USER = """## 题目
 # ──────────────────────────────────────────────
 #  宪法后置守卫规则
 # ──────────────────────────────────────────────
+
+# ⚠️ 以下规则表**从未被任何代码调用**（constitutional_guard 已删除）。
+#    若要接回作 post-check 判据，注意不可单条正则命中即拦：
+#    `return ` / `def ` / `class Solution` 在合法的 L1~L3 提示片段里高频出现，
+#    直接拦会让导师退化成完全不敢给代码。须改为组合判据
+#    （python 围栏 + 顶层 class/def + 有效代码行数阈值）。
 
 # post-guard：如果 LLM 输出包含这些关键词，判定违规
 # 这些是硬规则，防 jailbreak

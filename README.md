@@ -20,9 +20,9 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 
 - **出题器自验证闭环**：题是自己出的，参考解是自己写的，测试用例是自己跑的——发现自己参考解跑不过某个用例，回去修题目描述歧义，再跑，全绿才交付。**盲信 LLM 的反面。**
 - **判题节点执行 + 温暖反馈**：用户代码提交后由 Judge0 沙箱跑全量测试用例，再由 LLM 解读结果，给出**温暖、面试导向**的反馈与修复建议；AC 时还会做时空复杂度分析与优化方向提示。verdict 永远以执行引擎客观结果为准，LLM 只负责文案，不臆造失败输出。
-- **🔥 导师对话 Agent 渐进提示 + 误解诊断**（唯一真正带工具循环的组件）：不是 "WA at #3"，而是结合**编辑轨迹（edit-trace）**与最终代码，反推用户的思考路径与卡点，按 L0~L4 渐进给提示。
+- **🔥 导师对话 Agent 工具循环 + 误解诊断**（唯一真正带工具循环的组件）：不是 "WA at #3"，而是结合**用户编辑器实时草稿**与运行/判题客观结果，定位卡点并给针对性建议。
 - **规划节点（选题器）长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
-- **护栏节点旁路守门**：对导师输出做代码泄露过滤（低提示等级下不展示完整代码）与挫败情绪检测，纯旁路监听，不干预主流程。
+- **护栏节点（Critic）负责换题路由与 episode 收尾**：在一题终结（真实提交 AC / 换题 abandon）时 flush `problem_history`、做挫败情绪检测并路由到下一题。
 
 ---
 
@@ -52,7 +52,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![做题主页面](demo/做题主页面.png) | ![导师引导](demo/导师引导.png) |
 
 - **做题主页面**：内置 Monaco 在线代码编辑器，提交后走「Judge0 判题 → LLM 温暖反馈 → 下一轮」闭环。
-- **导师引导**：渐进式提示 + 误解诊断；导师对话 Agent 同时消费编辑轨迹与最终代码，动态给提示。
+- **导师引导**：基于**题面 + 编辑器实时草稿 + 客观运行/判题结果**定位问题并给建议，可调用 `judge_run_code` 现场验证用户代码。
 - **联网搜索（可选）**：导师配有 `web_search` 工具，被要求「联网搜/查最新版本」或涉及时效性事实时会先搜再答；对接自建搜索 MCP（详见下方「联网搜索」小节），未配置时该工具自动不暴露。
 
 ### 🔥 链路追踪辅导（核心亮点）
@@ -62,7 +62,10 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![轨迹分析](demo/轨迹分析.png) | ![导师于轨迹分析同屏](demo/导师于轨迹分析同屏.png) |
 
 - **轨迹分析**：全流程采集用户的**编辑轨迹（edit-trace）**——每一次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨，由轨迹分析模块做分析（edit-trace analysis / summarize），反推真实思考路径与卡点，把"为什么卡住"变成可观测数据。
-- **导师与轨迹分析同屏**：导师辅导界面与轨迹分析**联动展示**，提示等级（L0~L4）结合轨迹证据与提示依赖度动态推进，而非凭空给，能精准区分"不会用哈希表"还是"知道但写不对 dict"。
+- **导师与轨迹分析同屏**：导师辅导界面与轨迹分析**并排展示**，轨迹证据用于反推卡点、区分"不会用哈希表"还是"知道但写不对 dict"。
+  **轨迹摘要为双落点**（`trace/summarize.py`，过渡时由前端 `POST /analyze/summarize` 触发落库）：
+  ① **可见卡**——主聊天渲染 `summary_text` + `bullets`（`useSession.ts` 的 `trace-summary` 气泡）；
+  ② **跨题上下文注入**——`/next-problem` 时 `session.py` 读 `get_trace_summary()` 追加「## 上一题轨迹分析摘要（仅供导师参考，勿直接复述给用户）」段落进 `context_summary`，经 `build_transcript_with_budget()` 前置为「## 对话摘要」，最终进入下一题**选题对话**的 prompt（`analyze_user_intent`）。
 
 ### 用户画像（六维错误模式 + 知识点画像）& 成本中心
 
@@ -100,9 +103,10 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 flowchart TB
     PG[出题器<br/>Generator<br/>自验证闭环]
     PJ[判题节点<br/>Judge<br/>Judge0 执行 + LLM 反馈]
-    PT[导师对话 Agent<br/>Tutor<br/>渐进提示 + 轨迹分析]
+    PT[导师对话 Agent<br/>Tutor<br/>误解诊断 + 渐进提示<br/>⚠ 等级阶梯未接通]
     PP[规划节点<br/>Planner<br/>画像驱动选题]
-    PC[护栏节点<br/>Critic<br/>旁路守门<br/>代码泄露过滤 + 情绪检测]
+    PC[护栏节点<br/>Critic<br/>episode 收尾 + 换题路由<br/>⚠ 代码泄露过滤不生效]
+    CHAT[辅导聊天通路<br/>api/routers/chat.py<br/>LLM 流式直出<br/>⚠ 不经 StateGraph 无后置校验]
 
     TR[轨迹分析<br/>edit-trace → 模块分析<br/>6 维错误模式]
     UPS[共享状态中心<br/>用户画像服务<br/>per-tag 知识点 + 6 维错误模式<br/>checkpointer + store]
@@ -110,10 +114,11 @@ flowchart TB
     PG --> PJ
     PJ --> PT
     PT --> PP
-    PG -.-> PC
-    PJ -.-> PC
-    PT -.-> PC
+    CHAT --> PT
+    CHAT -.->|回复直接落库 不过 Critic| UPS
+    PJ -.->|仅 AC 后经 update_profile| PC
     PP --> PG
+    PC -.->|换题时路由下一题| PP
     PT --> TR
     PJ --> TR
     TR --> UPS
@@ -123,13 +128,14 @@ flowchart TB
     PP <--> UPS
 ```
 
-> **术语说明**：本系统是一个 LangGraph **状态机**，上图方框均为单一职责的**编排节点**。其中仅「导师对话 Agent」真正使用工具循环（`judge_run_code` / `web_search`）；出题器是带多通道降级的出题流水线；判题节点是「沙箱执行 + LLM 反馈文案」；规划节点是**规则引擎（非 LLM）**；护栏节点是**正则校验 + 路由**。把它们统称为"Agent"会夸大系统的自治程度。
+> **术语说明**：本系统是一个 LangGraph **状态机**，上图方框均为单一职责的**编排节点**。其中仅「导师对话 Agent」真正使用工具循环（`judge_run_code` / `web_search`）；出题器是带多通道降级的出题流水线；判题节点是「沙箱执行 + LLM 反馈文案」；规划节点是**规则引擎（非 LLM）**；
 
 **调用契约（产品态）**：
 
 - 规划 → 可下调出题（下发选题偏好）
 - 判题 ↛ 辅导（只能**交棒**，由 LG 图的 conditional edge 走，不是函数调用）
-- 评审 **无任何主动调用**，纯旁路监听 + 输出过滤
+- **辅导回复 ↛ 评审**：做题阶段的导师回复由 `api/routers/chat.py` 的 `_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，随后 `pause_safe_update` 落库——**全程不进 StateGraph**，因此图上不存在任何能看到这条回复的节点。
+- 评审 **无任何主动调用**，仅在一题终结时被触发（flush 历史 + 情绪检测 + 路由）
 - 辅导 / 判题 结束后产出**画像增量（profile_delta）**与**错误模式增量（edit-trace 分析）**，统一由规划写入画像服务
 
 > 详细设计文档见本地 `docs/` 目录（设计评审用，未纳入 git 追踪）。
@@ -140,8 +146,9 @@ flowchart TB
 
 | 阶段 | 范围 | 状态 |
 |---|---|---|
-| 核心闭环 | 出题自验证 + 判题（Judge0 执行 + LLM 温暖反馈）+ 辅导 + 评审旁路守门 | ✅ 已实现 |
+| 核心闭环 | 出题自验证 + 判题（Judge0 执行 + LLM 温暖反馈）+ 辅导 + 评审收尾路由 | ✅ 已实现 |
 | 🔥 链路追踪辅导 | edit-trace 采集 + 轨迹分析 / 复盘 + 导师同屏联动 | ✅ 已实现 |
+| 导师输出防泄露闸门 | prompt 硬约束 + post-check 双层守门（拦截"直接给我答案"类诉求） | ⚠️ **未生效**，见[已知限制](#已知限制) |
 | 用户画像 | per-tag 知识点画像（ELO / 稳定 / 遗忘）+ 6 维错误模式画像 + 智能选题 | ✅ 已实现 |
 | 出题防碰撞 | 随机二选一注入场景（F）/ 维度（G），维度数据覆盖 20 个知识点 | ✅ 已实现 |
 | 成本中心 | Token 用量 / 预算看板（按目的 / 模型 / 会话下钻） | ✅ 已实现 |
@@ -189,7 +196,7 @@ code-tutor-agent/
 │       │   ├── generator.py   # 出题（调用 generation 出题子系统）
 │       │   ├── agent_judge.py # 判题（Judge0 执行 + LLM 温暖反馈）
 │       │   ├── agent_tutor.py # 辅导路由（非 AC 循环等待重提交）
-│       │   ├── critic.py      # 评审（旁路守门：代码泄露过滤 + 情绪检测）
+│       │   ├── critic.py      # 评审（episode 收尾 flush + 换题路由；
 │       │   ├── agent_dialog.py # 导师对话 Agent（唯一带工具循环的组件）
 │       │   └── wait_for_submit.py
 │       ├── agents/        # LLM 调用封装（dialog 为唯一带工具循环的 Agent；judge / problem 为结构化输出封装）
@@ -366,9 +373,12 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### LangSmith Trace
 
-跑起来后 LangSmith 控制台能看到每条 session 全链路：
-`generator(自修几轮) → judge(执行+反馈) → tutor(提示等级决策) → critic(核准) → trace(轨迹分析)`
-换题（`/next-problem`）时 critic 的 ABANDON 分支清题进入对话，引导文案复用 `problem_history[-1]` 的 `verdict` + `hint_level_reached`（提示深度，≥3 视为掌握不牢）按规则建议换题方向。
+跑起来后 LangSmith 控制台能看到每条 session 的图内链路：
+`generator(自修几轮) → agent_judge(执行+反馈) → update_profile(画像) → critic(收尾/路由) → planner(下一题)`
+
+> ⚠️ **做题阶段的辅导回复不在此链路里**：它由 `api/routers/chat.py` 直接调 LLM，只有 LLM 调用自身产生 trace，**看不到任何图节点**。历史上的 `tutor(提示等级决策)` 节点已随 normal 模式一并删除，故 trace 中不会出现它。
+
+换题（`/next-problem`）时 critic 的 ABANDON 分支清题进入对话，引导文案复用 `problem_history[-1]` 的 `verdict`
 
 ---
 
@@ -382,9 +392,10 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 🔥 链路追踪辅导：edit-trace 即"教学可观测性"
 
-- 导师对话 Agent 不只看最终代码，而是消费**全量编辑轨迹（edit-trace）**：每次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨（`POST /session/{sid}/edit-trace`），由 `trace/` 模块做预处理 + 轨迹分析（`/analyze` → `/analysis` → `/analyze/summarize`）。
+- **全量编辑轨迹入轨 + 独立分析**：每次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨（`POST /session/{sid}/edit-trace`），由 `trace/` 模块做预处理 + 轨迹分析（`/analyze` → `/analysis` → `/analyze/summarize`）。
+- **摘要双落点**：分析结论压缩为 `TraceSummary` 后，一路渲染成主聊天的可见卡，一路在**换题时**追加进 `context_summary`、注入下一题的选题对话 prompt（`session.py` 读 `get_trace_summary` → `build_transcript_with_budget` → `analyze_user_intent`）。另有一路喂给 6 维错误模式画像。
 - 轨迹分析反推**真实思考路径与卡点**：是"不会用哈希表"还是"知道但写不对 dict"，从行为而非结果判定，避免误判。
-- **同屏联动**：导师辅导界面与轨迹分析并排展示，提示等级（L0~L4）结合轨迹证据与提示依赖度动态推进，而非凭空给。
+- **同屏联动**：导师辅导界面与轨迹分析并排展示，轨迹证据用于判定卡点类型。
 - 这是把"为什么教不会"从玄学变成**可观测、可复盘数据**的核心——也是区别于一切 OJ / 答题器的关键能力。
 
 ### 双画像体系：知识点画像 × 错误模式画像
@@ -397,15 +408,6 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 - `checkpointer`（sqlite）：per-session，thread_id 绑，LG 原生恢复 State
 - `store`（InMemoryStore → RedisStore）：cross-session，用户画像，LG `store.list/put/get` 接口统一，后期换 Redis 零改动
 
-### 评审约束（旁路守门，非集中式宪法引擎）
-
-护栏节点以旁路方式监听导师输出，不做一票打回，仅落两类硬约束：
-
-- **代码泄露过滤（post-guard）**：低提示等级（< 4）下若辅导消息包含完整代码块，正则拦截并替换为占位提示，强制苏格拉底式引导，不直接给答案（`critic.py` 的 `R01_CODE_LEAK_PATTERNS` + `prompts/tutor.py` 的 prompt 层约束）。
-- **代写 / 答案泄露拦截**：prompt 层约束导师对话 Agent 拒绝代写与直接给答案；关键词命中即拦截（`prompts/tutor.py` 的 `R10_CODE_WRITE_PATTERNS` / `R01_ANSWER_LEAK_PATTERNS`）。
-- **挫败情绪检测**：识别用户放弃 / 急躁信号（`R04_FRUSTRATION_KEYWORDS`），供辅导策略切换（安抚 + 放宽到 L4）。
-
-此外出题侧定义了独立的题目新颖性评审模板（`prompts/generate_problem.py` 的 `CRITIC_NOVELTY_SYSTEM`），但**暂未实现接入**——`novelty_score` 当前仍为硬编码（自出题 7 分 / LeetCode 导入 9 分），R03 新颖度评审未启用，该模板属待清理死代码。
 
 ### 联网搜索：自建搜索 MCP（可选，厂商无关）
 

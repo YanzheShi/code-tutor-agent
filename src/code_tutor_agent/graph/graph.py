@@ -59,6 +59,10 @@ def _build_graph() -> StateGraph:
     builder.add_node("update_profile_node", update_profile_node)
 
     # agent 模式节点（normal 模式的 judge/tutor/constitutional_guard 已删除）
+    # ⚠️ 删除 constitutional_guard 后，本图已**不存在任何能看到导师回复文本的节点**：
+    #    做题阶段的回复由 api/routers/chat.py::_handle_normal_chat_stream 直出并落库，
+    #    不经过 graph。critic_node 虽保留 R01 代码，但只在一题终结时被触发且改写不落库。
+    #    → 结论：答案泄露无法在本文件的重连线上修，须在 chat.py 的 yield 之前设闸。
     builder.add_node("agent_dialog_node", agent_dialog_node)
     builder.add_node("agent_judge_node", agent_judge_node)
     builder.add_node("agent_tutor_node", agent_tutor_node)

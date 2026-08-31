@@ -193,6 +193,12 @@ _FORMAT_HINT = (
 )
 
 # 工具引导：导师可现场跑代码验证（详见设计文档 §2.3）
+# ⚠️ 已知冲突（未修复）：末段「用户要代码时请直接在回复里写出」的本意是
+#    防止模型去调外部工具干等，但它同时**授权了代写完整解答**，
+#    直接压过 _build_state_note 里"不要直接给出完整代码"那一句。
+#    同类反向指令另有两处：_RESULT_HINT 的"给出修正示例"、
+#    normal_chat_stream 空回复重试分支的"直接用文字和代码块讲解"。
+#    实现 P0 防泄露闸门时，这三处必须先改写或删除，否则 prompt 层自相矛盾。
 _JUDGE_HINT = (
     "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
     "- judge_run_code(source_code, stdin)：运行一段 Python 代码并返回 stdout/stderr/状态。"
@@ -446,6 +452,16 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
           或 graph 停在 END（如 AC 后 phase=reviewing），
           graph.stream(None, config) 从 END 不会重启，返回空。
     统一走直接 LLM 是最可靠的做法。
+
+    ⚠️ 副作用（必须知道）：本函数是做题阶段导师回复的**唯一出口**，而它
+    **完全绕开 StateGraph**——token 边生成边 yield 给前端，reply 生成完之后
+    才 pause_safe_update 落库。因此：
+      - 图上任何节点（含 critic_node 的 R01）都**看不到**这条回复；
+      - 流式已吐到屏幕，此处若加后置校验也**收不回**已发送内容。
+    要落地「prompt 约束 + post-check」防泄露闸门，唯一有效落点就是本函数
+    （在 yield 之前设闸），而非 critic。三档取舍见 README「Roadmap · P0」。
+    AC 之后的复盘讨论（phase == "reviewing"）属合法展示完整解，
+    豁免条件与 /reference 的「AC 才放答案」门禁一致。
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 

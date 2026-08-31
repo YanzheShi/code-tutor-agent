@@ -246,7 +246,12 @@ class SessionState(BaseModel):
     # ── Tutor state ──
     hint_level: int = Field(
         default=0, ge=0, le=4,
-        description="Current hint level (0=no hint yet, 4=almost answer)",
+        description=(
+            "Current hint level (0=no hint yet, 4=almost answer). "
+            "⚠️ INERT: no code ever increments this — writers only reset it to 0, "
+            "so it reads 0 everywhere. Do not use it to judge hint depth "
+            "(critic_node's `hint_level < 4` R01 gate is therefore always true)."
+        ),
     )
     tutor_messages: Annotated[list[Message], last_wins_list] = Field(
         default_factory=list,
