@@ -18,11 +18,11 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 
 几个真正区别于普通 OJ 的差异点：
 
-- **出题器自验证闭环**：题是自己出的，参考解是自己写的，测试用例是自己跑的——发现自己参考解跑不过某个用例，回去修题目描述歧义，再跑，全绿才交付。**盲信 LLM 的反面。**
+- **出题器自验证闭环**：题是自己出的，参考解是自己写的，测试用例是自己跑的——LLM 产出后先过结构 / 编译 / 思维链泄露三重校验，再用参考解在沙箱里把示例跑一遍回填期望输出；任一环不过就**整题作废重采样**，落库后后台异步生成随机 + 边界用例并对拍，跑挂的用例直接丢弃。跑不出可靠用例的题不交付。**盲信 LLM 的反面。**
 - **判题节点执行 + 温暖反馈**：用户代码提交后由 Judge0 沙箱跑全量测试用例，再由 LLM 解读结果，给出**温暖、面试导向**的反馈与修复建议；AC 时还会做时空复杂度分析与优化方向提示。verdict 永远以执行引擎客观结果为准，LLM 只负责文案，不臆造失败输出。
 - **🔥 导师对话 Agent 工具循环 + 误解诊断**（唯一真正带工具循环的组件）：不是 "WA at #3"，而是结合**用户编辑器实时草稿**与运行/判题客观结果，定位卡点并给针对性建议。
 - **规划节点（选题器）长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
-- **护栏节点（Critic）负责换题路由与 episode 收尾**：在一题终结（真实提交 AC / 换题 abandon）时 flush `problem_history`、做挫败情绪检测并路由到下一题。
+- **护栏节点（Critic）负责换题路由与 episode 收尾**：在一题终结（真实提交 AC / 换题 abandon）时 flush `problem_history`、做挫败情绪检测并路由到下一题。⚠️ 这是**纯旁路的收尾节点，不做内容守门**——代码泄露过滤（R01）当前是未生效的死逻辑，挫败情绪检测（R04）只打日志无后续动作，详见[已知限制](#已知限制)。
 
 ---
 
@@ -36,14 +36,14 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | --- | --- |
 | ![出题主页面](demo/出题主页面.png) | ![选题](demo/选题.png) |
 
-- **出题主页面**：AI 自主出题 + 自验证闭环（双解 + 示例 → 结构/编译/无思维链泄露校验 → 本地沙箱跑参考解全绿才交付），并展示题面、参考解与测试用例。出题内置防碰撞机制：每次随机二选一注入「场景灵感（F）」或「算法维度（G）」，避免重复产出经典原题。
+- **出题主页面**：AI 自主出题 + 自验证闭环（双解 + 示例 → 结构 / 编译 / 无思维链泄露三重校验 → 参考解沙箱自跑回填示例期望输出 → 任一环不过则整题重采样），并展示题面、参考解与测试用例。完整测试用例在题目落库后由后台异步生成并对拍，不挡首屏。出题内置防碰撞机制：每次随机二选一注入「场景灵感（F）」或「算法维度（G）」，避免重复产出经典原题。
 - **选题**：规划节点（选题器）依据用户画像（最弱知识点 / 错误模式）智能选题，而非随机出题。
 
 ### 出题子流程
 
 ![出题子流程](demo/出题子流程.png)
 
-> 出题器（Generator）的决策树：原创 LLM 生成（双解 + 示例）→ verify 结构 / 编译 / 无思维链泄露 → 本地沙箱跑参考解全绿才交付；未命中则回退 LeetCode 按主题拉题 → 历史未 AC 题 → 静态题库兜底。
+> 出题器（Generator）的决策树：LeetCode 链接导入（贴了 URL 走这条，失败直接报错、**不替用户换题**）→ 原创 LLM 生成（双解 + 示例）→ verify 结构 / 编译 / 无思维链泄露 → 参考解沙箱自跑回填示例期望输出，任一环不过则重采样重试；全部失败后按 **LeetCode 按主题拉题 → 历史未 AC 题 → 静态题库**三级降级。
 
 ### 做题 & 导师辅导
 
@@ -74,7 +74,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | ![我的画像](demo/我的画像.png) | ![用户画像](demo/用户画像.png) | ![用户画像2](demo/用户画像2.png) | ![成本中心](demo/成本中心.png) |
 
 - **六维错误模式画像**：跨知识点的通病画像，覆盖 **正确性 & 边界 / 数据结构操作 / 复杂度 & 性能 / 算法思维 / 实现质量与鲁棒性 / 自测与调试** 共 6 个维度（`correctness / datastruct / perf / algo / impl / debug`）。由判题失败与轨迹分析双路 feeder 写入，时间衰减 + 叠加聚合，前端以纯 SVG **六维雷达图**呈现。
-- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护熟练度 ELO / 稳定性 / 遗忘衰减 / 错误指纹 / 提交记录，规划节点（选题器）据此选题。
+- **知识点画像（per-tag）**：32 个算法/数据结构 Tag（定义在 `profile/tags.py`：array 6 + 链表 3 + 栈/队列/堆 4 + 树/图 7 + DP 4 + 字符串 3 + 其他 5），每个 Tag 维护熟练度 ELO / 稳定性 / 遗忘衰减 / 错误指纹 / 提交记录，规划节点（选题器）据此选题。
 - **成本中心**：Token 用量与预算看板（调用 `/admin/token` 接口），可逐目的、逐模型、逐会话下钻。
 
 ---
@@ -85,13 +85,13 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 |---|---|---|
 | 语言 | Python 3.12+ | LG 1.x / LC 1.x 锁 3.11+ |
 | 包管理 | uv | 快，pyproject.toml 驱动 |
-| 流程编排 | LangGraph 1.x StateGraph + checkpointer + store | 状态机 / 状态持久化 / human-in-the-loop (interrupt) |
+| 流程编排 | LangGraph 1.x StateGraph（8 个编排节点）+ checkpointer + store | 状态机 / 会话状态持久化 / human-in-the-loop (`interrupt`) |
 | LLM 调用 | langchain-openai + base_url  | OpenAI 兼容口，DeepSeek / 通义 / 自建都能走 |
 | API 层 | FastAPI + uvicorn | /session /submit /chat /admin |
 | 前端 | React 19 + Vite 6 + TypeScript | SPA，Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
 | 判题沙箱 | Judge0（Docker）/ 本地 subprocess 兜底 | 资源隔离 + 用例执行 |
 | 状态持久化 | langgraph-checkpoint-sqlite（会话级 checkpointer） | 单机会话恢复 |
-| 长期记忆 | LG InMemoryStore → 中期 sqlite → 长期 RedisStore | 画像跨会话 |
+| 长期记忆 | LG `InMemoryStore`（当前）→ 规划迁移 RedisStore | 画像跨会话；⚠️ 当前为进程内存，**重启即丢**，见[已知限制](#已知限制) |
 | 可观测性 | LangSmith | 多节点链路追踪，便于调试排障 |
 | 数据建模 | Pydantic v2 | LC/LG 原生 |
 
@@ -129,6 +129,11 @@ flowchart TB
 ```
 
 > **术语说明**：本系统是一个 LangGraph **状态机**，上图方框均为单一职责的**编排节点**。其中仅「导师对话 Agent」真正使用工具循环（`judge_run_code` / `web_search`）；出题器是带多通道降级的出题流水线；判题节点是「沙箱执行 + LLM 反馈文案」；规划节点是**规则引擎（非 LLM）**；
+>
+> ⚠️ **上图是概念角色图，不是代码拓扑**。StateGraph 实际注册 **8 个节点**（`graph/graph.py`），比上图多出的三个是：
+> - `wait_for_submit_node` —— 全图**唯一**调用 `interrupt()` 的地方，做题期间图在此挂起等用户提交；
+> - `update_profile_node` —— v2 画像的单 writer（定义在 `profile/node.py`，不在 `nodes/` 目录下）；
+> - `agent_tutor_node` —— 判题非 AC 后的辅导路由节点（真正的导师回复**不走**它，见下条调用契约）。
 
 **调用契约（产品态）**：
 
@@ -136,7 +141,10 @@ flowchart TB
 - 判题 ↛ 辅导（只能**交棒**，由 LG 图的 conditional edge 走，不是函数调用）
 - **辅导回复 ↛ 评审**：做题阶段的导师回复由 `api/routers/chat.py` 的 `_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，随后 `pause_safe_update` 落库——**全程不进 StateGraph**，因此图上不存在任何能看到这条回复的节点。
 - 评审 **无任何主动调用**，仅在一题终结时被触发（flush 历史 + 情绪检测 + 路由）
-- 辅导 / 判题 结束后产出**画像增量（profile_delta）**与**错误模式增量（edit-trace 分析）**，统一由规划写入画像服务
+- **画像写入是三轨，不是单一入口**，务必分清：
+  - **v2 per-tag 知识点画像**：判题 / 辅导想改画像只能挂 `state["profile_delta"]`，由 `update_profile_node`（`profile/node.py`）作为**唯一 writer** 写 `store`；
+  - **v1 DBProfile**（旧版整体熟练度）：判题节点直接调 `db.update_profile_on_result()` 写 SQLite；
+  - **6 维错误模式画像**：由 `fire_and_forget_error_mode_analysis()` 后台线程异步写，不进主链路。
 
 > 详细设计文档见本地 `docs/` 目录（设计评审用，未纳入 git 追踪）。
 
@@ -159,6 +167,12 @@ flowchart TB
 ---
 
 ## 已知限制
+
+- **用户画像（v2）尚未持久化**：存画像的 `store` 当前是 `InMemoryStore`，**进程重启即丢**。`graph/graph.py::compile_graph()` 只给 `checkpointer` 配了 `SqliteSaver`（会话状态是落盘的）。换 `RedisStore` / SqliteStore 对业务代码零改动（LG 的 `store.list/put/get` 接口统一），但尚未实施。
+
+- **导师输出无后置守门（Critic 的 R01/R04 是死逻辑）**：`nodes/critic.py` 里的代码泄露过滤（R01）**从未生效过**——它原地改写 pydantic state 不被 LangGraph 采纳、只检查最后一条消息、且 `hint_level` 全仓库从未递增恒为 0；挫败情绪检测（R04）只 `logger.info`，无后续动作。历史上的 `constitutional_guard` 节点已随 normal 模式一并删除。
+  - **根因**：做题阶段的导师回复由 `api/routers/chat.py::_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，**全程不进 StateGraph**——因此图内根本不存在任何能看到这条回复的节点，在图里改连线永远修不好。
+  - **正确修法**：闸门必须加在 `chat.py` 的回复通路上（yield 之前），而不是图内节点。
 
 - **暂不支持设计类题目**：判题引擎（本地沙箱 / Judge0）目前按 LeetCode「单方法 `class Solution`」契约执行用例——即实例化 `Solution` 后单次调用其方法比对结果。需要实现**带多个方法的类并按操作序列多次调用**的设计类题目（如 LRU 缓存、最小栈、实现前缀树）无法被正确执行。因此出题侧已主动拦截此类题目：
   - LLM 原创出题：prompt 禁止生成 + 校验器拦截（`generation/verifier.py`、`agents/agent_problem.py`）；
@@ -191,17 +205,18 @@ code-tutor-agent/
 │       │   └── routers/       # session / chat / run / problems / admin / token
 │       ├── db/            # 数据库模块（用户画像 / 轨迹 / 题目落库）
 │       ├── graph/         # LangGraph StateGraph 定义
-│       ├── nodes/         # LangGraph 节点函数（编排步骤）
-│       │   ├── planner.py     # 规划（画像驱动选题）
+│       ├── nodes/         # LangGraph 节点函数（编排步骤，7 个）
+│       │   ├── planner.py     # 规划（画像驱动选题，规则引擎非 LLM）
 │       │   ├── generator.py   # 出题（调用 generation 出题子系统）
 │       │   ├── agent_judge.py # 判题（Judge0 执行 + LLM 温暖反馈）
 │       │   ├── agent_tutor.py # 辅导路由（非 AC 循环等待重提交）
-│       │   ├── critic.py      # 评审（episode 收尾 flush + 换题路由；
+│       │   ├── critic.py      # 评审（episode 收尾 flush + 换题路由；⚠ R01/R04 为死逻辑）
 │       │   ├── agent_dialog.py # 导师对话 Agent（唯一带工具循环的组件）
-│       │   └── wait_for_submit.py
+│       │   └── wait_for_submit.py  # 全图唯一的 interrupt() 挂起点
 │       ├── agents/        # LLM 调用封装（dialog 为唯一带工具循环的 Agent；judge / problem 为结构化输出封装）
 │       ├── generation/    # 出题子流程（原创 LLM → 双解+示例 → verify → 跑参考解）
-│       ├── profile/       # 用户画像
+│       ├── profile/       # 用户画像（含第 8 个图节点 update_profile_node）
+│       │   ├── node.py        # update_profile_node —— v2 画像单 writer
 │       │   ├── schema.py      # 知识点画像（per-tag 5 字段）
 │       │   ├── weakness.py    # 6 维错误模式画像（枚举 + 聚合）
 │       │   ├── scoring.py     # ELO / 稳定 / 遗忘 打分纯函数
@@ -374,7 +389,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 ### LangSmith Trace
 
 跑起来后 LangSmith 控制台能看到每条 session 的图内链路：
-`generator(自修几轮) → agent_judge(执行+反馈) → update_profile(画像) → critic(收尾/路由) → planner(下一题)`
+`generator(重采样重试) → agent_judge(执行+反馈) → update_profile(画像) → critic(收尾/路由) → planner(下一题)`
 
 > ⚠️ **做题阶段的辅导回复不在此链路里**：它由 `api/routers/chat.py` 直接调 LLM，只有 LLM 调用自身产生 trace，**看不到任何图节点**。历史上的 `tutor(提示等级决策)` 节点已随 normal 模式一并删除，故 trace 中不会出现它。
 
@@ -400,13 +415,14 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 双画像体系：知识点画像 × 错误模式画像
 
-- **知识点画像（per-tag）**：35 个算法/数据结构 Tag，每个 Tag 维护 `prof`（ELO 熟练度 1000~4000）、`stab`（稳定性滑动窗 + 方差）、`forget`（遗忘衰减）、`errors`（错误指纹）、`attempts`（提交记录）。规划节点（选题器）据此选"最弱 tag"出题。
+- **知识点画像（per-tag）**：32 个算法/数据结构 Tag（见 `profile/tags.py`），每个 Tag 维护 `prof`（ELO 熟练度 1000~4000）、`stab`（稳定性滑动窗 + 方差）、`forget`（遗忘衰减）、`errors`（错误指纹）、`attempts`（提交记录）。规划节点（选题器）据此选"最弱 tag"出题。
 - **6 维错误模式画像（weakness）**：跨知识点的通病，维度为 `correctness / datastruct / perf / algo / impl / debug`。由**判题失败提取** + **轨迹分析**双路 feeder 写入，采用时间衰减 + 叠加聚合（久不犯自然淡出），LLM 输出被约束到固化 slug 防幻觉。前端以纯 SVG **六维雷达图**展示。
 
 ### checkpointer vs store（LG 1.x 两件套别混）
 
-- `checkpointer`（sqlite）：per-session，thread_id 绑，LG 原生恢复 State
-- `store`（InMemoryStore → RedisStore）：cross-session，用户画像，LG `store.list/put/get` 接口统一，后期换 Redis 零改动
+- **`checkpointer`（`SqliteSaver`，落盘）**：per-session，thread_id 绑，LG 原生恢复 State。这是**会话恢复与 `interrupt()` 挂起的依赖**——做题期间用户可能离开几十分钟，图靠它挂起和恢复，不占常驻资源。
+- **`store`（当前 `InMemoryStore`，不落盘）**：cross-session，存 v2 per-tag 用户画像。⚠️ **进程重启即丢**，画像目前不是持久化的。接口走 LG 统一的 `store.list/put/get`，后期换 `RedisStore` 对业务代码零改动。
+- 两者都在 `graph/graph.py::compile_graph()` 里装配：传了 `conn_string` 就用 `SqliteSaver`，否则退化 `InMemorySaver`（开发便利，生产请传）。
 
 
 ### 联网搜索：自建搜索 MCP（可选，厂商无关）
