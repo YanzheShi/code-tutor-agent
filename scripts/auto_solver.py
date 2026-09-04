@@ -484,8 +484,12 @@ class SolverLLM:
 
 
 def _extract_code(text: str) -> str:
-    """从 LLM 回复中提取 Python 代码（去 markdown 围栏）。"""
-    m = re.search(r"```(?:python)?\s*\n(.*?)```", text, re.DOTALL)
+    """从 LLM 回复中提取 Python 代码（去 markdown 围栏）。
+
+    语言标识大小写不敏感（``(?i:python)``）：agnes 等模型偶发输出
+    ```Python（大写 P），原正则剥不干净会整段带围栏提交 → SyntaxError。
+    """
+    m = re.search(r"```(?i:python)?\s*\n(.*?)```", text, re.DOTALL)
     if m:
         return m.group(1).strip()
     if "class Solution" in text:

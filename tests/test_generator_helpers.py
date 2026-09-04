@@ -86,6 +86,22 @@ class TestBuildSampleTests:
         agent = _agent_with_run([_run_result("Passed", "")])
         assert agent._build_sample_tests(_draft()) is None
 
+    def test_wrong_answer_detail_returns_none(self):
+        """参考解与示例期望矛盾（harness 报 WA，detail 为对拍文案）→ 整题作废。
+
+        回归 pid=130（2026-09-04）：WA 的 detail "expected=4 got=10" 曾被当作期望
+        落库，导致判题必炸。WA/RE/TLE/Judge Error 一律丢弃，绝不写库。
+        """
+        agent = _agent_with_run([_run_result("Wrong Answer", "expected=4 got=10")])
+        assert agent._build_sample_tests(_draft()) is None
+
+    def test_skipped_status_still_accepts_detail(self):
+        """Skipped（期望为空只跑不算）→ detail 是参考解真实输出，可回填。"""
+        agent = _agent_with_run([_run_result("Skipped", "[0,1]")])
+        tcs = agent._build_sample_tests(_draft())
+        assert tcs is not None
+        assert tcs[0]["expected_output"] == "[0,1]"
+
     def test_no_reference_solution_returns_none(self):
         agent = _agent_with_run([_run_result("Passed", "[0,1]")])
         d = _draft(optimal_solution="", brute_solution="")

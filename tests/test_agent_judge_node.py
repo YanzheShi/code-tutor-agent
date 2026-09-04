@@ -3,7 +3,9 @@
 架构变更（agent-only 重构，2026-08-13）：
     agent_judge_node 不再 return Command(goto)，改为返回纯 dict；
     路由由图的条件边 ``agent_judge_router`` 决定：
-      - status=="error"                              → END
+      - status=="error"                              → wait_for_submit_node
+        （2026-09-03 由 END 改来：判题错误可恢复，END 会让会话失去挂起节点，
+          此后 /run 一律 400、/submit 空转，用户只能重开会话——见题目 124 事故）
       - WA/RE/TLE/CE（last_verdict != "AC")          → agent_tutor_node
       - AC 且（运行 is_run 或 scope=sample）         → wait_for_submit_node（不写画像、不 done）
       - AC 且 真实提交（full + 非运行）              → update_profile_node（写 v2 画像 → critic）
@@ -15,8 +17,6 @@
 from __future__ import annotations
 
 from unittest.mock import patch
-
-from langgraph.graph import END as END_REF
 
 from code_tutor_agent.db.models import DBProblem
 from code_tutor_agent.graph.graph import agent_judge_router
@@ -63,7 +63,7 @@ class TestAgentJudgeNode:
     """Verify the LangGraph node's behavior under various conditions."""
 
     def test_no_submission_returns_error(self):
-        """Without submissions, should set status=error (router → END)."""
+        """Without submissions, should set status=error (router → wait_for_submit_node 保活)."""
         state = SessionState(
             session_id="test-empty",
             mode="agent",
@@ -75,7 +75,7 @@ class TestAgentJudgeNode:
         assert "goto" not in result
 
     def test_no_problem_returns_error(self):
-        """Without a problem, should set status=error (router → END)."""
+        """Without a problem, should set status=error (router → wait_for_submit_node 保活)."""
         state = SessionState(
             session_id="test-no-problem",
             mode="agent",
@@ -295,9 +295,11 @@ class TestAgentJudgeRouter:
             submissions=[Submission(index=1, code="x", is_run=is_run)],
         )
 
-    def test_error_status_routes_to_end(self):
+    def test_error_status_routes_to_wait_for_submit(self):
+        # 判题前置失败（如无测试用例）不再终结会话：回 wait_for_submit 保活，
+        # 避免 next=() 死锁导致后续 /run 400、/submit 空转（题目 124 事故）。
         state = self._state(status="error", verdict=None)
-        assert agent_judge_router(state) is END_REF
+        assert agent_judge_router(state) == "wait_for_submit_node"
 
     def test_wa_routes_to_agent_tutor(self):
         state = self._state(verdict="WA")

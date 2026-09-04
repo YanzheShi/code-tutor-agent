@@ -32,25 +32,30 @@ async def run_code(sid: str, body: RunCodeRequest):
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
-    # ── dialog 兜底：旧会话卡在 dialog+problem（graph 停在 END、无挂起中断）──
-    # 先置 agent_dialog_complete 并重跑 graph，真正暂停到 wait_for_submit_node
-    # 的 interrupt，否则下方 resume 空转、运行永远"没反应"（历史缺陷）。
+    # ── 卡死兜底：会话停在终态但题已就绪（无挂起节点）时重新挂到 wait_for_submit ──
+    # 两种历史卡死：
+    #   1) dialog + problem：旧会话 graph 停在 END、无挂起中断，resume 空转；
+    #   2) error + problem：判题前置失败（如无测试用例）把 status 置 error 并走到 END，
+    #      此后 /run 一律 400、/submit 空转返回开场白（题目 124 事故）。
+    # 二者症状相同（next=()），统一处理：清掉错误态并带输入重跑 graph，
+    # 让它真正暂停到 wait_for_submit_node 的 interrupt，再走下方正常判题。
     if (
-        state.values.get("status") == "dialog"
+        state.values.get("status") in ("dialog", "error")
         and state.values.get("problem")
         and "wait_for_submit_node" not in (state.next or ())
     ):
         logger.warning(
-            "run: session %s stuck in dialog with problem — forwarding to wait_for_submit",
-            sid,
+            "run: session %s stuck in status=%s with problem — forwarding to wait_for_submit",
+            sid, state.values.get("status"),
         )
-        graph.update_state(config, {"agent_dialog_complete": True}, as_node="agent_dialog_node")
         # 注意：invoke(None) 在 checkpoint next=()（无挂起任务）时是空操作，
         # 不会重跑 graph——必须带输入重跑。输入来自旧 checkpoint 会覆盖
         # update_state 的值，所以 complete 要直接写进输入，才会从 __start__ 经
         # agent_dialog_node(complete) → planner_node(problem 已加载) → wait_for_submit 暂停。
         _resume_input = SessionState(**state.values).model_dump()
         _resume_input["agent_dialog_complete"] = True
+        _resume_input["status"] = "awaiting_submit"
+        _resume_input["error_message"] = ""
         await asyncio.to_thread(graph.invoke, _resume_input, config)
         state = graph.get_state(config)
 
@@ -62,6 +67,14 @@ async def run_code(sid: str, body: RunCodeRequest):
     problem = state.values.get("problem")
     if not problem:
         raise HTTPException(400, "No problem loaded in this session")
+
+    # 上一次判题失败遗留的错误态（router 已把会话保活回 wait_for_submit）。
+    # 不清会一直挂在 state 上，前端 /state 与后续判断都可能误读；
+    # 用 pause_safe_update 写入，避免在 interrupt 挂起期丢掉挂起中断。
+    if state.values.get("status") == "error":
+        from code_tutor_agent.api.deps import pause_safe_update
+
+        pause_safe_update(graph, config, {"status": "awaiting_submit", "error_message": ""})
 
     def _do_run() -> None:
         # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，

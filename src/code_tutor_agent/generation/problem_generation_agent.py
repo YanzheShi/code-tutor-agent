@@ -49,8 +49,13 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 
-# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃
-_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
+# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃。
+# 注意 WA（detail 为 "expected=… got=…" 对拍文案）也绝不能当期望落库。
+_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error", "Wrong Answer"}
+
+# 参考解自验证 / 对拍时可接受的「真输出」状态白名单：Passed=判过且过；
+# Skipped=期望为空只跑不算（runner 行为），两者 detail 都是参考解真实输出。
+_OK_STATUSES = {"Passed", "Skipped"}
 
 
 def _safe_err_msg(exc: Exception) -> str:
@@ -109,18 +114,31 @@ class ProblemGenerationAgent:
                 # 生成暴力解法
                 draft = self._ensure_dual(draft, sink)
 
-        # ── 通道 B：LLM 生成 + 校验 + 重试（仅未贴 LeetCode 时）──
+        # ── 通道 B：LLM 生成 + 校验 + 落库 + 重试（仅未贴 LeetCode 时）──
+        llm_saved_pid: int | None = None
+        llm_saved_reused = False
         if draft is None and not ctx.lc_url:
             sink.event(GenEvent("progress", "正在调用大模型生成题目…"))
-            # 两层重试：
-            # 外层：LLM 出题结构没问题，但题目自身不能自洽（题解跑不通自身示例）；
+            # 重试源统一收口在外层循环：
+            # 1. 题目自身不能自洽（题解跑不通自身示例）；
+            # 2. 落库撞库（LLM 随机出题偶发与库中已有题 title 撞 UNIQUE，如「重排链表」）——
+            #    丢弃本 draft 换题重采样，绝不整轮失败把会话卡死在 dialog；
             # 内层：LlmGateway.generate_problem 重试一次，针对结构不对（缺字段/题解异常）；
             # 网络问题 langchain 自带重试（默认 2 次）。
             for _attempt in range(ctx.options.max_retries or MAX_RETRIES):
                 draft = self._llm_generate(ctx, sink)
-                if draft and self.verifier.verify(draft)[0]:
+                if not draft or not self.verifier.verify(draft)[0]:
+                    draft = None
+                    continue
+                try:
+                    llm_saved_pid, llm_saved_reused = self.store.save(draft)
                     break
-                draft = None
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "LLM 出题落库冲突（第 %d/%d 次）: %s — 重采样换题",
+                        _attempt + 1, ctx.options.max_retries or MAX_RETRIES, exc,
+                    )
+                    draft = None
 
         # 判断出题的通道
         channel = self._channel_of(draft)
@@ -150,17 +168,22 @@ class ProblemGenerationAgent:
             )
 
         # ── 先落库拿 id，用例后台补（不挡首屏）──
-        try:
-            pid, reused = self.store.save(draft)
-        except Exception as exc:
-            logger.error("持久化失败: %s", exc)
-            return GenerationResult(
-                ok=False,
-                channel=channel,
-                error=f"题目已生成但落库失败: {exc}",
-                draft=draft,
-                fallback_chain=attempted_chain,
-            )
+        # LLM 通道已在生成循环内落库（撞标题会自动换题重采样）；LeetCode 导入与
+        # 降级链产物在此统一落库——这两类落库失败直接报错（URL 通道绝不静默换题）。
+        if llm_saved_pid is not None:
+            pid, reused = llm_saved_pid, llm_saved_reused
+        else:
+            try:
+                pid, reused = self.store.save(draft)
+            except Exception as exc:
+                logger.error("持久化失败: %s", exc)
+                return GenerationResult(
+                    ok=False,
+                    channel=channel,
+                    error=f"题目已生成但落库失败: {exc}",
+                    draft=draft,
+                    fallback_chain=attempted_chain,
+                )
         # 完整测试用例由 API 层在 graph.invoke 返回后统一调度 build_suite，
         # 不在包内自调度（线程内无事件循环会静默跳过，且会与 API 层双跑）。
         sink.event(GenEvent("progress", "✅ 题目已就绪！"))
@@ -332,7 +355,12 @@ class ProblemGenerationAgent:
                 logger.warning("参考解自验证失败: %s 无结果", tc.get("input_args"))
                 return None
             r = results[0]
-            if r.status in _DROP_STATUSES or not (r.detail or ""):
+            # 白名单判定：只收参考解「真算出来」的输出。WA 的 detail 是
+            # "expected=… got=…" 对拍文案（参考解与题面示例期望矛盾，说明参考解
+            # 或示例写错了，整题应作废重采样），RE/TLE/Judge Error 同理——
+            # 绝不能把这类 detail 当期望落库，否则判题必炸（2026-09-04 pid=130
+            # 「星城外卖配送的最大收益」即被污染成 expected=4 got=10）。
+            if r.status not in _OK_STATUSES or not (r.detail or ""):
                 logger.warning("参考解自验证失败: %s on %s", r.status, tc.get("input_args"))
                 return None
             tc["expected_output"] = r.detail

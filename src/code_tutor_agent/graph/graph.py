@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph
 from langgraph.store.memory import InMemoryStore
 
 from code_tutor_agent.nodes.generator import generator_node
@@ -31,13 +31,24 @@ def agent_judge_router(state: SessionState) -> str:
     """路由 agent 判题节点的出口（agent_judge_node 已不再 return Command(goto)）。
 
     规则：
-        status == "error"                                → END（容错，不继续链路）
         last_verdict != "AC"（WA/RE/TLE/CE）            → agent_tutor_node（给重试指导）
         AC 且（运行 is_run 或 sample scope）            → wait_for_submit_node（不写画像、不 done）
         AC 且 真实提交（full + 非运行）                 → update_profile_node（写 v2 画像 → critic）
+        status == "error"（判题前置条件缺失，如无用例）  → wait_for_submit_node（保活，见下）
+
+    ⚠️ error 分支原为 END（2026-09-03 修复）：判题一旦走到 error，graph 直接终止、
+    会话失去挂起节点（next=()），此后 /run 一律 400「当前不可运行」、/submit 的
+    Command(resume) 找不到 interrupt 空转返回开场白——整道题永久判不了，
+    用户只能重开会话（题目 124 事故）。判题错误是**可恢复**的（用户改代码再提交
+    即可重试），不应终结会话：改回 wait_for_submit_node 保持会话可继续，
+    error_message 仍留在 state 里供排查/前端提示。
     """
     if state.status == "error":
-        return END
+        logger.warning(
+            "agent_judge_router → status=error (%s), back to wait_for_submit to keep session alive",
+            state.error_message,
+        )
+        return "wait_for_submit_node"
     verdict = state.last_verdict
     is_run = state.submissions[-1].is_run if state.submissions else False
     if verdict != "AC":

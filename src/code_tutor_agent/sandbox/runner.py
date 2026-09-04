@@ -304,7 +304,9 @@ for idx, tc in enumerate(test_cases):
                 args.append(_val)
         else:
             args.append(_cta_coerce_arg(_raw, _t))
-    expected = tc['expected_output']
+    # 用例缺 expected_output 字段（如用例生成中间态）不应被当成运行时错误：
+    # 按空 expected 处理 → 走下方 Skipped 分支回传实际输出，供生成侧回填权威答案。
+    expected = tc.get('expected_output', "")
     start = time.perf_counter()
     try:
         result = method_fn(*args)

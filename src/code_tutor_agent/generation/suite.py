@@ -25,8 +25,12 @@ from code_tutor_agent.generation.state import GenEvent, ProgressSink
 
 logger = logging.getLogger(__name__)
 
-# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃
-_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error"}
+# 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃。
+# WA（detail 为 "expected=… got=…" 对拍文案）也绝不能当期望落库（pid=130 教训）。
+_DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error", "Wrong Answer"}
+
+# 可接受的「真输出」状态白名单：Passed=判过且过；Skipped=期望为空只跑不算。
+_OK_STATUSES = {"Passed", "Skipped"}
 
 _RANDOM_COUNT = 12
 _BOUNDARY_COUNT = 8
@@ -134,7 +138,7 @@ def _validate_against_reference(
         if not opt_results or not brute_results:
             return None, False
         opt_r, brute_r = opt_results[0], brute_results[0]
-        if opt_r.status in _DROP_STATUSES or brute_r.status in _DROP_STATUSES:
+        if opt_r.status not in _OK_STATUSES or brute_r.status not in _OK_STATUSES:
             return None, False
         opt_actual = (opt_r.detail or "").strip()
         brute_actual = (brute_r.detail or "").strip()
@@ -146,7 +150,7 @@ def _validate_against_reference(
     if not results:
         return None, False
     r = results[0]
-    if r.status in _DROP_STATUSES:
+    if r.status not in _OK_STATUSES:
         return None, False
     actual = r.detail or ""
     if not actual:
@@ -396,6 +400,30 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
     dropped_cross = dropped_random + dropped_boundary + dropped_visible
     full_suite = verified_visible + random_cases + boundary_cases
     visible_final = [tc for tc in full_suite if not tc.get("is_hidden", False)][:4]
+
+    # ── 空结果保护：绝不把已有用例覆盖成空 ──
+    # 三路（随机 / 边界 / 既有可见）全部产出 0 条说明是**生成侧失败**
+    # （如沙箱不支持该题的参数类型、LLM 解析异常），而不是"这题没有用例"。
+    # 此时若照常回写空数组，会抹掉落库时自带的 LeetCode 示例用例，
+    # 使题目退化成 0 用例 → 判题报 "No test cases available" → 会话判题死锁
+    # （题目 124「合并 K 个升序链表」即因此整题判不了）。
+    # 保护：生成侧全空且库里已有可见用例时，保留原样直接返回。
+    if not full_suite:
+        try:
+            existing_visible = list(getattr(full, "visible_test_cases", None) or [])
+        except Exception:  # noqa: BLE001
+            existing_visible = []
+        if existing_visible:
+            logger.warning(
+                "build_suite(%d) produced 0 cases — keeping %d existing visible cases",
+                problem_id, len(existing_visible),
+            )
+            sink.event(GenEvent(
+                "warning",
+                f"⚠️ 额外测试用例生成失败，已保留 {len(existing_visible)} 个示例用例",
+            ))
+            return
+        logger.warning("build_suite(%d) produced 0 cases and no existing cases to keep", problem_id)
 
     try:
         agent.store.update_test_cases(problem_id, full_suite, visible_final)

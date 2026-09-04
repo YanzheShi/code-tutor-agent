@@ -155,13 +155,34 @@ def _cta_tree_to_list(root):
         out.pop()
     return out
 
+def _cta_is_struct_array(type_str: str) -> bool:
+    """判断类型是否为「结构体数组」，如 ``List[Optional[ListNode]]``。
+
+    LeetCode 的「合并 K 个升序链表」等题，参数类型是链表**数组**
+    （``List[Optional[ListNode]]``），入参形如 ``[[1,4,5],[1,3,4],[2,6]]``：
+    每个子数组都要还原成一个独立链表，而不是把整个外层数组当成一个链表。
+
+    判定依据：类型中含 ListNode/TreeNode/Node 且嵌套层数 ≥2（外层 List[...] +
+    内层结构体）。单层 ``Optional[ListNode]``（1 个 ``[``）是单结构体，不算数组。
+    """
+    t = (type_str or "").replace(" ", "")
+    if not any(k in t for k in ("ListNode", "TreeNode", "Node")):
+        return False
+    return t.count("[") >= 2
+
+
 def _cta_coerce_arg(raw, type_str):
     if not type_str:
         return raw
     t = type_str.replace("Optional[", "").rstrip("]")
     if "ListNode" in t:
+        # 链表数组（List[Optional[ListNode]]）：逐个元素各自还原成一条链表
+        if _cta_is_struct_array(type_str) and isinstance(raw, list):
+            return [_cta_ll_from_list(x) for x in raw]
         return _cta_ll_from_list(raw)
     if "TreeNode" in t or "Node" in t:
+        if _cta_is_struct_array(type_str) and isinstance(raw, list):
+            return [_cta_tree_from_list(x) for x in raw]
         return _cta_tree_from_list(raw)
     return raw
 

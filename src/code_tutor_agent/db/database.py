@@ -6,6 +6,10 @@ import logging
 import os
 import re
 import sqlite3
+import sys
+import threading
+import time
+import traceback
 from typing import Any, Optional
 
 from .models import DBProblem, DBSubmission
@@ -13,16 +17,61 @@ from .models import DBProblem, DBSubmission
 logger = logging.getLogger(__name__)
 
 
-# 数据库文件位于项目根目录 /data/db/
-DB_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "db", "code_tutor.db")
+# 数据库文件位于项目根目录 /data/db/；可用环境变量 CTA_DB_PATH 覆盖
+# （用途：回归/CI 时指向临时副本库，实现与开发数据隔离；默认行为不变）。
+DB_PATH = os.environ.get(
+    "CTA_DB_PATH",
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "data", "db", "code_tutor.db"),
+)
+
+
+# WAL 是**数据库级持久属性**（写入 db 文件头），设一次即永久生效，无需每次连接重设。
+# 旧实现每次连接都跑一遍该 pragma，属无谓开销（注意：它**不是** "database is locked"
+# 的根因——实测库已是 WAL 时该 pragma 是 no-op 不会报错，2026-09-04 探针验证）。
+# 真正的锁来自并发写事务（后台用例生成 / token sink / stale session cleanup 与请求
+# 线程抢同一个库文件），表现为判题节点整节点崩溃 → /submit 500 → 会话失去挂起节点
+# → 此后 /run 一律 400。
+_WAL_READY = False
+# 写-写争用排队上限：够覆盖后台用例生成这类短事务，又不至于像 30s 那样把测试拖死。
+_BUSY_TIMEOUT_MS = 10_000
 
 
 def _get_conn() -> sqlite3.Connection:
-    """Create a new SQLite connection with WAL mode and Row factory."""
-    conn = sqlite3.connect(DB_PATH)
+    """Create a new SQLite connection（WAL 每进程只设一次；锁争用按 busy_timeout 排队）。"""
+    global _WAL_READY
+    conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+    if not _WAL_READY:
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            _WAL_READY = True
+        except sqlite3.OperationalError as exc:
+            # 其他连接正忙：WAL 通常早已生效（持久属性），本次连接直接跳过
+            logger.debug("journal_mode=WAL skipped (db busy): %s", exc)
     return conn
+
+
+# 长事务会独占写锁，是 "database is locked" 的头号嫌疑（判题链路上锁过久会让
+# 其他线程排队到 busy_timeout 耗尽）。超过阈值就打栈，便于定位是谁在事务里做慢活。
+_SLOW_TXN_SEC = 2.0
+
+
+def _frame_line(frame, limit: int = 5) -> str:
+    """把调用栈压成单行（多行栈会被日志管线截断，实测只剩第一行，定位不到人）。"""
+    frames = traceback.extract_stack(frame)[-limit:]
+    return " << ".join(f"{f.name}@{os.path.basename(f.filename)}:{f.lineno}" for f in frames)
+
+
+def _all_thread_stacks() -> str:
+    """快照全部线程栈——被阻塞的是本线程，持锁的真凶往往在别的线程里。"""
+    parts = []
+    for t in threading.enumerate():
+        frame = sys._current_frames().get(t.ident)
+        if frame is None:
+            continue
+        parts.append(f"[{t.name}] {_frame_line(frame, limit=4)}")
+    return " // ".join(parts)
 
 
 def _with_conn(fn):
@@ -31,6 +80,7 @@ def _with_conn(fn):
     Ensures the connection is always closed, even on error.
     """
     conn = _get_conn()
+    started = time.perf_counter()
     try:
         result = fn(conn.cursor())
         conn.commit()
@@ -39,6 +89,15 @@ def _with_conn(fn):
         conn.rollback()
         raise
     finally:
+        elapsed = time.perf_counter() - started
+        if elapsed >= _SLOW_TXN_SEC:
+            frame = sys._current_frames().get(threading.current_thread().ident)
+            logger.warning(
+                "slow DB transaction %.2fs | self: %s | threads: %s",
+                elapsed,
+                _frame_line(frame) if frame else "n/a",
+                _all_thread_stacks(),
+            )
         conn.close()
 
 

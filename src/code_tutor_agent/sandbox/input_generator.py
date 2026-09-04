@@ -406,6 +406,34 @@ def _is_list_of_ints(type_str: str) -> bool:
     return re.match(r"^List\[int\]$", type_str.strip()) is not None
 
 
+def _is_struct_array_type(type_str: str) -> bool:
+    """是否为「结构体数组」，如 ``List[Optional[ListNode]]`` / ``List[List[int]]``。
+
+    典型场景：合并 K 个升序链表。题面要求**每条子链表各自升序**，
+    随机生成的外层数组里每个子数组都要单独排序，而不是对外层排序。
+    """
+    t = (type_str or "").replace(" ", "")
+    if t.count("[") < 2:
+        return False
+    return ("ListNode" in t or "TreeNode" in t or "Node" in t
+            or re.match(r"^List\[List\[", t) is not None)
+
+
+def _sort_struct_array(val) -> list:
+    """对结构体数组逐个子数组升序排序（子数组含 None 等不可比元素时原样返回）。"""
+    if not isinstance(val, list):
+        return val
+    out = []
+    for sub in val:
+        if isinstance(sub, list) and all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) for x in sub
+        ):
+            out.append(sorted(sub))
+        else:
+            out.append(sub)
+    return out
+
+
 def sort_sorted_inputs(func_sig: str, input_args: list[str]) -> list[str]:
     """「有序」类题目：对 List[int] 输入的「真实元素」升序排序，保留补零。
 
@@ -435,6 +463,12 @@ def sort_sorted_inputs(func_sig: str, input_args: list[str]) -> list[str]:
     for i, (name, t) in enumerate(params):
         if _is_list_of_ints(t) and i not in used and isinstance(values[i], list):
             values[i] = sorted(values[i])
+    # 结构体数组（如 List[Optional[ListNode]]，合并 K 个升序链表）：
+    # 题面要求每条子链表各自升序，逐个子数组排序；对外层数组排序是错的
+    # （会把链表长度当排序键）。
+    for i, (name, t) in enumerate(params):
+        if _is_struct_array_type(t) and isinstance(values[i], list):
+            values[i] = _sort_struct_array(values[i])
     # 还原成与 input_args 同格式（同 _to_arg_str）的字符串，保持列表带空格分隔
     return [json.dumps(v, ensure_ascii=False) if isinstance(v, list) else str(v)
             for v in values]
@@ -498,6 +532,14 @@ def sanitize_test_case(func_sig: str, tc: dict, sort_inputs: bool = False) -> di
     values: list = []
     rewrote = False  # 是否有元素剥掉了变量名前缀（需回写 input_args）
     for a in raw_args:
+        # 契约上 input_args 元素是 JSON 字面量字符串，但 LLM 生成边界用例时
+        # 偶发直接吐 Python 对象（如嵌套 list ``[[1,2],[3]]``）。此时
+        # ``_strip_kw_prefix`` 会对 list 调 .strip() → AttributeError，
+        # 整个边界用例分支被一次异常带崩（题目 124 即因此丢光边界用例）。
+        # 统一先归一化为 JSON 字符串再解析。
+        if not isinstance(a, str):
+            a = json.dumps(a, ensure_ascii=False)
+            rewrote = True
         try:
             values.append(ast.literal_eval(a))
             continue

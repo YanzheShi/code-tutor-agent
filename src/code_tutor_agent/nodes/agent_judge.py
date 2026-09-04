@@ -94,6 +94,25 @@ def _resolve_inputs(state: SessionState) -> "dict | tuple":
             test_cases = [tc for tc in problem_dict.test_cases if not tc.get("is_hidden", False)]
     else:
         test_cases = problem_dict.test_cases
+
+    # ── 最后兜底：回退会话 state 里的可见用例 ──
+    # DB 里的用例可能为空（后台 build_suite 失败 / 复用旧题 / 老数据），
+    # 而出题时 ProblemMeta.visible_test_cases 带着 LeetCode 示例（含 expected_output）。
+    # 旧实现此时直接报 "No test cases available" → status=error → graph 走到 END，
+    # 会话失去挂起节点（next=()），此后 /run 一律 400、/submit 空转返回开场白，
+    # 整道题彻底判不了（题目 124 事故）。宁可用示例用例判，也不要判不了。
+    if not test_cases:
+        fallback = list(getattr(state.problem, "visible_test_cases", None) or [])
+        if fallback:
+            logger.warning(
+                "Problem %d has no DB test cases — falling back to %d state visible cases",
+                problem_id, len(fallback),
+            )
+            test_cases = [tc if isinstance(tc, dict) else dict(tc) for tc in fallback]
+            if state.judge_scope != "sample":
+                # 全量判题无 hidden 用例可跑时，退化为只判可见示例（保底可用）
+                logger.warning("Problem %d: full-scope judge downgraded to visible cases", problem_id)
+
     if not test_cases:
         logger.warning("No test cases for problem %d", problem_id)
         return {"status": "error", "error_message": "No test cases available"}
@@ -299,7 +318,16 @@ def agent_judge_node(state: SessionState) -> dict:
     logger.info("▶ agent_judge_node() — cycle=%d scope=%s", state.judge_cycle + 1, state.judge_scope)
 
     # ── 校验输入 + 加载 problem/test_cases（任一前置不满足返回错误 update）──
-    resolved = _resolve_inputs(state)
+    try:
+        resolved = _resolve_inputs(state)
+    except Exception as exc:  # noqa: BLE001
+        # 基础设施抖动（典型：SQLite 并发写锁导致 get_problem_by_id 抛错）不应击穿节点。
+        # 抛异常会让 /submit 直接 500、状态不落盘、会话失去挂起节点，
+        # 此后 /run 一律 400「当前不可运行」——整道题永久判不了（2026-09-04 回归实测）。
+        # 返回 status=error 由 agent_judge_router 路由到 wait_for_submit_node 保活，
+        # 用户改代码再提交即可重试。
+        logger.exception("agent_judge_node — 前置加载失败，会话保活: %s", exc)
+        return {"status": "error", "error_message": f"判题前置加载失败：{exc}"}
     if isinstance(resolved, dict):
         return resolved
     code, is_run, problem_dict, test_cases = resolved
