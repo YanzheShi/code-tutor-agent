@@ -15,6 +15,8 @@ from __future__ import annotations
 import logging
 import re
 
+from code_tutor_agent.guards.design_guard import is_design_style_code
+
 logger = logging.getLogger(__name__)
 
 # CoT 泄漏关键词：拦截真正的思维链痕迹，避免误伤正常描述用语
@@ -50,6 +52,8 @@ class CodeVerifier:
         starter = (draft.starter_code or "").strip()
         if not starter:
             issues.append("starter_code 为空")
+        elif is_design_style_code(starter):
+            issues.append("starter_code 是设计类模板（主类不是 Solution），暂不支持设计类题目")
         elif "class Solution" not in starter or "def " not in starter:
             issues.append("starter_code 缺少 class Solution / def")
         if not (draft.function_signature or "").strip():
@@ -57,6 +61,8 @@ class CodeVerifier:
         # 仅原创通道强制要求参考解（导入题参考解由后台补，失败不阻断出题）
         if not draft.from_leetcode and not (draft.optimal_solution or "").strip():
             issues.append("optimal_solution 为空")
+        elif (draft.optimal_solution or "").strip() and is_design_style_code(draft.optimal_solution):
+            issues.append("optimal_solution 是设计类代码（主类不是 Solution），暂不支持设计类题目")
 
     # ── 2) 编译 ──
     def _check_compiles(self, draft, issues: list[str]) -> None:

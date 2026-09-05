@@ -32,6 +32,7 @@ from typing import Optional
 from langchain_core.prompts import ChatPromptTemplate
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.guards.design_guard import extract_main_classes, is_design_style_code
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.prompts.generate_problem import (
     GENERATE_PROBLEM_SYSTEM,
@@ -162,6 +163,20 @@ def verify_problem(problem_dict: dict) -> bool:
         return False
     if _is_stub_solution(optimal):
         logger.warning("optimal_solution is a stub (no real logic) — rejecting")
+        return False
+
+    # ── 设计类题目围栏：LLM 忽略 prompt 约束出了设计题 → 结构级硬拒绝 ──
+    # 判题引擎只支持 class Solution 单方法函数题；设计题模板主类（如 LRUCache）
+    # 不是 Solution，出不了可用的判题驱动器（guards/design_guard.py）。
+    if is_design_style_code(optimal):
+        mains = extract_main_classes(optimal)
+        logger.warning(
+            "optimal_solution is design-style (classes=%s, no Solution) — rejecting", mains
+        )
+        return False
+    _raw_sc = problem_dict.get("starter_code", "") or ""
+    if _raw_sc and is_design_style_code(_raw_sc):
+        logger.warning("starter_code is design-style (template class is not Solution) — rejecting")
         return False
     brute = _extract_code(problem_dict.get("brute_solution", ""))
     problem_dict["brute_solution"] = brute

@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 
+from code_tutor_agent.guards.design_guard import DESIGN_REJECT_SUFFIX, is_design_style_code
+
 # 配置日志记录
 logging.basicConfig(
     level=logging.INFO,
@@ -243,6 +245,17 @@ def fetch_problem(slug: str, domain: str = "leetcode.cn") -> LeetCodeProblem:
         if s.get("langSlug") in ("python", "python3"):
             starter_code = s.get("code", "")
             break
+
+    # ── 设计类题目围栏：模板主类不是 Solution（如 class LRUCache）→ 直接拒绝 ──
+    # 判题引擎只支持单方法函数题（class Solution 风格，一次调用即判定）；
+    # 设计题需要「实例化 + 操作序列回放」驱动器，暂不支持（guards/design_guard.py）。
+    if starter_code and is_design_style_code(starter_code):
+        logger.warning(
+            f"Problem '{slug}' is a design-style problem (template class is not Solution) — rejected"
+        )
+        raise ValueError(
+            f"LeetCode 题目「{slug}」是设计类题目（模板主类不是 Solution）。{DESIGN_REJECT_SUFFIX}"
+        )
 
     logger.info(f"Successfully fetched and parsed '{slug}'.")
 

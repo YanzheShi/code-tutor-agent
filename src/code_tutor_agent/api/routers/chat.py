@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.guards.design_guard import mentions_design_topic
 from code_tutor_agent.mcp.search_client import search_mcp_configured
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.state import Message
@@ -368,7 +369,12 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
         # is_ready=False（被当成"初期需推荐方向"），使 next-problem 切换后无法触发出题、
         # 整个连续做题链路永久卡在 dialog 态。这里用显式关键词做确定性补强：
         # 命中"要求出题/交AI决定"信号且 LLM 未判 ready 时，强制推进到出题。
-        if not intent.is_ready and (
+        # ⚠️ 设计类围栏例外：用户消息/话题命中设计类关键词时不做 ready 强推，
+        #    否则会覆盖 analyze_user_intent 的硬守护，把设计题请求送进出题链。
+        _design_blocked = mentions_design_topic(message) or mentions_design_topic(
+            intent.topic or ""
+        )
+        if not intent.is_ready and not _design_blocked and (
             _explicit_generate_signals(message) or _explicit_random_signals(message)
         ):
             intent.is_ready = True

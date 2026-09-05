@@ -19,6 +19,10 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.guards.design_guard import (
+    design_dialog_refusal,
+    mentions_design_topic,
+)
 from code_tutor_agent.schemas.state import Message
 
 logger = logging.getLogger(__name__)
@@ -108,6 +112,12 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 - 只要用户消息里出现 LeetCode 链接（leetcode.com 或 leetcode.cn 的 /problems/xxx），即视为用户想做这道具体题。
 - 不要自己猜测题号或标题，也不要追问"先讲思路还是先给描述"——直接给出友好的确认回复即可，后端会自动识别链接并导入该题。
 
+## 设计类题目拦截（硬约束）
+- 系统判题引擎只支持「单方法函数题」（class Solution 模板、一次调用返回结果即判定），**不支持设计类题目**。
+- 用户想做设计类题目（如：LRU 缓存、LFU 缓存、最小栈、用栈实现队列 / 用队列实现栈、前缀树 Trie、设计哈希集合 / 映射、快照数组、设计推特等「需要实现自定义类并按操作序列调用」的题）时：
+  * 友好说明系统暂不支持设计类题目的判题，**不要**标记 is_ready=true，也不要把 topic 设成设计类知识点；
+  * 给出一个同知识点的「应用型替代题」建议（例：想练 LRU / 哈希 → 建议哈希查找 / 统计类单方法题；想练栈 → 建议「有效的括号」这类栈应用题），引导用户换方向。
+
 ## 输出 JSON
 ```json
 {{
@@ -142,6 +152,12 @@ CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了�
 - topic 没明确 → 追问具体方向
 - topic 明确了但 difficulty 没问 → 追问难度
 - 都明确了 → 告诉用户"好的，我来为你准备一道..."
+
+## 设计类题目拦截（硬约束）
+- 系统判题引擎只支持「单方法函数题」（class Solution 模板、一次调用返回结果即判定），**不支持设计类题目**。
+- 用户想做设计类题目（如：LRU 缓存、最小栈、用栈实现队列、前缀树 Trie、设计哈希集合等「需要实现自定义类并按操作序列调用」的题）时：
+  * 友好说明系统暂不支持设计类题目的判题，不要说"准备好了"；
+  * 给出同知识点的「应用型替代题」建议（例：想练栈 → 「有效的括号」这类栈应用题），引导用户换方向。
 
 回复控制在 200 字以内。不要输出 JSON，只输出自然语言。"""
 
@@ -481,18 +497,37 @@ async def analyze_user_intent(
     except Exception as exc:
         # get_llm 失败（配置/网络）→ 直接走兜底，避免工具循环也崩
         logger.warning("get_llm failed, using fallback: %s", exc)
-        return _fallback_parse_intent(transcript, profile_summary)
-
-    # ── 结构化意图判定（LeetCode 已在上面短链返回，此处只处理非 LeetCode 意图）──
-    try:
-        structured_llm = llm.with_structured_output(DialogIntent)
-        intent = structured_llm.invoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt),
-        ])
-    except Exception as exc:
-        logger.error("LLM structured output failed, fallback: %s", exc)
         intent = _fallback_parse_intent(transcript, profile_summary)
+    else:
+        # ── 结构化意图判定（LeetCode 已在上面短链返回，此处只处理非 LeetCode 意图）──
+        try:
+            structured_llm = llm.with_structured_output(DialogIntent)
+            intent = structured_llm.invoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ])
+        except Exception as exc:
+            logger.error("LLM structured output failed, fallback: %s", exc)
+            intent = _fallback_parse_intent(transcript, profile_summary)
+
+    # ── 硬守护：设计类题目拦截（prompt 约束被无视时的关键词兜底）──
+    # 必须覆盖 LLM 成功 / 失败两条路径，命中即强制 is_ready=False，
+    # 绝不把设计类话题送进出题链。
+    _last_user_text = ""
+    for m in reversed(history):
+        _d = _to_msg_dict(m)
+        if _d.get("role") == "user":
+            _last_user_text = _d.get("content", "") or ""
+            break
+    if mentions_design_topic(_last_user_text) or mentions_design_topic(intent.topic or ""):
+        logger.info(
+            "design-topic guard triggered (user=%r topic=%r) — forcing is_ready=False",
+            _last_user_text[:60], intent.topic,
+        )
+        intent.is_ready = False
+        intent.is_random = False
+        intent.next_message = design_dialog_refusal(intent.topic or "")
+        return intent
 
     logger.info("intent → topic=%s diff=%s ready=%s source=%s",
                 intent.topic or "?", intent.difficulty or "?", intent.is_ready, intent.source)

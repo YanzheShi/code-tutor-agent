@@ -246,6 +246,11 @@ class ProblemGenerationAgent:
             return self.leetcode.fetch(slug), None
         except Exception as exc:
             logger.warning("LeetCode fetch 失败 %s: %s", slug, exc)
+            msg = str(exc)
+            # 设计类围栏的拒绝消息已是面向用户的完整话术（guards/design_guard.py），
+            # 直接透传，不再截断、不拼「网络异常/付费题」的通用尾巴误导用户
+            if "设计类题目" in msg:
+                return None, msg
             return None, (
                 f"无法获取 LeetCode 题目（{_safe_err_msg(exc)}），"
                 "可能网络异常、题目不存在或为付费题"
