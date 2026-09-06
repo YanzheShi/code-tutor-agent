@@ -112,17 +112,22 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 - 只要用户消息里出现 LeetCode 链接（leetcode.com 或 leetcode.cn 的 /problems/xxx），即视为用户想做这道具体题。
 - 不要自己猜测题号或标题，也不要追问"先讲思路还是先给描述"——直接给出友好的确认回复即可，后端会自动识别链接并导入该题。
 
-## 设计类题目拦截（硬约束）
-- 系统判题引擎只支持「单方法函数题」（class Solution 模板、一次调用返回结果即判定），**不支持设计类题目**。
-- 「设计类题目」的准确定义：**需要实现自定义类、并按操作序列多次调用**的题，主类不是 Solution。典型例子：LRU 缓存、LFU 缓存、最小栈 / 最大栈、用栈实现队列 / 用队列实现栈、前缀树 Trie、设计哈希集合 / 映射、设计推特、快照数组等。
-- ⚠️ 重要：**栈 / 队列 / 堆 / 哈希表 / 链表 / 树 等数据结构主题本身是允许的**，它们既有设计题也有应用题。只有当用户**明确要求做上面那类「实现自定义类 + 操作序列调用」的题**时，才判为设计类并拒绝；否则必须放行，并把该知识点转成「一次调用就能判分」的应用题，例如：
-  * 队列 → 「滑动窗口最大值」「设计循环队列之外的应用题」等（注意：「用栈实现队列 / 用队列实现栈」本身属设计题，不要出）；
-  * 栈 → 「有效的括号」「每日温度（单调栈）」；
-  * 堆 / 优先队列 → 「数组中的第 K 个最大元素」「合并 K 个升序链表」；
-  * 哈希表 → 「两数之和」「字母异位词分组」。
-- 用户确实想做设计类题目（命中上述明确设计意图）时：
-  * 友好说明系统暂不支持设计类题目的判题，**不要**标记 is_ready=true，也不要把 topic 设成设计类知识点；
-  * 给出一个同知识点的「应用型替代题」建议（例：想练 LRU / 哈希 → 建议哈希查找 / 统计类单方法题；想练栈 → 建议「有效的括号」这类栈应用题），引导用户换方向。
+## 题目形态约定（对用户透明，严禁主动提及）
+- 系统的题目统一是「单方法函数题」（class Solution 模板）。对栈/队列/堆/哈希表等主题，
+  直接按其经典应用题方向出题即可，正常 is_ready=true：
+  队列→滑动窗口最大值、栈→有效的括号/每日温度、堆→第 K 大元素、哈希表→两数之和/字母异位词分组。
+- ⛔ **不要向用户提及任何「系统限制」「不支持xx类题目」之类的预告**——用户只是想练某个
+  主题时，正常确认并出题，一个字都不要提限制。
+- 仅当用户**明确要求**「实现自定义类 + 按操作序列调用」的题（如 LRU 缓存、最小栈、
+  用栈实现队列）时，才说明这类题暂不支持，并给一个同主题应用题替代建议。
+
+## ⛔ 一致性铁律（违反即最严重错误）
+- topic 和 difficulty 都确定时，**必须** is_ready=true 并立刻开始出题。
+- **绝对禁止**：next_message 里说"马上出题/稍等/正在准备 🚀"，却把 is_ready 填成 false——
+  这会让系统既不出题也不追问，用户永远卡住。要承诺出题，就必须 is_ready=true。
+- 对栈/队列/堆/哈希表等主题的普通应用题请求（如"请出一道中等难度的队列题"）：
+  它们是允许的主题，应直接 is_ready=true 转成应用题（如队列→滑动窗口最大值），
+  而不是套用设计类拒绝流程。
 
 ## 输出 JSON
 ```json
@@ -159,11 +164,9 @@ CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了�
 - topic 明确了但 difficulty 没问 → 追问难度
 - 都明确了 → 告诉用户"好的，我来为你准备一道..."
 
-## 设计类题目拦截（硬约束）
-- 系统判题引擎只支持「单方法函数题」（class Solution 模板、一次调用返回结果即判定），**不支持设计类题目**。
-- 「设计类题目」= 需要实现自定义类并按操作序列多次调用的题（如：LRU 缓存、最小栈、用栈实现队列、前缀树 Trie、设计哈希集合等，主类不是 Solution）。
-- ⚠️ 重要：栈 / 队列 / 堆 / 哈希表 / 链表 / 树 等**数据结构主题本身是允许的**，既含设计题也含应用题。只有用户明确要求做上面那类「实现自定义类 + 操作序列」的题才拒绝；否则直接放行并转成应用题（队列→滑动窗口最大值、栈→有效的括号、堆→第 K 大元素、哈希表→两数之和）。
-- 用户确实想做设计类题目时：友好说明暂不支持、不要说"准备好了"，并给出同知识点的应用型替代题建议（如想练栈 → 「有效的括号」这类栈应用题），引导换方向。
+## 题目形态约定（对用户透明，严禁主动提及）
+- 题目统一是「单方法函数题」。栈/队列/堆/哈希表等主题直接按经典应用题出（队列→滑动窗口最大值、栈→有效的括号、堆→第 K 大元素、哈希表→两数之和），正常放行。
+- **不要主动向用户提及任何「不支持xx类题目」的系统限制**；仅当用户明确要求「实现自定义类+操作序列调用」的题（LRU 缓存、最小栈、用栈实现队列等）时，才说明暂不支持并给同主题应用题替代建议。
 
 回复控制在 200 字以内。不要输出 JSON，只输出自然语言。"""
 
@@ -300,6 +303,37 @@ def _build_transcript(history: list[Message], context_summary: str | None = None
     return build_transcript_with_budget(history, context_summary, DEFAULT_CONFIG)
 
 
+# 模块级知识点表：兜底解析与「显式出题请求」正向兜底共用一份口径
+_KNOWN_TOPICS = [
+    "动态规划", "数组", "链表", "二叉树", "字符串", "回溯", "贪心",
+    "双指针", "滑动窗口", "二分查找", "栈", "队列", "哈希表", "排序",
+    "递归", "前缀和", "位运算", "图", "堆", "并查集",
+]
+
+_DIFFICULTY_PATTERNS = [
+    # (关键词列表, 规范值)。顺序敏感：必须先判 medium——裸字「难」会与「难度」撞，
+    # 「中等难度」若后判 hard 会被误判（2026-09-06 修过的坑，勿回退）。
+    (["简单", "easy", "容易", "入门"], "easy"),
+    (["中等", "medium"], "medium"),
+    (["困难", "hard", "高难度"], "hard"),
+]
+
+
+def _detect_explicit_request(message: str) -> tuple[str, str]:
+    """从用户消息中确定性提取 (topic, difficulty)，任一缺失返回空串。
+
+    只做字面匹配，不猜语义：用于「用户一句话给全 topic+难度」时
+    兜住 LLM 误判 is_ready=False 的抖动（如"请出一道中等难度的队列题"）。
+    """
+    topic = next((t for t in _KNOWN_TOPICS if t in message), "")
+    diff = ""
+    for keywords, value in _DIFFICULTY_PATTERNS:
+        if any(k in message for k in keywords):
+            diff = value
+            break
+    return topic, diff
+
+
 def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogIntent:
     """Fallback when structured output fails: raw LLM call with manual JSON parse.
 
@@ -339,11 +373,7 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
         logger.warning("Fallback LLM parse failed: %s", exc)
 
     # 最终兜底：用正则从用户消息中提取 topic
-    known_topics = [
-        "动态规划", "数组", "链表", "二叉树", "字符串", "回溯", "贪心",
-        "双指针", "滑动窗口", "二分查找", "栈", "队列", "哈希表", "排序",
-        "递归", "前缀和", "位运算", "图", "堆", "并查集",
-    ]
+    known_topics = _KNOWN_TOPICS
     found_topic = ""
     for topic in known_topics:
         if topic in last_user_msg or topic in transcript:
@@ -538,6 +568,25 @@ async def analyze_user_intent(
         intent.is_random = False
         intent.next_message = design_dialog_refusal(intent.topic or "")
         return intent
+
+    # ── 正向兜底：用户一句话显式给了 topic+难度 → 强制 is_ready=True ──
+    # 契约（prompt 第 90 行）本就是"用户主动指定 topic 和 difficulty → is_ready=true"，
+    # 但弱模型偶发自相矛盾：next_message 嘴上说"马上出题 🚀"，is_ready 却填 false，
+    # 会话就此死路（2026-09-06 实锤："请出一道中等难度的队列题"）。
+    # 此处在设计围栏之后做确定性补强：非设计题 + 显式双要素 → 直接推进出题。
+    # 注意顺序：设计围栏在上面已 return，这里不会再把设计题放行。
+    if not intent.is_ready and not intent.is_random:
+        _topic_hit, _diff_hit = _detect_explicit_request(_last_user_text)
+        if _topic_hit and _diff_hit:
+            logger.info(
+                "explicit topic+difficulty detected (user=%r topic=%r diff=%s) — forcing is_ready=True",
+                _last_user_text[:60], _topic_hit, _diff_hit,
+            )
+            intent.is_ready = True
+            if not intent.topic:
+                intent.topic = _topic_hit
+            if not intent.difficulty:
+                intent.difficulty = _diff_hit
 
     logger.info("intent → topic=%s diff=%s ready=%s source=%s",
                 intent.topic or "?", intent.difficulty or "?", intent.is_ready, intent.source)

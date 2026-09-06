@@ -51,12 +51,16 @@ def _normalize_to_messages(raw_list) -> list[Message]:
 
 
 def _explicit_generate_signals(message: str) -> bool:
-    """用户显式要求立即出题（如"出题" / "来一道" / "给我出"）。
+    """用户显式要求立即出题（如"出题" / "来一道" / "请出一道…"）。
 
     命中这些关键词时，用户已经表达了"别再追问、直接出题"的意图，
     应无条件推进到出题，而不是被 LLM 意图判定的偶发抖动拦在 dialog 态。
+    注意覆盖口语变体："出一道/出一题/来一题"曾漏配，导致
+    "请出一道中等难度的队列题"被判 is_ready=False 卡死在对话态（2026-09-06）。
     """
-    return any(k in message for k in ("出题", "来一道", "给我出", "出道题", "开始做题"))
+    return any(k in message for k in (
+        "出题", "来一道", "出一道", "出一题", "来一题", "给我出", "出道题", "开始做题",
+    ))
 
 
 def _explicit_random_signals(message: str) -> bool:
