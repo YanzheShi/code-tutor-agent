@@ -222,13 +222,23 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
         )}
 
         <div className="mt-4 flex w-full justify-between text-sm text-ct-muted">
-          <button
-            type="button"
-            onClick={() => switchMode(mode === 'register' ? 'login' : 'register')}
-            className="hover:text-ct-text"
-          >
-            {mode === 'register' ? '已有账号？去登录' : '没有账号？注册一个'}
-          </button>
+          {mode === 'forgot' ? (
+            <button
+              type="button"
+              onClick={() => switchMode('login')}
+              className="hover:text-ct-text"
+            >
+              ← 返回登录
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => switchMode(mode === 'register' ? 'login' : 'register')}
+              className="hover:text-ct-text"
+            >
+              {mode === 'register' ? '已有账号？去登录' : '没有账号？注册一个'}
+            </button>
+          )}
           {mode !== 'forgot' && (
             <button type="button" onClick={() => switchMode('forgot')} className="hover:text-ct-text">
               忘记密码？
