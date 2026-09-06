@@ -61,7 +61,8 @@ def client():
 def test_background_invoke_writes_problem_after_response(client):
     record = []
     fake = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake), \
+    with patch.object(chat_router, "get_session_owner", return_value="1"), \
+         patch.object(chat_router, "get_graph", return_value=fake), \
          patch(_ANALYZE, return_value=DialogIntent(is_ready=True, topic="滑动窗口", difficulty="medium")):
         resp = client.post("/sid-1/chat/stream", json={"message": "出一个滑动窗口题吧"})
 
@@ -84,7 +85,8 @@ def test_background_invoke_writes_problem_after_response(client):
 def test_ready_sets_awaiting_problem_immediately(client):
     record = []
     fake = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake), \
+    with patch.object(chat_router, "get_session_owner", return_value="1"), \
+         patch.object(chat_router, "get_graph", return_value=fake), \
          patch(_ANALYZE, return_value=DialogIntent(is_ready=True, topic="滑动窗口", difficulty="medium")):
         client.post("/sid-1/chat/stream", json={"message": "出一个滑动窗口题吧"})
 

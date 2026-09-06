@@ -68,7 +68,8 @@ async def _collect(resp) -> str:
 async def test_agent_dialog_ready_uses_fixed_message_and_awaiting_problem():
     record: list = []
     fake_graph = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake_graph), \
+    with patch.object(chat_router, "get_session_owner", return_value=_FAKE_USER["id"]), \
+         patch.object(chat_router, "get_graph", return_value=fake_graph), \
          patch(
             _ANALYZE,
             return_value=DialogIntent(is_ready=True, topic="动态规划", difficulty="medium"),
@@ -95,7 +96,8 @@ async def test_agent_dialog_not_ready_uses_intent_next_message():
     # 注意：消息不能含"随便/随机/出题/来一道"等词——会命中 chat.py 的确定性兜底
     # （_explicit_random_signals / _explicit_generate_signals）把 is_ready 强改为 True，
     # 从而走就绪文案、绕过本用例要验证的非就绪分支。
-    with patch.object(chat_router, "get_graph", return_value=fake_graph), \
+    with patch.object(chat_router, "get_session_owner", return_value=_FAKE_USER["id"]), \
+         patch.object(chat_router, "get_graph", return_value=fake_graph), \
          patch(
             _ANALYZE,
             return_value=DialogIntent(is_ready=False, next_message="那难度想从哪个开始？"),

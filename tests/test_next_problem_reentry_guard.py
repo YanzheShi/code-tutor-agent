@@ -70,7 +70,8 @@ async def test_guard_forces_ready_on_explicit_generate_message():
     """模拟 LLM 误判 is_ready=False，但用户消息含显式『出题』关键词 → 兜底强制 ready。"""
     record: list = []
     fake_graph = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake_graph), \
+    with patch.object(chat_router, "get_session_owner", return_value=_FAKE_USER["id"]), \
+         patch.object(chat_router, "get_graph", return_value=fake_graph), \
          patch(
             _ANALYZE,
             return_value=DialogIntent(
@@ -99,7 +100,8 @@ async def test_guard_forces_ready_on_random_keyword_only():
     """仅含『随便 / 你决定』等交 AI 决定关键词、无『出题』字眼时，兜底同样生效。"""
     record: list = []
     fake_graph = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake_graph), \
+    with patch.object(chat_router, "get_session_owner", return_value=_FAKE_USER["id"]), \
+         patch.object(chat_router, "get_graph", return_value=fake_graph), \
          patch(
             _ANALYZE,
             return_value=DialogIntent(is_ready=False, next_message="推荐几个方向？"),
@@ -124,7 +126,8 @@ async def test_guard_does_not_fire_without_explicit_keyword():
     """无显式『出题 / 随机』关键词时，兜底不应误触发（保留正常追问流程）。"""
     record: list = []
     fake_graph = _make_fake_graph(record)
-    with patch.object(chat_router, "get_graph", return_value=fake_graph), \
+    with patch.object(chat_router, "get_session_owner", return_value=_FAKE_USER["id"]), \
+         patch.object(chat_router, "get_graph", return_value=fake_graph), \
          patch(
             _ANALYZE,
             return_value=DialogIntent(
