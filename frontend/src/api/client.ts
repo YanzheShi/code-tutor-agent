@@ -1,5 +1,5 @@
 import { API_BASE } from './config';
-import { clearAuth, getStoredAuth } from './auth';
+import { clearAuth, getStoredAuth, NETWORK_ERROR_MSG } from './auth';
 
 /** 统一带 Bearer 的 fetch 包装（多用户改造 P4）。
  *
@@ -23,7 +23,13 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
   if (token && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
-  const r = await fetch(input, { ...init, headers });
+  let r: Response;
+  try {
+    r = await fetch(input, { ...init, headers });
+  } catch {
+    // 断网/DNS/连接失败等：fetch 抛英文 TypeError（"Failed to fetch"），禁止透传到 UI
+    throw new Error(NETWORK_ERROR_MSG);
+  }
   if (r.status === 401 && !isCredentialPath) {
     // token 过期/无效：清凭证回登录页（App 检测不到 auth 则渲染 LoginScreen）
     clearAuth();

@@ -42,8 +42,26 @@ export function userKey(): string {
   return u != null ? String(u) : 'default';
 }
 
+/**
+ * 认证请求专用 fetch 包装。
+ * 网络层失败（断网/DNS/连接被拒/代理拦截）时 fetch 抛英文 TypeError
+ * （如 "Failed to fetch"），直接透传到 UI 是低级报错——统一翻译成友好中文。
+ * HTTP 错误响应（401/429/500 等）不在此层处理，仍由各调用方按业务文案报错。
+ */
+const NETWORK_ERROR_MSG = '网络连接失败，请检查网络后重试';
+
+async function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new Error(NETWORK_ERROR_MSG);
+  }
+}
+
+export { NETWORK_ERROR_MSG };
+
 export async function login(email: string, password: string): Promise<AuthUser> {
-  const r = await fetch(`${API_BASE}/auth/login`, {
+  const r = await authFetch(`${API_BASE}/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
@@ -55,7 +73,7 @@ export async function login(email: string, password: string): Promise<AuthUser> 
 }
 
 export async function register(email: string, password: string, inviteCode: string): Promise<AuthUser> {
-  const r = await fetch(`${API_BASE}/auth/register`, {
+  const r = await authFetch(`${API_BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, invite_code: inviteCode.trim().toUpperCase() }),
@@ -70,7 +88,7 @@ export async function register(email: string, password: string, inviteCode: stri
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   const auth = getStoredAuth();
   if (!auth) throw new Error('未登录');
-  const r = await fetch(`${API_BASE}/auth/me/password`, {
+  const r = await authFetch(`${API_BASE}/auth/me/password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
     body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
@@ -83,7 +101,7 @@ export async function changePassword(oldPassword: string, newPassword: string): 
 
 /** 忘记密码：请求验证码邮件（delivered=false 表示邮件服务未配置，走 admin 重置）。 */
 export async function forgotPassword(email: string): Promise<{ delivered: boolean | null; message: string }> {
-  const r = await fetch(`${API_BASE}/auth/forgot-password`, {
+  const r = await authFetch(`${API_BASE}/auth/forgot-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim() }),
@@ -95,7 +113,7 @@ export async function forgotPassword(email: string): Promise<{ delivered: boolea
 
 /** 用邮箱验证码重置密码。 */
 export async function resetPassword(email: string, code: string, newPassword: string): Promise<void> {
-  const r = await fetch(`${API_BASE}/auth/reset-password`, {
+  const r = await authFetch(`${API_BASE}/auth/reset-password`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: email.trim(), code: code.trim(), new_password: newPassword }),
