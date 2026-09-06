@@ -72,6 +72,15 @@ class TestUpdateProblemOptimalSolution:
                 os.remove(tpath)
 
 
+
+def _auth_headers(client) -> dict:
+    """注册一个测试用户并返回带 Bearer 的请求头（多用户改造后端点需要 JWT）。"""
+    import uuid as _uuid
+    email = f"dberr-{_uuid.uuid4().hex[:8]}@test.com"
+    r = client.post("/auth/register", json={"email": email, "password": "password123"})
+    assert r.status_code == 200, r.text
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
 class TestSessionErrorStates:
     """Error handling in session endpoints."""
 
@@ -80,29 +89,32 @@ class TestSessionErrorStates:
         from code_tutor_agent.api.main import app
         with TestClient(app) as c:
             self.client = c
+            self.headers = _auth_headers(c)
 
     def test_get_state_nonexistent_session(self):
-        resp = self.client.get("/session/00000000-0000-0000-0000-000000000000/state")
-        assert resp.status_code == 200
-        assert "session_id" in resp.json()
+        resp = self.client.get(
+            "/session/00000000-0000-0000-0000-000000000000/state", headers=self.headers)
+        # 生产契约（改造前已如此）：不存在的会话 → 404，前端据此区分「生成中」与「无效会话」
+        assert resp.status_code == 404
 
     def test_submit_nonexistent_session_returns_error(self):
         """POST /session/{id}/submit for non-existent session should error."""
         import contextlib
         with contextlib.suppress(Exception):
             resp = self.client.post(
-                "/session/00000000-0000-0000-0000-000000000000/submit",
+            "/session/00000000-0000-0000-0000-000000000000/submit", headers=self.headers,
                 json={"code": "print(1)", "language": "python"},
             )
             assert resp.status_code >= 400
 
     def test_get_reference_nonexistent_session_returns_error(self):
-        resp = self.client.get("/session/00000000-0000-0000-0000-000000000000/reference")
+        resp = self.client.get(
+            "/session/00000000-0000-0000-0000-000000000000/reference", headers=self.headers)
         assert resp.status_code >= 400
 
     def test_run_nonexistent_session_returns_error(self):
         resp = self.client.post(
-            "/session/00000000-0000-0000-0000-000000000000/run",
+            "/session/00000000-0000-0000-0000-000000000000/run", headers=self.headers,
             json={"code": "print(1)", "language": "python"},
         )
         assert resp.status_code >= 400
@@ -111,7 +123,7 @@ class TestSessionErrorStates:
         import contextlib
         with contextlib.suppress(Exception):
             resp = self.client.post(
-                "/session/00000000-0000-0000-0000-000000000000/chat/stream",
+            "/session/00000000-0000-0000-0000-000000000000/chat/stream", headers=self.headers,
                 json={"message": "hello"},
             )
             assert resp.status_code >= 400
@@ -125,22 +137,26 @@ class TestSerializationEdgeCases:
         from code_tutor_agent.api.main import app
         with TestClient(app) as c:
             self.client = c
+            self.headers = _auth_headers(c)
 
     def test_create_session_returns_generating(self):
-        resp = self.client.post("/session", json={"topic": "数组", "difficulty": "easy", "mode": "practice"})
+        resp = self.client.post(
+            "/session", headers=self.headers, json={"topic": "数组", "difficulty": "easy", "mode": "practice"})
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
         assert data["status"] == "generating"
 
     def test_create_session_empty_body(self):
-        resp = self.client.post("/session", json={})
+        resp = self.client.post(
+            "/session", headers=self.headers, json={})
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
 
     def test_problems_endpoint(self):
-        resp = self.client.get("/problems")
+        resp = self.client.get(
+            "/problems", headers=self.headers)
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, dict)

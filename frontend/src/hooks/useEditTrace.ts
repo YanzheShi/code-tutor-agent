@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 /**
  * useEditTrace —— 前端代码编辑轨迹采集（仅采集 + 传输，不做后端处理）。
  *
@@ -512,7 +513,7 @@ export function useEditTrace(sessionId: string | null, opts: UseEditTraceOpts) {
     statsRef.current.lastFlushTs = Date.now();
     statsRef.current.lastFlushCount = events.length;
     // 返回 Promise：调用方可 await，确保 run/submit 锚点落库后再放行（防刷新/关页丢事件）
-    return fetch(`/session/${sessionId}/edit-trace`, {
+    return apiFetch(`/session/${sessionId}/edit-trace`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ events, problem_id: pid }),

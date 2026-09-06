@@ -56,11 +56,12 @@ def update_profile_node(
             profile = _empty_profile()
             try:
                 from code_tutor_agent.db.database import get_user_profile_v2
-                sqlite_profile = get_user_profile_v2()
+                # v2 画像 key 约定：f"{uid}_v2"（default → "default_v2"，与旧约定一致）
+                sqlite_profile = get_user_profile_v2(f"{user_id}_v2")
                 if sqlite_profile.get("prof"):
                     profile = sqlite_profile
                     store.put(STORE_NS, user_id, profile)
-                    logger.info("Profile restored from SQLite after restart")
+                    logger.info("Profile restored from SQLite after restart (user=%s)", user_id)
             except Exception:
                 pass
 
@@ -73,10 +74,10 @@ def update_profile_node(
         )
 
         store.put(STORE_NS, user_id, updated)
-        # 也写一份到 SQLite 供前端展示
+        # 也写一份到 SQLite 供前端展示（按 user_id 隔离，key=f"{uid}_v2"）
         try:
             from code_tutor_agent.db.database import save_user_profile_v2
-            save_user_profile_v2(updated)
+            save_user_profile_v2(updated, user_id=f"{user_id}_v2")
         except Exception:
             logger.warning("Failed to persist profile to SQLite (non-fatal)", exc_info=True)
 

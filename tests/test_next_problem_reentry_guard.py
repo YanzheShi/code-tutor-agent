@@ -21,6 +21,9 @@ import pytest
 from code_tutor_agent.agents.agent_dialog import DialogIntent
 from code_tutor_agent.api.routers import chat as chat_router
 
+# 直调端点时手动提供登录态（多用户改造后端点带 current 依赖）
+_FAKE_USER = {"id": "1", "email": "t@test.com", "role": "user"}
+
 # analyze_user_intent 在路由函数体内按名导入，需 patch 其源模块属性
 _ANALYZE = "code_tutor_agent.agents.agent_dialog.analyze_user_intent"
 
@@ -79,6 +82,7 @@ async def test_guard_forces_ready_on_explicit_generate_message():
             "sid-guard",
             {"message": "请随机给我出一道算法题，不用确认，直接开始出题。"},
             background_tasks=BackgroundTasks(),
+            current=_FAKE_USER,
         )
         await _collect(resp)
     await asyncio.sleep(0)
@@ -104,6 +108,7 @@ async def test_guard_forces_ready_on_random_keyword_only():
             "sid-guard-rand",
             {"message": "随便，你帮我决定一道题吧"},
             background_tasks=BackgroundTasks(),
+            current=_FAKE_USER,
         )
         await _collect(resp)
     await asyncio.sleep(0)
@@ -131,6 +136,7 @@ async def test_guard_does_not_fire_without_explicit_keyword():
             "sid-no-guard",
             {"message": "我想练算法题"},  # 无显式出题 / 随机关键词
             background_tasks=BackgroundTasks(),
+            current=_FAKE_USER,
         )
         await _collect(resp)
     await asyncio.sleep(0)

@@ -1,3 +1,5 @@
+import { isAdmin } from '../api/auth';
+import { apiFetch } from '../api/client';
 import { useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
 
@@ -174,7 +176,7 @@ function ProfileView() {
 
   useEffect(() => {
     setLoading(true);
-    fetch(BASE + '/admin/profile')
+    apiFetch(BASE + '/auth/me/profile')
       .then(r => r.ok ? r.json() : null)
       .then(setProfile)
       .catch(() => setProfile(null))
@@ -235,7 +237,7 @@ export default function WelcomeScreen({
   useEffect(() => {
     if (tab === 'existing') {
       setProblemsLoading(true);
-      fetch(BASE + '/problems')
+      apiFetch(BASE + '/problems')
         .then(r => r.json())
         .then(data => setProblems(data.problems ?? []))
         .catch(() => setProblems([]))
@@ -247,7 +249,8 @@ export default function WelcomeScreen({
     { id: 'agent' as Tab, label: '🤖 Agent 导师' },
     { id: 'existing' as Tab, label: '从题库选' },
     { id: 'profile' as Tab, label: '📊 我的画像' },
-    ...(onOpenAdmin ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
+    // 管理入口仅 admin 角色可见（多用户改造 P4）
+    ...(onOpenAdmin && isAdmin() ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
   ];
 
   return (

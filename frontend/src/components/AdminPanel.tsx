@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 /** Admin panel — password-protected management.
  *
  * Four sections:
@@ -144,8 +145,8 @@ function AdminProfileView() {
   useEffect(() => {
     setLoading(true);
     Promise.all([
-      fetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
-      fetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
+      apiFetch(BASE + '/admin/profile').then(r => r.ok ? r.json() : null),
+      apiFetch(BASE + '/admin/profile/v2').then(r => r.ok ? r.json() : null),
     ]).then(([p1, p2]) => { setProfile(p1); setProfileV2(p2); setLoading(false); })
       .catch(() => { setProfile(null); setProfileV2(null); setLoading(false); });
   }, []);
@@ -276,7 +277,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const handleLogin = useCallback(async () => {
     setLoginError('');
     try {
-      const r = await fetch(BASE + '/admin/login', {
+      const r = await apiFetch(BASE + '/admin/login', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
@@ -289,7 +290,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const fetchProblems = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(BASE + '/admin/problems', {
+      const r = await apiFetch(BASE + '/admin/problems', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: adminToken }),
       });
@@ -302,7 +303,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
   const fetchSubmissions = useCallback(async () => {
     setSubsLoading(true);
     try {
-      const r = await fetch(BASE + '/admin/submissions', {
+      const r = await apiFetch(BASE + '/admin/submissions', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: adminToken }),
       });
@@ -334,7 +335,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     if (!selectedProblem) return;
     try {
       const payload = { ...Object.fromEntries(Object.entries(editForm).filter(([_, v]) => v !== '' && v !== undefined)), test_cases: JSON.parse(editTestCases), visible_test_cases: JSON.parse(editVisibleTestCases) } as Record<string, unknown>;
-      const r = await fetch(BASE + `/admin/problem/${selectedProblem.id}`, {
+      const r = await apiFetch(BASE + `/admin/problem/${selectedProblem.id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...payload, password: adminToken }),
       });
@@ -345,7 +346,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
 
   const handleDelete = useCallback(async (pid: number) => {
     try {
-      const r = await fetch(BASE + `/admin/problem/${pid}/delete`, {
+      const r = await apiFetch(BASE + `/admin/problem/${pid}/delete`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: adminToken }),
       });

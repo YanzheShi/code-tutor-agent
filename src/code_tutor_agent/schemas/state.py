@@ -218,6 +218,11 @@ class SessionState(BaseModel):
     """
 
     session_id: str = Field(description="Unique session / thread_id")
+    # ── 多用户归属（P2，2026-09-06）：create_session 注入，节点据此读写 per-user 画像/记忆 ──
+    user_id: str = Field(
+        default="default",
+        description="Owner user key (profiles/memory isolation). Set at session creation; never changed after.",
+    )
     # ── User preferences (set on create, consumed by planner+generator) ──
     topic: str = Field(default="数组", description="User-selected knowledge point")
     difficulty: str = Field(default="easy", description="User-selected difficulty")

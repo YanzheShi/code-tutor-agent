@@ -105,12 +105,17 @@ def build_run_config(
     difficulty: str | None = None,
     problem_id: int | None = None,
     run_name: str | None = None,
+    user_id: str | None = None,
 ) -> dict:
     """构造 graph.invoke 用的 config。
 
     在现有 ``{"configurable": {"thread_id": sid}}`` 基础上，追加
     ``metadata`` / ``tags`` / ``run_name``，便于在 LangSmith 按会话维度筛查。
     未启用 tracing 时仍返回含 ``thread_id`` 的 config（不影响 checkpointer / 续跑）。
+
+    user_id（多用户改造 P2）：同时写入 configurable 与 metadata：
+      - configurable.user_id → update_profile_node 读（画像 per-user 隔离）；
+      - metadata.user_id → token_usage callback 旁路采集（成本按用户归集）。
     """
     metadata: dict = {"session_id": sid, "app": "code-tutor-agent"}
     if mode:
@@ -121,13 +126,19 @@ def build_run_config(
         metadata["difficulty"] = difficulty
     if problem_id is not None:
         metadata["problem_id"] = problem_id
+    if user_id is not None:
+        metadata["user_id"] = user_id
 
     tags = ["code-tutor"]
     if mode:
         tags.append(str(mode))
 
+    configurable: dict = {"thread_id": sid}
+    if user_id is not None:
+        configurable["user_id"] = user_id
+
     config: dict = {
-        "configurable": {"thread_id": sid},
+        "configurable": configurable,
         "metadata": metadata,
         "tags": tags,
     }

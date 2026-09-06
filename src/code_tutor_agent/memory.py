@@ -65,10 +65,22 @@ def empty_memory() -> dict:
     }
 
 
-def load_memory() -> dict:
+def _memory_key(user_id: str | None = None) -> str:
+    """记忆在 profiles 表里的 user_id key（多用户隔离，P2）。
+
+    - "default"（单用户遗留口径）→ 沿用旧 key "__memory__"，存量数据不丢；
+    - 其他用户 → f"{user_id}_memory"。
+    """
+    if not user_id or user_id == "default":
+        from code_tutor_agent.db.database import MEMORY_USER_ID
+        return MEMORY_USER_ID
+    return f"{user_id}_memory"
+
+
+def load_memory(user_id: str | None = None) -> dict:
     """读取记忆,坏数据/缺失 → 空记忆兜底(不抛错)。"""
     from code_tutor_agent.db.database import get_user_memory
-    data = get_user_memory()
+    data = get_user_memory(_memory_key(user_id))
     if not isinstance(data, dict) or not data:
         return empty_memory()
     base = empty_memory()
@@ -85,9 +97,9 @@ def load_memory() -> dict:
     return base
 
 
-def save_memory(memory: dict) -> None:
+def save_memory(memory: dict, user_id: str | None = None) -> None:
     from code_tutor_agent.db.database import save_user_memory
-    save_user_memory(memory)
+    save_user_memory(memory, user_id=_memory_key(user_id))
 
 
 # ──────────────────────────────────────────────
@@ -221,6 +233,7 @@ def schedule_extraction(state) -> None:
     """critic_node 在 episode 终结时调用。同步快照 state → 后台线程抽取。
 
     同步快照避免线程读 state 的竞争;启动失败/快照失败都静默降级。
+    state.user_id 随快照传入（多用户记忆隔离）。
     """
     try:
         msgs = [
@@ -230,6 +243,7 @@ def schedule_extraction(state) -> None:
         problem = getattr(state, "problem", None)
         payload = {
             "session_id": getattr(state, "session_id", "") or "",
+            "user_id": getattr(state, "user_id", "default") or "default",
             "messages": msgs,
             "verdict": getattr(state, "last_verdict", "") or "",
             "topic": getattr(problem, "topic", "") if problem else "",
@@ -251,8 +265,9 @@ def schedule_extraction(state) -> None:
 def _run_extraction(payload: dict) -> None:
     """后台线程主流程:切片 → 门控 → LLM → merge → 落库。全程 try/except。"""
     try:
+        user_id = payload.get("user_id") or "default"
         with _WRITE_LOCK:
-            memory = load_memory()
+            memory = load_memory(user_id)
             messages = payload["messages"]
             session_id = payload["session_id"]
 
@@ -263,14 +278,14 @@ def _run_extraction(payload: dict) -> None:
 
             user_count = sum(1 for m in delta if m.get("role") == "user")
             if user_count < MIN_USER_MSGS:
-                _advance_watermark(memory, session_id, len(messages))
+                _advance_watermark(memory, session_id, len(messages), user_id)
                 logger.info("memory: gate skip (user msgs %d < %d)", user_count, MIN_USER_MSGS)
                 return
 
             transcript = _format_transcript(delta)
             extraction = _call_llm(memory, transcript, payload)
             if extraction is None or not _has_signal(extraction):
-                _advance_watermark(memory, session_id, len(messages))
+                _advance_watermark(memory, session_id, len(messages), user_id)
                 logger.info("memory: no stable signal, watermark advanced only")
                 return
 
@@ -279,9 +294,10 @@ def _run_extraction(payload: dict) -> None:
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
                 "watermark": {"session_id": session_id, "count": len(messages)},
             }
-            save_memory(new_memory)
+            save_memory(new_memory, user_id)
             logger.info(
-                "memory: updated — prefs=%d behavior=%d observations=%d",
+                "memory: updated (user=%s) — prefs=%d behavior=%d observations=%d",
+                user_id,
                 len(new_memory["preferences"]), len(new_memory["behavior"]),
                 len(new_memory["observations"]),
             )
@@ -289,11 +305,11 @@ def _run_extraction(payload: dict) -> None:
         logger.warning("memory: extraction failed", exc_info=True)
 
 
-def _advance_watermark(memory: dict, session_id: str, count: int) -> None:
+def _advance_watermark(memory: dict, session_id: str, count: int, user_id: str = "default") -> None:
     """无内容更新时只推进水位,避免下次重复处理同一段对话。"""
     memory.setdefault("meta", {})
     memory["meta"]["watermark"] = {"session_id": session_id, "count": count}
-    save_memory(memory)
+    save_memory(memory, user_id)
 
 
 # ──────────────────────────────────────────────
@@ -309,10 +325,10 @@ _PREF_LABELS = {
 }
 
 
-def render_memory_summary() -> str:
+def render_memory_summary(user_id: str | None = None) -> str:
     """渲染记忆为紧凑文本块,供 agent_dialog 注入;空记忆 → 空串。"""
     try:
-        memory = load_memory()
+        memory = load_memory(user_id)
         prefs = memory.get("preferences") or {}
         behavior = memory.get("behavior") or []
         observations = memory.get("observations") or []

@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 /** CostCenter — Token 成本中心(管理员向)。
  *
  * 5 个子视图,忠实还原 docs/token-cost-dashboard 设计稿:
@@ -257,7 +258,7 @@ function useFetch<T>(url: string, body: object, deps: unknown[]): { data: T | nu
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError('');
-    fetch(BASE + url, {
+    apiFetch(BASE + url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
@@ -535,7 +536,7 @@ function DetailTab({ password, range }: { password: string; range: RangeKey }) {
   // 导出走 POST(密码在 body,不进 URL/日志/Referer);收到 blob 后触发下载。
   const handleExport = useCallback(async () => {
     try {
-      const res = await fetch(BASE + '/admin/token/usage/export', {
+      const res = await apiFetch(BASE + '/admin/token/usage/export', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password, from_date: from, to_date: to, limit: 5000 }),
       });

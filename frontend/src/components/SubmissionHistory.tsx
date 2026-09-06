@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 import { useEffect, useState } from 'react';
 import type { Submission } from '../types/session';
 
@@ -13,7 +14,7 @@ export default function SubmissionHistory({ problemId }: { problemId: number }) 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(BASE + '/problem/' + problemId + '/submissions')
+    apiFetch(BASE + '/problem/' + problemId + '/submissions')
       .then(r => r.ok ? r.json() : { submissions: [] })
       .then(d => { if (!cancelled) { setSubmissions(d.submissions || []); setLoading(false); } })
       .catch(() => { if (!cancelled) { setSubmissions([]); setLoading(false); } });

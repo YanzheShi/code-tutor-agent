@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, summarizeTrace, fetchTraceAnalysis } from '../api/session';
@@ -20,7 +21,9 @@ export const DEFAULT_TAB_PANEL: Record<TabId, 'left' | 'right'> = {
 // ── 会话恢复（根治“自动回主页”bug）──
 // 把做题页的关键状态落盘到 localStorage，整页刷新 / Vite HMR 重挂载后自动恢复，
 // 避免纯内存 screen 被重置回 welcome。只持久化 main 屏，loading/error/admin 不持久化。
-const RESTORE_KEY = 'code-tutor:session';
+// 多用户改造（P4）：key 按登录用户隔离（code-tutor:session:<uid>），换账号不串会话。
+import { userKey } from '../api/auth';
+const RESTORE_KEY = `code-tutor:session:${userKey()}`;
 interface PersistedSession { screen: Screen; sessionId: string | null; mode: string; }
 function loadPersisted(): PersistedSession | null {
   try {
@@ -39,7 +42,8 @@ function clearPersisted() { try { localStorage.removeItem(RESTORE_KEY); } catch 
 // ── 编辑器草稿缓存（根治“刷新吞代码”）──
 // 按 sessionId 维度把用户当前编辑器内容落盘，刷新重挂载后用草稿回填编辑器，
 // 避免只用题目模板 starter_code 覆盖用户未提交的代码。
-const DRAFT_PREFIX = 'code-tutor:draft:';
+// 多用户改造（P4）：前缀含 uid，账号间草稿隔离。
+const DRAFT_PREFIX = `code-tutor:draft:${userKey()}:`;
 function loadDraft(sid: string): string | null {
   try {
     const raw = localStorage.getItem(DRAFT_PREFIX + sid);
@@ -268,7 +272,7 @@ export function useSession() {
     setTabPanel({ ...DEFAULT_TAB_PANEL }); setActiveTabs({ left: 'desc', right: 'code' });
     editorInitialized.current = false;
     try {
-      const r = await fetch(BASE + '/session/by-problem/' + problemId, { method: 'POST' });
+      const r = await apiFetch(BASE + '/session/by-problem/' + problemId, { method: 'POST' });
       if (!r.ok) throw new Error('failed: ' + r.status);
       applySessionState(await r.json(), true); setScreen('main');
     } catch (e) { setScreen('error'); setErrorMsg(String(e)); }
@@ -290,7 +294,7 @@ export function useSession() {
       // 让 isDone (= phase==='reviewing' && verdict==='AC') 成立，从而显示「下一题」按钮
       if ((full as any).phase) setPhase((full as any).phase);
       if (full.problem) {
-        try { const pr = await fetch(BASE + '/problem/' + full.problem.problem_id + '/submissions'); if (pr.ok) setSubmissions((await pr.json()).submissions || []); } catch {}
+        try { const pr = await apiFetch(BASE + '/problem/' + full.problem.problem_id + '/submissions'); if (pr.ok) setSubmissions((await pr.json()).submissions || []); } catch {}
       }
       if (resp.verdict === 'AC') {
         if (resp.status === 'done') setJudgeReport(full.last_review_payload as JudgeReport | null);
@@ -484,7 +488,7 @@ export function useSession() {
         onProgress: (msg) => setProgressMsgs(prev => (prev.includes(msg) ? prev : [...prev, msg])),
       });
       try {
-        const resp = await fetch(BASE + '/session/' + sessionId + '/next-problem', {
+        const resp = await apiFetch(BASE + '/session/' + sessionId + '/next-problem', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ preference }),

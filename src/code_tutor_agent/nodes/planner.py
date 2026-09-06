@@ -49,7 +49,7 @@ _TAG_TO_TOPIC: dict[str, str] = {
 }
 
 
-def _select_topic_by_profile() -> tuple[str, str]:
+def _select_topic_by_profile(user_id: str = "default") -> tuple[str, str]:
     """根据用户画像选择 topic 和 difficulty。
 
     从 DB 读取画像，选熟练度最低的主题，并根据熟练度调整难度。
@@ -57,7 +57,7 @@ def _select_topic_by_profile() -> tuple[str, str]:
     """
     from code_tutor_agent.db.database import get_profile
 
-    profile = get_profile()
+    profile = get_profile(user_id)
     if profile.attempts == 0:
         return _TOPICS_BY_CATEGORY[0]
 
@@ -77,10 +77,10 @@ def _select_topic_by_profile() -> tuple[str, str]:
     return slug, diff
 
 
-def _select_topic_by_v2_profile() -> Optional[tuple[str, str]]:
+def _select_topic_by_v2_profile(user_id: str = "default_v2") -> Optional[tuple[str, str]]:
     """基于新 per-tag 画像（prof/stab/forget）选择最弱 tag 出题。
 
-    读取 get_user_profile_v2()（默认 user_id="default_v2"）的 per-tag 数据：
+    读取 get_user_profile_v2(user_id) 的 per-tag 数据：
         - prof：熟练度 0–1，越低越该练
         - forget：decay 0–1（初始 1.0，越低=忘得越多），越该练
         - stab：方差越大=越不稳定，越该练
@@ -91,7 +91,7 @@ def _select_topic_by_v2_profile() -> Optional[tuple[str, str]]:
     """
     try:
         from code_tutor_agent.db.database import get_user_profile_v2
-        profile = get_user_profile_v2()
+        profile = get_user_profile_v2(user_id)
     except Exception as e:  # noqa: BLE001
         logger.warning("v2 profile read failed: %s", e)
         return None
@@ -159,6 +159,7 @@ def _select_topic_by_v2_profile() -> Optional[tuple[str, str]]:
 def _select_topic(
     history: list[ProblemAttemptRecord],
     preference: Optional[str],
+    user_id: str = "default",
 ) -> tuple[str, str]:
     """纯函数：根据 preference 和 history 选 topic + difficulty。
 
@@ -199,12 +200,12 @@ def _select_topic(
 
     # 默认 next_in_plan：优先用新 per-tag 画像选最弱 tag，异常/空画像回退旧逻辑
     try:
-        v2 = _select_topic_by_v2_profile()
+        v2 = _select_topic_by_v2_profile(f"{user_id}_v2")
         if v2:
             return v2
     except Exception as e:  # noqa: BLE001
         logger.warning("v2 profile selection failed, fallback to legacy: %s", e)
-    return _select_topic_by_profile()
+    return _select_topic_by_profile(user_id)
 
 
 def planner_node(state: SessionState) -> Command[Literal["generator_node", "wait_for_submit_node"]]:
@@ -233,7 +234,7 @@ def planner_node(state: SessionState) -> Command[Literal["generator_node", "wait
         topic, difficulty = state.topic, state.difficulty
         logger.info("Planner (agent) → using dialog result: topic=%s difficulty=%s", topic, difficulty)
     else:
-        topic, difficulty = _select_topic(state.problem_history, preference)
+        topic, difficulty = _select_topic(state.problem_history, preference, state.user_id)
         logger.info("Planner → topic=%s difficulty=%s (preference=%s)", topic, difficulty, preference)
 
     return Command(

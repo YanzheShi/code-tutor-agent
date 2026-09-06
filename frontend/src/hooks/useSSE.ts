@@ -1,3 +1,4 @@
+import { apiFetch } from '../api/client';
 /** SSE 流式聊天读取 hook — 消除 App.tsx 中 3 处重复的流式读取代码。 */
 import { useCallback } from 'react';
 import { API_BASE } from '../api/config';
@@ -28,7 +29,7 @@ export function useSSE() {
     onDone?: () => void,
     code?: string,
   ): Promise<boolean> => {
-    const resp = await fetch(`${BASE}/session/${sid}/chat/stream`, {
+    const resp = await apiFetch(`${BASE}/session/${sid}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, ...(code != null && code.trim() ? { code } : {}) }),

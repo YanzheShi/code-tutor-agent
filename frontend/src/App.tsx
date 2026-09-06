@@ -1,7 +1,10 @@
+import { useEffect, useState } from 'react';
 import LoadingScreen from './components/LoadingScreen';
+import LoginScreen from './components/LoginScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import AdminPanel from './components/AdminPanel';
 import MainLayout, { type MainLayoutProps } from './components/MainLayout';
+import { fetchMe, getStoredAuth, isAdmin, type AuthUser } from './api/auth';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
 
@@ -19,8 +22,35 @@ function ThemeToggle() {
 }
 
 export default function App() {
+  // ── 登录门禁（多用户改造 P4）：本地有凭证则后台校验 token，无凭证直接进登录页 ──
+  const [user, setUser] = useState<AuthUser | null>(() => getStoredAuth()?.user ?? null);
+  const [authChecked, setAuthChecked] = useState(() => !getStoredAuth());
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe().then((u) => {
+      if (!cancelled) {
+        setUser(u);
+        setAuthChecked(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const s = useSession();
   const { screen, errorMsg, progressMsgs } = s;
+
+  if (!user) {
+    if (!authChecked) return null; // 校验中，闪一下即过
+    return (
+      <LoginScreen
+        onLoggedIn={() => {
+          setUser(getStoredAuth()?.user ?? null);
+          // 登录后整页重载，确保 useSession 以新用户身份初始化 localStorage 草稿/会话
+          window.location.reload();
+        }}
+      />
+    );
+  }
 
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'welcome') return (
@@ -28,7 +58,16 @@ export default function App() {
       onOpenAdmin={s.onOpenAdmin} /></>
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
-  if (screen === 'admin') return <AdminPanel onClose={() => s.setScreen('welcome')} />;
+  if (screen === 'admin') {
+    // admin 入口仅 admin 角色可进（非 admin 误入时回落 welcome）
+    if (!isAdmin()) {
+      return (
+        <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
+          onOpenAdmin={s.onOpenAdmin} /></>
+      );
+    }
+    return <AdminPanel onClose={() => s.setScreen('welcome')} />;
+  }
 
   const mainProps: MainLayoutProps = {
     problem: s.problem, mode: s.mode, phase: (s as any).phase || 'solving',

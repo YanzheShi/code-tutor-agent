@@ -16,6 +16,9 @@ import pytest
 from code_tutor_agent.agents.agent_dialog import DialogIntent
 from code_tutor_agent.api.routers import chat as chat_router
 
+# 直调端点时手动提供登录态（多用户改造后端点带 current 依赖）
+_FAKE_USER = {"id": "1", "email": "t@test.com", "role": "user"}
+
 # analyze_user_intent 在路由函数体内按名导入，需 patch 其源模块属性
 _ANALYZE = "code_tutor_agent.agents.agent_dialog.analyze_user_intent"
 
@@ -70,7 +73,7 @@ async def test_agent_dialog_ready_uses_fixed_message_and_awaiting_problem():
             _ANALYZE,
             return_value=DialogIntent(is_ready=True, topic="动态规划", difficulty="medium"),
         ):
-        resp = await chat_router.chat_with_tutor_stream("sid-1", {"message": "准备好了"}, background_tasks=BackgroundTasks())
+        resp = await chat_router.chat_with_tutor_stream("sid-1", {"message": "准备好了"}, background_tasks=BackgroundTasks(), current=_FAKE_USER)
         text = await _collect(resp)
     await asyncio.sleep(0)  # 让后台 _safe_invoke 任务有机会调度
 
@@ -97,7 +100,7 @@ async def test_agent_dialog_not_ready_uses_intent_next_message():
             _ANALYZE,
             return_value=DialogIntent(is_ready=False, next_message="那难度想从哪个开始？"),
          ):
-        resp = await chat_router.chat_with_tutor_stream("sid-2", {"message": "我还不确定想练什么"}, background_tasks=BackgroundTasks())
+        resp = await chat_router.chat_with_tutor_stream("sid-2", {"message": "我还不确定想练什么"}, background_tasks=BackgroundTasks(), current=_FAKE_USER)
         text = await _collect(resp)
     await asyncio.sleep(0)
 

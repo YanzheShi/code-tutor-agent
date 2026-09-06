@@ -409,22 +409,15 @@ class TestDatabaseAggregation:
 # ── router integration ──
 class TestRouter:
     @pytest.mark.asyncio
-    async def test_overview_requires_password_and_shape(self, tmp_db, sample_rows, monkeypatch):
+    async def test_overview_shape(self, tmp_db, sample_rows, monkeypatch):
+        """多用户改造后鉴权上移到路由级 require_admin（JWT），处理器只管业务；
+        401 门槛由 tests/test_auth_multitenant.py 覆盖，这里验证返回结构与前端契约一致。"""
         from code_tutor_agent.api.routers import token as token_router
         from code_tutor_agent.schemas.api import TokenStatsRequest
 
-        monkeypatch.setenv("ADMIN_PASSWORD", "secret")
         db.insert_token_usage_batch(sample_rows)
 
-        # 错误密码 → 401
-        with pytest.raises(Exception):
-            await token_router.token_overview(TokenStatsRequest(password="wrong",
-                                                                from_date=TODAY,
-                                                                to_date=TODAY))
-
-        # 正确密码 → 结构与前端契约一致
-        out = await token_router.token_overview(TokenStatsRequest(password="secret",
-                                                                  from_date=TODAY,
+        out = await token_router.token_overview(TokenStatsRequest(from_date=TODAY,
                                                                   to_date=TODAY))
         assert "kpis" in out and "moduleShare" in out and "topPurposes" in out
 
@@ -449,18 +442,14 @@ class TestRouter:
         assert "rows" in usage and len(usage["rows"]) == 2
 
     @pytest.mark.asyncio
-    async def test_csv_export_requires_password_and_post(self, tmp_db, sample_rows, monkeypatch):
-        """导出改 POST:密码走 body,不在 URL;错误密码 401,正确密码返回 csv body。"""
+    async def test_csv_export_post_shape(self, tmp_db, sample_rows, monkeypatch):
+        """导出走 POST 返回 csv body（鉴权已上移路由级 require_admin，见 auth 测试）。"""
         from code_tutor_agent.api.routers import token as token_router
         from code_tutor_agent.schemas.api import TokenStatsRequest
 
-        monkeypatch.setenv("ADMIN_PASSWORD", "secret")
         db.insert_token_usage_batch(sample_rows)
 
-        with pytest.raises(Exception):
-            await token_router.token_usage_export(
-                TokenStatsRequest(password="nope", from_date=TODAY, to_date=TODAY))
         resp = await token_router.token_usage_export(
-            TokenStatsRequest(password="secret", from_date=TODAY, to_date=TODAY))
+            TokenStatsRequest(from_date=TODAY, to_date=TODAY))
         csv_text = resp.body.decode("utf-8") if isinstance(resp.body, bytes) else str(resp.body)
         assert "judge" in csv_text

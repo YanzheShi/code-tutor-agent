@@ -1,3 +1,4 @@
+import { apiFetch } from '../../api/client';
 import { useEffect, useState } from 'react';
 import type { DiffValue } from './AgentChat';
 import { API_BASE } from '../../api/config';
@@ -78,7 +79,7 @@ export default function DifficultyTopicSelector({
   const [topics, setTopics] = useState<{ value: string; label: string }[]>(FALLBACK_TOPICS);
   useEffect(() => {
     let cancelled = false;
-    fetch(API_BASE + '/topics')
+    apiFetch(API_BASE + '/topics')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('topics http ' + r.status))))
       .then((data) => {
         if (cancelled) return;

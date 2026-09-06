@@ -14,9 +14,10 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from code_tutor_agent.api.auth import get_current_user, require_admin, router as auth_router
 from code_tutor_agent.api.deps import init_graph
 from code_tutor_agent.api.logging_config import request_id_ctx, setup_logging
 from code_tutor_agent.api.routers import (
@@ -37,7 +38,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Startup: compile the LangGraph once, start background cleanup."""
+    """Startup: init DB schema, compile the LangGraph once, start background cleanup."""
+    # 建表/迁移必须在任何请求之前完成：init_db 原先只在 save_problem/token sink
+    # 懒触发，存量库启动后 users 等新表不存在 → /auth/register 直接 500（实测踩坑）。
+    from code_tutor_agent.api.auth import ensure_bootstrap_admin
+    from code_tutor_agent.db.database import init_db
+
+    init_db()
+    ensure_bootstrap_admin()
+
     init_graph()
     _generation_progress.clear()
 
@@ -120,12 +129,21 @@ async def request_tracing_middleware(request: Request, call_next):
         raise
 
 # ── Register routers ──
-app.include_router(session.router, prefix="/session", tags=["session"])
-app.include_router(run.router, prefix="/session", tags=["run"])
-app.include_router(chat.router, prefix="/session", tags=["chat"])
-app.include_router(problems.router, tags=["problems"])
-app.include_router(admin.router, prefix="/admin", tags=["admin"])
-app.include_router(token.router, prefix="/admin/token", tags=["token"])
+# 多用户改造（2026-09-06）：/auth 开放；业务路由统一 Bearer 鉴权；
+# admin/token 路由要求 admin 角色（替代旧明文密码 body 校验）。
+app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(session.router, prefix="/session", tags=["session"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(run.router, prefix="/session", tags=["run"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(chat.router, prefix="/session", tags=["chat"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(problems.router, tags=["problems"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(admin.router, prefix="/admin", tags=["admin"],
+                   dependencies=[Depends(require_admin)])
+app.include_router(token.router, prefix="/admin/token", tags=["token"],
+                   dependencies=[Depends(require_admin)])
 
 
 @app.get("/health")

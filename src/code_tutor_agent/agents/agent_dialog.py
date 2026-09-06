@@ -167,11 +167,12 @@ CHAT_STREAM_SYSTEM = """你是 AI 编程导师，你的任务是通过对话了�
 # ──────────────────────────────────────────────
 
 
-def _build_profile_summary() -> str:
+def _build_profile_summary(user_id: str = "default") -> str:
     """Build a Chinese text summary of the user's profile weaknesses.
 
     Reads the v2 per-tag profile and formats weak/forgotten/unstable tags
     for injection into dialog prompts. Returns empty string if no profile.
+    user_id：多用户隔离（P2），镜像 default/default_v2 的 key 约定。
     """
     try:
         from code_tutor_agent.db.database import get_user_profile_v2, get_profile
@@ -181,7 +182,7 @@ def _build_profile_summary() -> str:
 
     # Try v2 per-tag profile first
     try:
-        profile = get_user_profile_v2()
+        profile = get_user_profile_v2(f"{user_id}_v2")
     except Exception:
         profile = None
 
@@ -216,7 +217,7 @@ def _build_profile_summary() -> str:
     if not weak_tags:
         # Try legacy profile
         try:
-            legacy = get_profile()
+            legacy = get_profile(user_id)
             if legacy and legacy.attempts > 0:
                 return (
                     "## 用户画像\n"
@@ -250,16 +251,17 @@ def _build_profile_summary() -> str:
     return "\n".join(parts)
 
 
-def _build_memory_summary() -> str:
+def _build_memory_summary(user_id: str = "default") -> str:
     """加载跨会话语义记忆(偏好/行为习惯),渲染为注入块。
 
     与 _build_profile_summary 互补:画像=规则统计的定量层,
     记忆=LLM 语义抽取的定性层(见 docs/agent-memory-design.md)。
     无记忆/加载失败 → 空串,不影响对话。
+    user_id：多用户隔离（P2），记忆按用户分库（profiles 表按 key 隔离）。
     """
     try:
         from code_tutor_agent.memory import render_memory_summary
-        return render_memory_summary()
+        return render_memory_summary(user_id)
     except Exception:
         logger.debug("Cannot render memory summary")
         return ""
@@ -425,6 +427,7 @@ async def analyze_user_intent(
     history: list[Message],
     purpose: str = "dialog",
     context_summary: str | None = None,
+    user_id: str = "default",
 ) -> DialogIntent:
     """Structured analysis with an optional tool-calling loop.
 
@@ -468,7 +471,7 @@ async def analyze_user_intent(
         if _no_pref_count >= 2 and len(history) >= 4:
             # 用户连续 2+ 轮无偏好 → 自动选方向，不再追问
             logger.info("'随便' loop detected — auto-selecting topic")
-            profile_summary = _build_profile_summary()
+            profile_summary = _build_profile_summary(user_id)
             auto_topic = _pick_auto_topic(profile_summary)
             return DialogIntent(
                 topic=auto_topic,
@@ -481,8 +484,8 @@ async def analyze_user_intent(
             )
 
     transcript = _build_transcript(history, context_summary)
-    profile_summary = _build_profile_summary()
-    memory_summary = _build_memory_summary()
+    profile_summary = _build_profile_summary(user_id)
+    memory_summary = _build_memory_summary(user_id)
     # 画像只进 system 一次（模板末尾槽位：画像更新只影响 system 尾部，
     # 主体策略文本保持缓存有效），user prompt 不再重复注入（双注入去重）
     system_prompt = AGENT_DIALOG_SYSTEM.format(profile_section=profile_summary or "")
@@ -538,6 +541,7 @@ async def stream_dialog_response(
     history: list[Message],
     purpose: str = "dialog-stream",
     context_summary: str | None = None,
+    user_id: str = "default",
 ) -> AsyncGenerator[str, None]:
     """Stream the AI's dialog response to the user.
 
@@ -553,8 +557,8 @@ async def stream_dialog_response(
         Tokens of the natural language response.
     """
     transcript = _build_transcript(history, context_summary)
-    profile_summary = _build_profile_summary()
-    memory_summary = _build_memory_summary()
+    profile_summary = _build_profile_summary(user_id)
+    memory_summary = _build_memory_summary(user_id)
 
     # 构建自然对话 prompt（不输出 JSON）
     system = CHAT_STREAM_SYSTEM.format(profile_section=profile_summary or "")
@@ -584,8 +588,8 @@ async def stream_dialog_response(
 # ──────────────────────────────────────────────
 
 
-def build_initial_message() -> Message:
-    profile_summary = _build_profile_summary()
+def build_initial_message(user_id: str = "default") -> Message:
+    profile_summary = _build_profile_summary(user_id)
     if profile_summary:
         # 从画像中提取弱项列表，拼接到欢迎消息中
         weak_names: list[str] = []

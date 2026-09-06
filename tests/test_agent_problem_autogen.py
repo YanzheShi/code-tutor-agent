@@ -52,6 +52,9 @@ def _make_fake_graph(record):
 def client():
     app = FastAPI()
     app.include_router(chat_router.router)
+    # 多用户改造后 chat 端点带 get_current_user 依赖；单测覆盖为固定登录态
+    from code_tutor_agent.api.auth import get_current_user
+    app.dependency_overrides[get_current_user] = lambda: {"id": "1", "email": "t@test.com", "role": "user"}
     return TestClient(app)
 
 

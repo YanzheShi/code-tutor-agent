@@ -1,3 +1,4 @@
+import { apiFetch } from './client';
 import type { RunCodeResponse, SessionStateResp, SubmitResponse } from '../types/session';
 import { API_BASE } from './config';
 
@@ -6,7 +7,7 @@ const BASE = API_BASE;
 export async function createSession(
   opts?: { topic?: string; difficulty?: string; mode?: string },
 ): Promise<{ session_id: string; status: string }> {
-  const r = await fetch(`${BASE}/session`, {
+  const r = await apiFetch(`${BASE}/session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: opts ? JSON.stringify(opts) : undefined,
@@ -26,7 +27,7 @@ export async function submitCode(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 180000);
   try {
-    const r = await fetch(`${BASE}/session/${sid}/submit`, {
+    const r = await apiFetch(`${BASE}/session/${sid}/submit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, language: 'python' }),
@@ -48,7 +49,7 @@ export async function runCode(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 300000);
   try {
-    const r = await fetch(`${BASE}/session/${sid}/run`, {
+    const r = await apiFetch(`${BASE}/session/${sid}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, language: 'python' }),
@@ -62,19 +63,19 @@ export async function runCode(
 }
 
 export async function getState(sid: string): Promise<SessionStateResp> {
-  const r = await fetch(`${BASE}/session/${sid}/state`);
+  const r = await apiFetch(`${BASE}/session/${sid}/state`);
   if (!r.ok) throw new Error(`getState failed: ${r.status}`);
   return r.json();
 }
 
 export async function getReferenceCode(sid: string): Promise<{ code: string; title: string }> {
-  const r = await fetch(`${BASE}/session/${sid}/reference`);
+  const r = await apiFetch(`${BASE}/session/${sid}/reference`);
   if (!r.ok) throw new Error(`getReference failed: ${r.status}`);
   return r.json();
 }
 
 export async function analyzeTrace(sid: string, problemId = 'default', message?: string): Promise<any> {
-  const r = await fetch(`${BASE}/session/${sid}/analyze`, {
+  const r = await apiFetch(`${BASE}/session/${sid}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ problem_id: problemId, message }),
@@ -86,7 +87,7 @@ export async function analyzeTrace(sid: string, problemId = 'default', message?:
 }
 
 export async function fetchTraceAnalysis(sid: string, problemId = 'default'): Promise<any> {
-  const r = await fetch(`${BASE}/session/${sid}/analysis?problem_id=${encodeURIComponent(problemId)}`);
+  const r = await apiFetch(`${BASE}/session/${sid}/analysis?problem_id=${encodeURIComponent(problemId)}`);
   if (!r.ok) throw new Error(`fetchTraceAnalysis failed: ${r.status}`);
   return r.json();
 }
@@ -96,7 +97,7 @@ export async function summarizeTrace(
   problemId = 'default',
   transitionAction = 'continue',
 ): Promise<any> {
-  const r = await fetch(`${BASE}/session/${sid}/analyze/summarize`, {
+  const r = await apiFetch(`${BASE}/session/${sid}/analyze/summarize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ problem_id: problemId, transition_action: transitionAction }),

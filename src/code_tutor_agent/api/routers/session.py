@@ -8,13 +8,14 @@ import sqlite3
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from langchain_core.tracers.context import collect_runs
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.api.auth import get_current_user, require_admin, user_key
+from code_tutor_agent.api.deps import get_graph, run_with_concurrency_limit
 from code_tutor_agent.api.serializers import empty_state, serialize_state
 from code_tutor_agent.api.services.generation import GENERATION_TIMEOUT, run_generation
 from code_tutor_agent.config import get_checkpoint_db_path
@@ -24,6 +25,8 @@ from code_tutor_agent.db.database import (
     delete_session_sidecar_data,
     get_analysis_result,
     get_problem_by_id,
+    get_session_ids_for_user,
+    get_session_owner,
     get_stale_sessions,
     get_trace_analysis,
     get_trace_summary,
@@ -89,20 +92,40 @@ def _session_exists(thread_id: str) -> bool:
         return False
 
 
+def _require_owner(sid: str, current: dict) -> None:
+    """会话归属校验（多用户越权防线）。
+
+    - 归属不存在（存量旧会话 / checkpoints 有但 session_activity 缺记录）→ 放行
+      （遗留数据兼容：只认 sid 的旧行为）；
+    - 归属存在且不匹配当前用户 → 404（不泄露他人会话的存在性）。
+    """
+    owner = get_session_owner(sid)
+    if owner is None:
+        return
+    if owner != user_key(current):
+        raise HTTPException(404, f"Session {sid} not found")
+
+
 @router.post("")
-async def create_session(background_tasks: BackgroundTasks, body: CreateSessionRequest | None = None):
+async def create_session(
+    background_tasks: BackgroundTasks,
+    body: CreateSessionRequest | None = None,
+    current: dict = Depends(get_current_user),
+):
     """Create a new tutoring session (background generation)."""
     graph = get_graph()
+    uid = user_key(current)
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
         mode="agent",  # normal 模式已删除，统一 agent
         topic=body.topic if body else None,
         difficulty=body.difficulty if body else None,
+        user_id=uid,
         run_name="create_session",
     )
 
-    initial_dict = {"session_id": sid}
+    initial_dict = {"session_id": sid, "user_id": uid}
     if body:
         if body.topic:
             initial_dict["topic"] = body.topic
@@ -114,9 +137,9 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
             # 仅传 URL，解析收口到 generator_node（与 agent 对话路径统一）
             initial_dict["leetcode"] = {"url": body.leetcode_url}
 
-    # 记录活跃时间（TTL 清理用）
+    # 记录活跃时间（TTL 清理用 + 会话归属）
     try:
-        touch_session(sid)
+        touch_session(sid, uid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
 
@@ -134,14 +157,19 @@ async def create_session(background_tasks: BackgroundTasks, body: CreateSessionR
 @router.get("/list")
 async def list_sessions(
     limit: int = Query(default=50, ge=1, le=200, description="最多返回条数"),
+    current: dict = Depends(get_current_user),
 ):
-    """列出所有持久化的会话（按最近活跃倒序）。
+    """列出当前用户的持久化会话（按最近活跃倒序）。
 
     返回每个会话的 session_id、状态摘要和最后活跃时间。
-    依赖于 checkpoints.db 中的数据。
+    依赖于 checkpoints.db 中的数据；按 session_activity.user_id 过滤归属。
     """
     conn = _checkpointer_conn()
     if not conn:
+        return {"sessions": [], "total": 0}
+
+    owned = get_session_ids_for_user(user_key(current))
+    if not owned:
         return {"sessions": [], "total": 0}
 
     try:
@@ -158,12 +186,14 @@ async def list_sessions(
             ORDER BY _rowid DESC
             LIMIT ?
             """,
-            (limit,),
+            (limit * 4,),
         ).fetchall()
 
         sessions: list[dict[str, Any]] = []
         for row in rows:
             thread_id = row[0]
+            if thread_id not in owned:
+                continue  # 他人的会话不进列表
             checkpoint_blob = row[1]
             metadata_blob = row[2]
 
@@ -207,13 +237,14 @@ async def list_sessions(
 
 
 @router.delete("/{sid}")
-async def delete_session(sid: str):
+async def delete_session(sid: str, current: dict = Depends(get_current_user)):
     """删除一个会话及其所有 checkpoint 数据。
 
     清理内容：
     - LangGraph checkpointer 中该 thread_id 的所有 checkpoint
     - 内存中的进度消息（_generation_progress）
     """
+    _require_owner(sid, current)
     graph = get_graph()
 
     if not _session_exists(sid):
@@ -285,10 +316,12 @@ async def cleanup_sessions(
 
 
 @router.post("/{sid}/submit", response_model=SubmitResponse)
-async def submit_code(sid: str, body: SubmitRequest):
+async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get_current_user)):
     """Resume a paused session with user-submitted code."""
+    _require_owner(sid, current)
+    uid = user_key(current)
     graph = get_graph()
-    config = build_run_config(sid, run_name="submit_code")
+    config = build_run_config(sid, run_name="submit_code", user_id=uid)
 
     try:
         state = graph.get_state(config)
@@ -301,6 +334,7 @@ async def submit_code(sid: str, body: SubmitRequest):
         topic=state.values.get("topic"),
         difficulty=state.values.get("difficulty"),
         problem_id=state.values.get("problem_id"),
+        user_id=state.values.get("user_id", uid),
         run_name="submit_code",
     )
 
@@ -350,9 +384,9 @@ async def submit_code(sid: str, body: SubmitRequest):
 
         pause_safe_update(graph, config, {"status": "awaiting_submit", "error_message": ""})
 
-    # 记录活跃时间
+    # 记录活跃时间（TTL 清理用；冲突时只刷新时间，不会覆盖归属）
     try:
-        touch_session(sid)
+        touch_session(sid, uid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
 
@@ -461,13 +495,16 @@ class AnalyzeRequest(BaseModel):
 
 
 @router.post("/{sid}/analyze")
-async def analyze_trace_endpoint(sid: str, body: Optional[AnalyzeRequest] = None):
+async def analyze_trace_endpoint(
+    sid: str, body: Optional[AnalyzeRequest] = None, current: dict = Depends(get_current_user),
+):
     """触发/继续一次独立的做题轨迹分析（按题隔离、独立线程、不回灌画像）。
 
     - 无 message：首轮结构化分析（读按题过滤的 edit_traces + 题目完整描述 + 终码）。
     - 有 message：在同题分析线程追加追问，返回自由文本回复。
     body 可选：旧前端无 body 调用（problem_id="default" 退化为全量事件分析）仍可工作。
     """
+    _require_owner(sid, current)
     body = body or AnalyzeRequest()
     # 从会话状态取当前题 ProblemMeta（完整描述 + 约束 + 示例），供分析 LLM 使用
     problem_meta = None
@@ -525,11 +562,14 @@ class AnalyzeSummarizeRequest(BaseModel):
 
 
 @router.post("/{sid}/analyze/summarize")
-async def summarize_trace_endpoint(sid: str, body: AnalyzeSummarizeRequest):
+async def summarize_trace_endpoint(
+    sid: str, body: AnalyzeSummarizeRequest, current: dict = Depends(get_current_user),
+):
     """过渡时把当前题分析线程压缩成摘要（双落点源），并归档线程。
 
     返回 TraceSummary；前端据此渲染可见卡，并可注入下一题导师上下文（trajectory_summary）。
     """
+    _require_owner(sid, current)
     try:
         summary = summarize_thread(sid, body.problem_id, body.transition_action)
         archive_thread(sid, body.problem_id)
@@ -546,13 +586,14 @@ async def summarize_trace_endpoint(sid: str, body: AnalyzeSummarizeRequest):
 
 
 @router.get("/{sid}/state", response_model=SessionStateResponse)
-async def get_session_state(sid: str):
+async def get_session_state(sid: str, current: dict = Depends(get_current_user)):
     """Poll the current session state.
 
     如果 session 不存在则返回 404，前端可据此区分"生成中"和"无效会话"。
     """
+    _require_owner(sid, current)
     graph = get_graph()
-    config = build_run_config(sid, run_name="get_session_state")
+    config = build_run_config(sid, run_name="get_session_state", user_id=user_key(current))
 
     if not _session_exists(sid):
         raise HTTPException(404, f"Session {sid} not found")
@@ -572,15 +613,16 @@ async def get_session_state(sid: str):
 
 
 @router.get("/{sid}/progress/stream")
-async def stream_progress(sid: str):
+async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
     """SSE 端点：实时推送出题进度，替代前端 setInterval 轮询。
 
-    前端用 EventSource 订阅本端点：
+    前端用 fetch 流式订阅（EventSource 带不了 Authorization header）：
       - 每出现新进度消息，推送 `event: progress`（`data: {"message": "..."}`）；
       - 题目就绪（problem 非空且状态非 dialog）后，推送最终
         `event: done`（`data: <serialize_state 结果>`）并关闭连接；
       - 生成失败（无题目且出现终态错误标记，或超时），推送 `event: error` 并关闭。
     """
+    _require_owner(sid, current)
     graph = get_graph()
     config = build_run_config(sid, run_name="stream_progress")
     loop = asyncio.get_running_loop()
@@ -685,8 +727,11 @@ async def get_reference_code(sid: str):
 
 
 @router.post("/by-problem/{problem_id}")
-async def create_session_with_existing(problem_id: int):
+async def create_session_with_existing(
+    problem_id: int, current: dict = Depends(get_current_user),
+):
     """Create a session using an existing problem from the database."""
+    _uid = user_key(current)
     graph = get_graph()
 
     full = get_problem_by_id(problem_id)
@@ -700,6 +745,7 @@ async def create_session_with_existing(problem_id: int):
         topic=full.get("topic"),
         difficulty=full.get("difficulty"),
         problem_id=full.get("id"),
+        user_id=_uid,
         run_name="by_problem",
     )
 
@@ -738,6 +784,11 @@ async def create_session_with_existing(problem_id: int):
     }
     initial = SessionState(**initial_dict)
     graph.invoke(initial.model_dump(), config)
+    # 记录归属（by-problem 路径此前从不 touch，多用户下必须补上归属记录）
+    try:
+        touch_session(sid, _uid)
+    except Exception as exc:
+        logger.warning("touch_session failed for %s: %s", sid, exc)
     state = graph.get_state(config)
     return serialize_state(state.values)
 
@@ -797,7 +848,9 @@ def _build_next_problem_guide(prev_verdict: str | None, last_hint: int) -> str:
 
 
 @router.post("/{sid}/next-problem", response_model=NextProblemResp)
-async def next_problem(sid: str, body: NextProblemReq):
+async def next_problem(
+    sid: str, body: NextProblemReq, current: dict = Depends(get_current_user),
+):
     """Continue to the next problem within the same session.
 
     - Agent mode: re-enter the tutor dialog (preserve history, hide the
@@ -805,8 +858,10 @@ async def next_problem(sid: str, body: NextProblemReq):
       agree on a new topic/difficulty in chat (Bug 5/8/9).
     - Other modes: route through critic → planner → generator (existing).
     """
+    _require_owner(sid, current)
+    _uid = user_key(current)
     graph = get_graph()
-    config = build_run_config(sid, run_name="next_problem")
+    config = build_run_config(sid, run_name="next_problem", user_id=_uid)
 
     try:
         state = graph.get_state(config)
@@ -815,7 +870,7 @@ async def next_problem(sid: str, body: NextProblemReq):
 
     # 记录活跃时间
     try:
-        touch_session(sid)
+        touch_session(sid, _uid)
     except Exception as exc:
         logger.warning("touch_session failed for %s: %s", sid, exc)
 
@@ -829,6 +884,7 @@ async def next_problem(sid: str, body: NextProblemReq):
         topic=vals.get("topic"),
         difficulty=vals.get("difficulty"),
         problem_id=vals.get("problem_id"),
+        user_id=vals.get("user_id", _uid),
         run_name="next_problem",
     )
 
@@ -994,7 +1050,7 @@ async def next_problem(sid: str, body: NextProblemReq):
                        sid, state.next)
         raise HTTPException(409, "当前会话不在等待提交状态，无法换题")
 
-    await asyncio.to_thread(
+    await run_with_concurrency_limit(
         graph.invoke,
         Command(resume={"abandon": True, "preference": body.preference}),
         config,

@@ -14,6 +14,9 @@ from fastapi import HTTPException
 import code_tutor_agent.api.routers.session as session_router
 from code_tutor_agent.api.routers.session import NextProblemReq
 
+# 直调端点时手动提供登录态（多用户改造后端点带 current 依赖）
+_FAKE_USER = {"id": "1", "email": "t@test.com", "role": "user"}
+
 
 class _FakeGraph:
     def __init__(self, values: dict):
@@ -53,7 +56,7 @@ def test_continue_dialog_reenters_dialog_without_generating():
     with patch.object(session_router, "get_graph", return_value=graph), \
          patch("code_tutor_agent.db.database.touch_session", return_value=None):
         result = asyncio.run(
-            session_router.next_problem("s1", NextProblemReq(preference="continue_dialog"))
+            session_router.next_problem("s1", NextProblemReq(preference="continue_dialog"), current=_FAKE_USER)
         )
 
     # 不直接出下一题：problem 为空，phase 回到 dialog
@@ -75,7 +78,7 @@ def test_normal_next_in_plan_still_generates_for_practice():
          patch("code_tutor_agent.db.database.touch_session", return_value=None):
         try:
             asyncio.run(
-                session_router.next_problem("s1", NextProblemReq(preference="next_in_plan"))
+                session_router.next_problem("s1", NextProblemReq(preference="next_in_plan"), current=_FAKE_USER)
             )
         except HTTPException:
             # FakeGraph 不会真出题，normal 分支会因 problem 为空抛 500，符合预期

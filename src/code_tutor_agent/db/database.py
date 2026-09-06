@@ -39,6 +39,14 @@ _BUSY_TIMEOUT_MS = 10_000
 def _get_conn() -> sqlite3.Connection:
     """Create a new SQLite connection（WAL 每进程只设一次；锁争用按 busy_timeout 排队）。"""
     global _WAL_READY
+    # CTA_DB_PATH 指向的父目录不存在时自动创建（回归/CI 常见写法：临时路径直接给
+    # 环境变量不预建目录），否则 sqlite 报 "unable to open database file"。
+    _parent = os.path.dirname(os.path.abspath(DB_PATH))
+    if _parent and not os.path.isdir(_parent):
+        try:
+            os.makedirs(_parent, exist_ok=True)
+        except OSError as exc:
+            logger.warning("cannot create db parent dir %s: %s", _parent, exc)
     conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
     conn.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
@@ -148,7 +156,9 @@ def _init_db_tables(cursor) -> None:
         "ALTER TABLE submissions ADD COLUMN verdict TEXT DEFAULT ''",
         "ALTER TABLE submissions ADD COLUMN judge_results TEXT DEFAULT '[]'",
         "ALTER TABLE submissions ADD COLUMN session_id TEXT DEFAULT ''",
+        "ALTER TABLE submissions ADD COLUMN user_id TEXT DEFAULT 'default'",
         "ALTER TABLE edit_traces ADD COLUMN problem_id TEXT NOT NULL DEFAULT 'default'",
+        "ALTER TABLE session_activity ADD COLUMN user_id TEXT DEFAULT 'default'",
     ]:
         try:
             cursor.execute(col_sql)
@@ -163,10 +173,22 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
-    # ── 会话活跃时间表（TTL 自动清理用）──
+    # ── 用户表（邮箱密码登录，多用户支持）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
+    # ── 会话活跃时间表（TTL 自动清理用；user_id 记录归属，越权校验的事实源）──
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_activity (
             session_id TEXT PRIMARY KEY,
+            user_id TEXT DEFAULT 'default',
             last_active_at TIMESTAMP DEFAULT (datetime('now','localtime'))
         )
     """)
@@ -279,6 +301,7 @@ def _init_db_tables(cursor) -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             problem_id INTEGER NOT NULL,
             session_id TEXT DEFAULT '',
+            user_id TEXT DEFAULT 'default',
             student_code TEXT NOT NULL,
             status TEXT NOT NULL,
             verdict TEXT DEFAULT '',
@@ -670,35 +693,46 @@ def update_problem_optimal_solution(problem_id: int, code: str) -> None:
         raise
 
 
-def save_submission(problem_id: int, code: str, verdict: str, judge_results: list[dict], session_id: str = "") -> int:
+def save_submission(
+    problem_id: int, code: str, verdict: str, judge_results: list[dict],
+    session_id: str = "", user_id: str = "default",
+) -> int:
     """Save a submission record to the database. Returns the submission ID."""
     try:
         def _do(cursor):
                     cursor.execute(
-                        "INSERT INTO submissions (problem_id, session_id, student_code, status, verdict, judge_results) "
-                        "VALUES (?, ?, ?, 'judged', ?, ?)",
-                        (problem_id, session_id, code, verdict, json.dumps(judge_results, ensure_ascii=False)),
+                        "INSERT INTO submissions (problem_id, session_id, user_id, student_code, status, verdict, judge_results) "
+                        "VALUES (?, ?, ?, ?, 'judged', ?, ?)",
+                        (problem_id, session_id, user_id, code, verdict, json.dumps(judge_results, ensure_ascii=False)),
                     )
                     return cursor.lastrowid
         sub_id = _with_conn(_do)
-        logger.info("save_submission() — id=%d, problem=%d, session=%s, verdict=%s", sub_id, problem_id, session_id, verdict)
+        logger.info("save_submission() — id=%d, problem=%d, session=%s, user=%s, verdict=%s",
+                    sub_id, problem_id, session_id, user_id, verdict)
         return sub_id
     except Exception as exc:
         logger.error("Failed to save submission for problem %d: %s", problem_id, exc)
         raise
 
 
-def get_submissions_by_problem(problem_id: int, limit: int = 50) -> list[dict]:
+def get_submissions_by_problem(problem_id: int, limit: int = 50, user_id: str | None = None) -> list[dict]:
     """Return recent submissions for a problem.
 
     Returns list of dicts (via DBSubmission.to_dict()) for frontend compatibility.
+    user_id 非空时按用户过滤（多用户隔离：只看自己的提交历史）。
     """
     try:
-        rows = _with_conn(lambda cursor: cursor.execute(
+        sql = (
             "SELECT id, problem_id, session_id, student_code, verdict, judge_results, status, created_at "
-            "FROM submissions WHERE problem_id = ? ORDER BY id DESC LIMIT ?",
-            (problem_id, limit),
-        ).fetchall())
+            "FROM submissions WHERE problem_id = ?"
+        )
+        params: list = [problem_id]
+        if user_id is not None:
+            sql += " AND user_id = ?"
+            params.append(user_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        rows = _with_conn(lambda cursor: cursor.execute(sql, params).fetchall())
 
         result = []
         for row in rows:
@@ -731,17 +765,26 @@ def get_submissions_by_session(session_id: str, limit: int = 50) -> list[dict]:
         raise
 
 
-def get_all_problem_verdicts() -> dict[int, str]:
+def get_all_problem_verdicts(user_id: str | None = None) -> dict[int, str]:
     """Return the latest verdict for every problem that has submissions.
 
     Returns dict mapping problem_id → verdict (e.g. {1: 'AC', 2: 'WA'}).
+    user_id 非空时按用户过滤（多用户隔离：题库共享、进度各自独立）。
     """
     try:
-        rows = _with_conn(lambda cursor: cursor.execute(
+        sql = (
             "SELECT s.problem_id, s.verdict FROM submissions s "
-            "JOIN (SELECT problem_id, MAX(id) AS max_id FROM submissions GROUP BY problem_id) latest "
+            "JOIN (SELECT problem_id, MAX(id) AS max_id FROM submissions"
+        )
+        params: list[Any] = []
+        if user_id is not None:
+            sql += " WHERE user_id = ?"
+            params.append(user_id)
+        sql += (
+            " GROUP BY problem_id) latest "
             "ON s.problem_id = latest.problem_id AND s.id = latest.max_id"
-        ).fetchall())
+        )
+        rows = _with_conn(lambda cursor: cursor.execute(sql, params).fetchall())
         return {row[0]: row[1] for row in rows if row[1]}
     except Exception as exc:
         logger.error("get_all_problem_verdicts() failed: %s", exc)
@@ -829,19 +872,53 @@ def get_existing_norm_ids(exclude: set[int] | None = None) -> dict[str, int]:
 # ── 会话活跃时间（TTL 自动清理）──
 
 
-def touch_session(session_id: str) -> None:
+def touch_session(session_id: str, user_id: str = "default") -> None:
     """记录会话的最后活跃时间（upsert）。
 
     每次用户操作（chat、submit、poll state 等）时调用。
+    user_id 只在首次插入时写入（会话归属不可变），冲突时仅刷新活跃时间。
     """
     try:
         _with_conn(lambda cursor: cursor.execute(
-            "INSERT INTO session_activity (session_id, last_active_at) VALUES (?, datetime('now','localtime')) "
+            "INSERT INTO session_activity (session_id, user_id, last_active_at) "
+            "VALUES (?, ?, datetime('now','localtime')) "
             "ON CONFLICT(session_id) DO UPDATE SET last_active_at = datetime('now','localtime')",
-            (session_id,),
+            (session_id, user_id),
         ))
     except Exception as exc:
         logger.warning("touch_session(%s) failed: %s", session_id, exc)
+
+
+def get_session_owner(session_id: str) -> str | None:
+    """查询会话归属 user_id；会话不存在返回 None。
+
+    多用户越权校验的事实源。返回 None（存量旧会话无归属）时调用方按
+    「遗留数据放行」处理——只认 sid 的旧行为，避免历史会话全体失联。
+    """
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT user_id FROM session_activity WHERE session_id = ?",
+            (session_id,),
+        ).fetchone())
+        if row is None:
+            return None
+        return row["user_id"]
+    except Exception as exc:
+        logger.warning("get_session_owner(%s) failed: %s", session_id, exc)
+        return None
+
+
+def get_session_ids_for_user(user_id: str) -> set[str]:
+    """返回某用户的全部会话 id（会话列表按归属过滤用）。"""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT session_id FROM session_activity WHERE user_id = ?",
+            (user_id,),
+        ).fetchall())
+        return {row["session_id"] for row in rows}
+    except Exception as exc:
+        logger.error("get_session_ids_for_user(%s) failed: %s", user_id, exc)
+        return set()
 
 
 def get_stale_sessions(max_age_hours: int) -> list[str]:
@@ -1514,6 +1591,70 @@ def save_user_memory(memory: dict, user_id: str = MEMORY_USER_ID) -> None:
                     user_id, len(memory.get("behavior", [])), len(memory.get("observations", [])))
     except Exception as exc:
         logger.warning("save_user_memory(%s) failed: %s", user_id, exc)
+
+
+# ── 用户账号（邮箱密码登录，多用户支持）──
+
+
+def create_user(email: str, password_hash: str, role: str = "user") -> int:
+    """创建用户，返回新 id。邮箱重复抛 sqlite3.IntegrityError（由调用方转 409）。"""
+    return _with_conn(lambda cursor: (
+        cursor.execute(
+            "INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)",
+            (email, password_hash, role),
+        ),
+        cursor.lastrowid,
+    )[1])
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    """按邮箱查用户；不存在返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT id, email, password_hash, role FROM users WHERE email = ?",
+            (email,),
+        ).fetchone())
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.error("get_user_by_email(%s) failed: %s", email, exc)
+        return None
+
+
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """按 id 查用户；不存在返回 None。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT id, email, password_hash, role FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone())
+        return dict(row) if row else None
+    except Exception as exc:
+        logger.error("get_user_by_id(%s) failed: %s", user_id, exc)
+        return None
+
+
+def count_users() -> int:
+    """用户总数（首次注册引导 admin 用）。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT COUNT(*) AS n FROM users"
+        ).fetchone())
+        return int(row["n"]) if row else 0
+    except Exception as exc:
+        logger.error("count_users() failed: %s", exc)
+        return 0
+
+
+def has_admin() -> bool:
+    """是否已存在管理员账号（开放注册下第一个用户自动成为 admin 的判定依据）。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT 1 FROM users WHERE role = 'admin' LIMIT 1"
+        ).fetchone())
+        return row is not None
+    except Exception as exc:
+        logger.error("has_admin() failed: %s", exc)
+        return False
 
 
 # ── Token 用量(成本计量,见 docs/token-cost-control-design.md)──

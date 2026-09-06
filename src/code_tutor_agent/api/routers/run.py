@@ -9,10 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from langgraph.types import Command
 
-from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.api.auth import get_current_user, user_key
+from code_tutor_agent.api.deps import get_graph, run_with_concurrency_limit
+from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.api import RunCodeRequest, RunCodeResponse
 from code_tutor_agent.schemas.state import SessionState
@@ -22,10 +24,16 @@ router = APIRouter()
 
 
 @router.post("/{sid}/run", response_model=RunCodeResponse)
-async def run_code(sid: str, body: RunCodeRequest):
+async def run_code(
+    sid: str, body: RunCodeRequest, current: dict = Depends(get_current_user),
+):
     """Run the user's code against visible (sample) test cases via the graph."""
+    # 越权校验：归属存在且不匹配 → 404
+    _owner = get_session_owner(sid)
+    if _owner is not None and _owner != user_key(current):
+        raise HTTPException(404, f"Session {sid} not found")
     graph = get_graph()
-    config = build_run_config(sid, run_name="run_code")
+    config = build_run_config(sid, run_name="run_code", user_id=user_key(current))
 
     try:
         state = graph.get_state(config)
@@ -84,7 +92,8 @@ async def run_code(sid: str, body: RunCodeRequest):
             config,
         )
 
-    await asyncio.to_thread(_do_run)
+    # 并发护栏（P3）：运行判题计入全局信号量，超员排队
+    await run_with_concurrency_limit(_do_run)
     state = graph.get_state(config)
     values = state.values
 

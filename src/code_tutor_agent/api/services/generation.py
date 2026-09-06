@@ -60,6 +60,7 @@ async def run_generation(sid: str, initial_dict: dict):
         sid,
         topic=initial_dict.get("topic"),
         difficulty=initial_dict.get("difficulty"),
+        user_id=initial_dict.get("user_id"),
         run_name="generate_problem",
     )
 

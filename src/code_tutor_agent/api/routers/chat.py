@@ -5,11 +5,13 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
+from code_tutor_agent.api.auth import get_current_user, user_key
 from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.guards.design_guard import mentions_design_topic
 from code_tutor_agent.mcp.search_client import search_mcp_configured
 from code_tutor_agent.observability import build_run_config
@@ -271,10 +273,17 @@ async def _run_graph_and_generate_tests(graph, config, sid: str):
 
 
 @router.post("/{sid}/chat/stream")
-async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: BackgroundTasks):
+async def chat_with_tutor_stream(
+    sid: str, body: dict, background_tasks: BackgroundTasks,
+    current: dict = Depends(get_current_user),
+):
     """Streaming chat with the AI tutor via SSE."""
+    # 越权校验：归属存在且不匹配 → 404
+    _owner = get_session_owner(sid)
+    if _owner is not None and _owner != user_key(current):
+        raise HTTPException(404, f"Session {sid} not found")
     graph = get_graph()
-    _base = build_run_config(sid, run_name="chat_stream")
+    _base = build_run_config(sid, run_name="chat_stream", user_id=user_key(current))
     try:
         state = graph.get_state(_base)
     except Exception:
@@ -304,18 +313,23 @@ async def chat_with_tutor_stream(sid: str, body: dict, background_tasks: Backgro
         topic=values.get("topic"),
         difficulty=values.get("difficulty"),
         problem_id=values.get("problem_id"),
+        user_id=values.get("user_id", user_key(current)),
         run_name="chat_stream",
     )
 
     # Agent 对话模式：仅当对话未完成时
     if status == "dialog" and mode == "agent" and not agent_done:
-        return _handle_agent_dialog_stream(sid, config, graph, values, message, background_tasks)
+        return _handle_agent_dialog_stream(
+            sid, config, graph, values, message, background_tasks, uid=user_key(current),
+        )
 
     # 其余一律走常规辅导聊天（直接 LLM 流式 + 工具循环）
     return _handle_normal_chat_stream(sid, config, graph, values, message, code=code)
 
 
-def _handle_agent_dialog_stream(sid, config, graph, values, message, background_tasks) -> StreamingResponse:
+def _handle_agent_dialog_stream(
+    sid, config, graph, values, message, background_tasks, uid: str = "default",
+) -> StreamingResponse:
     """Agent 对话分支：意图分析 → 出题 or 继续追问，走 SSE 伪流式输出。
 
     注意：analyze_user_intent 必须在此函数体内按名导入（而非模块顶层），
@@ -356,7 +370,11 @@ def _handle_agent_dialog_stream(sid, config, graph, values, message, background_
         # 把「自然回复」与「is_ready 路由判定」合并为同一次 LLM 判定，
         # 避免两个模型各说各话、互相矛盾（对话衔接修复-2）
         try:
-            intent = await analyze_user_intent(history, context_summary=context_summary)
+            intent = await analyze_user_intent(
+                history,
+                context_summary=context_summary,
+                user_id=uid,
+            )
         except Exception as exc:
             logger.warning("analyze_user_intent failed: %s", exc)
             intent = DialogIntent(

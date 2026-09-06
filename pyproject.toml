@@ -19,6 +19,8 @@ dependencies = [
     "pydantic>=2.9.0",
     # 环境变量管理
     "python-dotenv>=1.0.0",
+    # 认证（多用户 JWT；密码哈希用标准库 pbkdf2，无额外依赖）
+    "pyjwt>=2.0.0",
     # Token 计数（上下文管理）
     "tiktoken>=0.7.0",
     # API 层

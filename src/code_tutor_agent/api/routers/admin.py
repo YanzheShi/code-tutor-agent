@@ -1,12 +1,18 @@
-"""Admin router — password-protected management endpoints."""
+"""Admin router — management endpoints（鉴权已上移：main.py 路由级 require_admin）。
+
+多用户改造（2026-09-06）：旧的明文密码 body 校验废弃，改用 JWT + role=admin。
+`_verify_admin` 保留仅为兼容（旧测试/旧调用方引用）；端点内不再调用。
+"""
 from __future__ import annotations
 
 import json
 import logging
 import os
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from code_tutor_agent.api.auth import require_admin, user_key
 from code_tutor_agent.schemas.api import (
     AdminLoginRequest,
     AdminPasswordRequest,
@@ -23,30 +29,19 @@ def _get_admin_password() -> str | None:
 
 
 def _verify_admin(request_body: dict) -> bool:
-    expected = _get_admin_password()
-    if not expected:
-        return True
-    provided = (request_body or {}).get("password", "")
-    return provided == expected
+    """兼容保留：实际鉴权已由路由级 require_admin 完成，此处恒放行。"""
+    return True
 
 
 @router.post("/login")
 async def admin_login(body: AdminLoginRequest):
-    """Verify admin password."""
-    expected = _get_admin_password()
-    if not expected:
-        return {"ok": True, "message": "Admin mode (no password configured)"}
-    if body.password == expected:
-        return {"ok": True, "message": "登录成功"}
-    raise HTTPException(401, "密码错误")
+    """兼容旧前端的登录端点：真实鉴权已走 /auth/login + JWT，这里恒返回 ok。"""
+    return {"ok": True, "message": "Admin mode (JWT role-based auth)"}
 
 
 @router.post("/problems")
 async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest()):
     """List all problems with full details."""
-    if not _verify_admin(body.model_dump()):
-        raise HTTPException(401, "密码错误")
-
     from code_tutor_agent.db.database import get_all_problem_ids, get_problems_by_ids
 
     ids = get_all_problem_ids()
@@ -77,10 +72,6 @@ async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest(
 @router.put("/problem/{problem_id}")
 async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest):
     """Update a problem. Only provided fields are updated."""
-    admin_body = body if isinstance(body, dict) else body.model_dump(exclude_none=True)
-    if not _verify_admin(admin_body):
-        raise HTTPException(401, "密码错误")
-
     from code_tutor_agent.db.database import get_problem_by_id
 
     full = get_problem_by_id(problem_id)
@@ -145,9 +136,6 @@ async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest)
 @router.post("/problem/{problem_id}/delete")
 async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = AdminPasswordRequest()):
     """Delete a problem."""
-    if not _verify_admin(body.model_dump()):
-        raise HTTPException(401, "密码错误")
-
     from code_tutor_agent.db.database import get_problem_by_id, _get_conn
 
     full = get_problem_by_id(problem_id)
@@ -164,23 +152,27 @@ async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = Adm
 
 
 @router.get("/profile")
-async def admin_get_profile():
-    """Get the current user profile (old 5-dim)."""
+async def admin_get_profile(
+    user_id: Optional[str] = None,
+    current: dict = Depends(require_admin),
+):
+    """Get a user's profile (old 5-dim)。默认当前 admin 自己；?user_id= 可查任意用户。"""
     from code_tutor_agent.db.database import get_profile
-    return get_profile()
+    return get_profile(user_id or user_key(current))
 
 
 @router.get("/profile/v2")
-async def admin_get_profile_v2():
-    """Get the per-tag UserProfile from the profile module."""
+async def admin_get_profile_v2(
+    user_id: Optional[str] = None,
+    current: dict = Depends(require_admin),
+):
+    """Get a user's per-tag UserProfile。默认当前 admin 自己；?user_id= 可查任意用户。"""
     from code_tutor_agent.db.database import get_user_profile_v2
-    return get_user_profile_v2()
+    return get_user_profile_v2(user_id or f"{user_key(current)}_v2")
 
 
 @router.post("/submissions")
 async def admin_list_submissions(body: AdminPasswordRequest = AdminPasswordRequest()):
     """List all recent submissions across all problems."""
-    if not _verify_admin(body.model_dump()):
-        raise HTTPException(401, "密码错误")
     from code_tutor_agent.db.database import get_all_submissions
     return {"submissions": get_all_submissions()}

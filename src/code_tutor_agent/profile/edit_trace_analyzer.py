@@ -207,6 +207,7 @@ def run_error_mode_analysis(
     final_code: str,
     verdict: str,
     judge_failure_tags: Optional[list[tuple[str, str]]] = None,
+    user_id: str = "default",
 ) -> None:
     """编排：编辑轨迹增量(基准) + 判题失败补充 feeder(×1.3) → 落库。非致命。
 
@@ -217,7 +218,7 @@ def run_error_mode_analysis(
 
     # 先验（供 LLM 校准严重度）
     try:
-        prior = get_profile(_USER_ID).error_modes
+        prior = get_profile(user_id).error_modes
     except Exception:
         prior = {}
 
@@ -250,7 +251,7 @@ def run_error_mode_analysis(
     # 3) 单次落库（一个时间步）
     if merged:
         try:
-            apply_error_mode_deltas(_USER_ID, merged, verdict_boost=False)
+            apply_error_mode_deltas(user_id, merged, verdict_boost=False)
         except Exception as exc:
             logger.error("run_error_mode_analysis: apply stage failed: %s", exc)
 
@@ -263,6 +264,7 @@ def fire_and_forget_error_mode_analysis(
     final_code: str,
     verdict: str,
     judge_failure_tags: Optional[list[tuple[str, str]]] = None,
+    user_id: str = "default",
 ) -> None:
     """fire-and-forget 启动错误模式分析。
 
@@ -279,6 +281,7 @@ def fire_and_forget_error_mode_analysis(
                 final_code=final_code,
                 verdict=verdict,
                 judge_failure_tags=judge_failure_tags,
+                user_id=user_id,
             )
         except Exception as exc:  # 兜底，绝不让线程异常冒泡
             logger.error("fire_and_forget_error_mode_analysis worker failed: %s", exc)

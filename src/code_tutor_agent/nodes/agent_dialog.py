@@ -49,7 +49,7 @@ def agent_dialog_node(state: SessionState) -> Command:
 
     # ── Dialog not yet complete: pause, preserving any existing history ──
     if not state.agent_dialog_history:
-        msg = build_initial_message()
+        msg = build_initial_message(state.user_id)
         logger.info("First visit — sent initial message: %s", msg.content[:60])
         hist = [msg]
         tut = [msg]

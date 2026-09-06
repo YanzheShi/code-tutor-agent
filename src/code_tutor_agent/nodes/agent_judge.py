@@ -228,7 +228,8 @@ def _apply_side_effects(
         try:
             from code_tutor_agent.db.database import update_profile_on_result
             topic = state.problem.topic if state.problem else "未知"
-            update_profile_on_result(topic=topic, verdict=analysis.verdict)
+            update_profile_on_result(topic=topic, verdict=analysis.verdict,
+                                     user_id=getattr(state, "user_id", "default"))
         except Exception:
             logger.warning("Agent v1 profile update failed (non-fatal)", exc_info=True)
 
@@ -259,6 +260,7 @@ def _apply_side_effects(
                 final_code=code,
                 verdict=verdict,
                 judge_failure_tags=judge_tags,
+                user_id=getattr(state, "user_id", "default"),
             )
         except Exception:
             logger.warning("error-mode fire-and-forget hook failed (non-fatal)", exc_info=True)
