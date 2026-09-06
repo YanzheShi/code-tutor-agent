@@ -24,7 +24,7 @@ from code_tutor_agent.api.main import app
 # agent-only 重构辅助：驱动「对话 → 出题」流程（tests/integration 下无 __init__，
 # 故按目录加入 sys.path 后直接 import 模块）。
 sys.path.insert(0, str(PROJECT_ROOT / "tests" / "integration"))
-from _agent_helpers import create_session_with_problem, drive_dialog_to_problem
+from _agent_helpers import auth_headers, create_session_with_problem, drive_dialog_to_problem
 
 POLL_INTERVAL = 1.0       # 轮询间隔（秒）
 MAX_POLL_WAIT = 60.0      # 最长等待时间（秒）
@@ -72,7 +72,7 @@ class TestMultiQuestion:
         pid1 = state1["problem"]["problem_id"]
 
         # 2. /next-problem → 回到对话（problem 清空，不会立即出新题）
-        resp = client.post(f"/session/{sid}/next-problem", json={"preference": "next_in_plan"})
+        resp = client.post(f"/session/{sid}/next-problem", json={"preference": "next_in_plan"}, headers=auth_headers(client))
         assert resp.status_code == 200, f"next-problem failed: {resp.text}"
         np_data = resp.json()
         assert np_data["session_id"] == sid
@@ -101,7 +101,7 @@ class TestMultiQuestion:
         pid1 = state1["problem"]["problem_id"]
 
         # 2. 第二题：/next-problem → 对话
-        client.post(f"/session/{sid}/next-problem", json={"preference": "random"})
+        client.post(f"/session/{sid}/next-problem", json={"preference": "random"}, headers=auth_headers(client))
         state2 = drive_dialog_to_problem(client, sid, "练习数组，简单难度，继续")
         pid2 = state2["problem"]["problem_id"]
         assert pid2 != pid1
@@ -109,7 +109,7 @@ class TestMultiQuestion:
             assert state2["total_problems"] >= 1
 
         # 3. 第三题：/next-problem → 对话
-        client.post(f"/session/{sid}/next-problem", json={"preference": "same_topic"})
+        client.post(f"/session/{sid}/next-problem", json={"preference": "same_topic"}, headers=auth_headers(client))
         state3 = drive_dialog_to_problem(client, sid, "练习链表，简单难度，再来一题")
         pid3 = state3["problem"]["problem_id"]
         assert pid3 != pid1 and pid3 != pid2
@@ -118,6 +118,11 @@ class TestMultiQuestion:
         assert state3["phase"] == "solving"
 
     def test_next_problem_nonexistent_session(self, client):
-        """不存在的 sessionId 应返回 409（LG get_state 不抛异常，返回空 state）。"""
-        resp = client.post("/session/does-not-exist/next-problem", json={})
+        """不存在的 sessionId 应返回 409（LG get_state 不抛异常，返回空 state）。
+
+        多用户改造（2026-09-06）：该端点现已统一 Bearer 鉴权，须带 token。
+        """
+        resp = client.post(
+            "/session/does-not-exist/next-problem", json={}, headers=auth_headers(client),
+        )
         assert resp.status_code == 409
