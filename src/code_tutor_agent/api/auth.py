@@ -322,6 +322,17 @@ async def my_profile_v2(current: dict = Depends(get_current_user)):
     return get_user_profile_v2(profile_v2_key(current))
 
 
+@router.get("/me/submissions")
+async def my_submissions(current: dict = Depends(get_current_user)):
+    """当前用户的提交记录（个人中心「我的提交」Tab）。
+
+    user_id 只从 JWT 取，不接受任何参数指定——防越权的硬规则。
+    返回结构与管理端 /admin/submissions 一致，前端展示组件可复用。
+    """
+    from code_tutor_agent.db.database import get_all_submissions
+    return {"submissions": get_all_submissions(user_id=user_key(current))}
+
+
 @router.post("/me/password")
 async def change_my_password(body: ChangePasswordRequest, current: dict = Depends(get_current_user)):
     """自助改密：验证旧密码后更新（忘记密码走 /forgot-password 或找管理员）。"""

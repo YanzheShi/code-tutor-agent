@@ -121,8 +121,25 @@ class TestMultiQuestion:
         """不存在的 sessionId 应返回 409（LG get_state 不抛异常，返回空 state）。
 
         多用户改造（2026-09-06）：该端点现已统一 Bearer 鉴权，须带 token。
+
+        ⚠️ 必须用随机 sid：touch_session 是 upsert，固定假 sid（如
+        "does-not-exist"）首次运行会被落库（归属=当前用户），之后
+        _require_owner 命中归属行 → 404，测试对残留数据不再幂等。
+        用 uuid 保证任何库状态下都走「owner=None 放行」路径。
         """
-        resp = client.post(
-            "/session/does-not-exist/next-problem", json={}, headers=auth_headers(client),
-        )
-        assert resp.status_code == 409
+        import uuid
+
+        fake_sid = f"nonexistent-{uuid.uuid4().hex[:12]}"
+        try:
+            resp = client.post(
+                f"/session/{fake_sid}/next-problem", json={}, headers=auth_headers(client),
+            )
+            assert resp.status_code == 409
+        finally:
+            # 清掉 touch_session 为假 sid 落库的行，避免污染库
+            from code_tutor_agent.db.database import _with_conn
+            try:
+                _with_conn(lambda cursor: cursor.execute(
+                    "DELETE FROM session_activity WHERE session_id = ?", (fake_sid,)))
+            except Exception:
+                pass

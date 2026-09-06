@@ -53,8 +53,11 @@ def _practice_ac_state() -> dict:
 def test_continue_dialog_reenters_dialog_without_generating():
     graph = _FakeGraph(_practice_ac_state())
 
+    # patch owner 校验：开发库残留 s1 归属 'default'（多用户改造前存量行），
+    # 不 patch 会 404（与第六轮 handoff/autogen/reentry_guard 同类修法）
     with patch.object(session_router, "get_graph", return_value=graph), \
-         patch("code_tutor_agent.db.database.touch_session", return_value=None):
+         patch("code_tutor_agent.db.database.touch_session", return_value=None), \
+         patch.object(session_router, "get_session_owner", return_value=_FAKE_USER["id"]):
         result = asyncio.run(
             session_router.next_problem("s1", NextProblemReq(preference="continue_dialog"), current=_FAKE_USER)
         )
@@ -75,7 +78,8 @@ def test_normal_next_in_plan_still_generates_for_practice():
     graph = _FakeGraph(_practice_ac_state())
 
     with patch.object(session_router, "get_graph", return_value=graph), \
-         patch("code_tutor_agent.db.database.touch_session", return_value=None):
+         patch("code_tutor_agent.db.database.touch_session", return_value=None), \
+         patch.object(session_router, "get_session_owner", return_value=_FAKE_USER["id"]):
         try:
             asyncio.run(
                 session_router.next_problem("s1", NextProblemReq(preference="next_in_plan"), current=_FAKE_USER)

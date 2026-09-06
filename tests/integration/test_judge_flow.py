@@ -2,8 +2,8 @@
 
 覆盖场景：
 - 创建 session 的状态
-- 画像 v2 接口结构
-- 画像 v1 兼容性
+- 画像 v2 接口结构（/auth/me/profile/v2，多用户改造后）
+- 画像 v1 兼容性（/auth/me/profile）
 - 并发 session
 """
 from __future__ import annotations
@@ -19,6 +19,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from code_tutor_agent.api.main import app
 
+# tests/integration 下无 __init__，按目录加入 sys.path 后直接 import 辅助模块
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _agent_helpers import auth_headers  # noqa: E402
+
 
 @pytest.fixture(scope="module")
 def client():
@@ -31,7 +35,7 @@ class TestJudgeFlow:
 
     def test_session_creation_sets_correct_status(self, client):
         """创建 session 后状态为 generating。"""
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
@@ -39,16 +43,16 @@ class TestJudgeFlow:
 
     def test_session_has_unique_id(self, client):
         """两次创建 session 得到不同 id。"""
-        r1 = client.post("/session", json={"topic": "数组", "difficulty": "easy"}).json()
-        r2 = client.post("/session", json={"topic": "数组", "difficulty": "easy"}).json()
+        r1 = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client)).json()
+        r2 = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client)).json()
         assert r1["session_id"] != r2["session_id"]
 
     def test_state_after_session_creation(self, client):
         """创建 session 后 state 有基本字段。"""
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         assert resp.status_code == 200
         sid = resp.json()["session_id"]
-        resp = client.get(f"/session/{sid}/state")
+        resp = client.get(f"/session/{sid}/state", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert data["session_id"] == sid
@@ -58,35 +62,35 @@ class TestJudgeFlow:
         assert "tutor_messages" in data
 
     def test_profile_v2_endpoint_returns_valid_json(self, client):
-        """GET /admin/profile/v2 返回有效 JSON。"""
-        resp = client.get("/admin/profile/v2")
+        """GET /auth/me/profile/v2 返回有效 JSON。"""
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, dict)
 
     def test_profile_v2_has_all_required_fields(self, client):
         """新画像应包含所有必需字段。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         for field in ["prof", "prof_elo_raw", "stab", "forget", "errors", "attempts", "meta"]:
             assert field in data, f"Missing: {field}"
 
     def test_profile_v2_errors_structure(self, client):
         """errors 字段应有 _global 和 per_tag。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         assert "_global" in data["errors"]
         assert "per_tag" in data["errors"]
 
     def test_profile_v2_meta_schema_version(self, client):
         """meta.schema_version 应为 'mvp@1'。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         assert data["meta"].get("schema_version") == "mvp@1"
 
     def test_profile_v1_still_works(self, client):
-        """GET /admin/profile 旧接口仍可用。"""
-        resp = client.get("/admin/profile")
+        """GET /auth/me/profile 旧接口仍可用。"""
+        resp = client.get("/auth/me/profile", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         for field in ["proficiency", "stability", "forget_days", "common_errors", "attempts"]:
@@ -94,7 +98,7 @@ class TestJudgeFlow:
 
     def test_profile_v1_values_are_reasonable(self, client):
         """旧画像数值范围合理。"""
-        resp = client.get("/admin/profile")
+        resp = client.get("/auth/me/profile", headers=auth_headers(client))
         data = resp.json()
         assert 0 <= data["proficiency"] <= 1.0
         assert 0 <= data["stability"] <= 1.0
@@ -104,23 +108,23 @@ class TestJudgeFlow:
 
     def test_concurrent_sessions_unique_ids(self, client):
         """同时创建多个 session 不冲突。"""
-        sids = [client.post("/session", json={"topic": "数组", "difficulty": "easy"}).json()["session_id"]
+        sids = [client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client)).json()["session_id"]
                 for _ in range(3)]
         assert len(set(sids)) == 3
 
     def test_invalid_json_body_returns_422(self, client):
         """非法 JSON body 应返回 422。"""
-        resp = client.post("/session", content=b"not json", headers={"Content-Type": "application/json"})
+        resp = client.post("/session", content=b"not json", headers={"Content-Type": "application/json", **auth_headers(client)})
         assert resp.status_code == 422
 
     def test_invalid_topic_creates_session(self, client):
         """非法 topic 不崩溃。"""
-        resp = client.post("/session", json={"topic": "不存在的话题", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "不存在的话题", "difficulty": "easy"}, headers=auth_headers(client))
         assert resp.status_code == 200
         assert "session_id" in resp.json()
 
     def test_empty_body_creates_session(self, client):
         """空 body 也能创建 session。"""
-        resp = client.post("/session", json={})
+        resp = client.post("/session", json={}, headers=auth_headers(client))
         assert resp.status_code == 200
         assert "session_id" in resp.json()

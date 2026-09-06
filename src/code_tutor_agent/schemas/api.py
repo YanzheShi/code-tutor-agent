@@ -119,18 +119,8 @@ class RunCodeResponse(BaseModel):
 # ──────────────────────────────────────────────
 #  Admin API schemas
 # ──────────────────────────────────────────────
-
-
-class AdminLoginRequest(BaseModel):
-    """Admin password verification."""
-
-    password: str = Field(description="Admin password from ADMIN_PASSWORD env var")
-
-
-class AdminPasswordRequest(BaseModel):
-    """Generic admin password verification."""
-
-    password: Optional[str] = Field(default="", description="Admin password")
+# （AdminLoginRequest / AdminPasswordRequest 已随明文密码鉴权一并移除，
+#   admin 端点鉴权 = JWT + role=admin，见 main.py 路由级 require_admin）
 
 
 class TokenStatsRequest(BaseModel):

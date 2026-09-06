@@ -7,6 +7,9 @@
 - 状态流转
 
 不测试：LLM 调用、Judge0 沙箱（由单元测试覆盖）。
+
+多用户改造（2026-09-06）：所有请求带 auth_headers(client)（自动登录+缓存
+token）；/admin/profile 已删除，画像走 /auth/me/profile（JWT 归属用户）。
 """
 from __future__ import annotations
 
@@ -20,6 +23,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from code_tutor_agent.api.main import app
+
+# tests/integration 下无 __init__，按目录加入 sys.path 后直接 import 辅助模块
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _agent_helpers import auth_headers  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +45,7 @@ class TestSessionCreation:
 
     def test_create_session_default_type(self, client):
         """默认类型为 coding。"""
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert "session_id" in data
@@ -49,14 +56,14 @@ class TestSessionCreation:
         for ptype in ["coding", "math", "sci_comp", "engineering", "ai_game"]:
             resp = client.post("/session", json={
                 "topic": "数组", "difficulty": "easy", "problem_type": ptype,
-            })
+            }, headers=auth_headers(client))
             assert resp.status_code == 200, f"Failed for type {ptype}: {resp.text}"
             data = resp.json()
             assert data["status"] == "generating"
 
     def test_create_session_empty_body(self, client):
         """空 body 也能创建（用默认值）。"""
-        resp = client.post("/session", json={})
+        resp = client.post("/session", json={}, headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
@@ -65,7 +72,7 @@ class TestSessionCreation:
         """非法 problem_type 自动 fallback 到 coding。"""
         resp = client.post("/session", json={
             "topic": "数组", "difficulty": "easy", "problem_type": "invalid_type",
-        })
+        }, headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert data["session_id"]
@@ -80,10 +87,10 @@ class TestSessionState:
     """GET /session/{sid}/state — 查询会话状态。"""
 
     def test_get_state_returns_required_fields(self, client):
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         sid = resp.json()["session_id"]
 
-        state_resp = client.get(f"/session/{sid}/state")
+        state_resp = client.get(f"/session/{sid}/state", headers=auth_headers(client))
         assert state_resp.status_code == 200
         data = state_resp.json()
         assert "session_id" in data
@@ -94,8 +101,8 @@ class TestSessionState:
         assert "tutor_messages" in data
 
     def test_get_state_nonexistent_session(self, client):
-        resp = client.get("/session/nonexistent-id/state")
-        # 不存在的 session — 不崩溃即可
+        resp = client.get("/session/nonexistent-id/state", headers=auth_headers(client))
+        # 不存在的 session — 不崩溃即可（归属不存在 → 404 属正常）
         assert resp.status_code in (200, 404, 500)
 
 
@@ -108,14 +115,14 @@ class TestProblems:
     """GET /problems — 题目列表。"""
 
     def test_list_problems_returns_array(self, client):
-        resp = client.get("/problems")
+        resp = client.get("/problems", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert "problems" in data
         assert isinstance(data["problems"], list)
 
     def test_submissions_empty_for_new_problem(self, client):
-        resp = client.get("/problem/999999/submissions")
+        resp = client.get("/problem/999999/submissions", headers=auth_headers(client))
         # 不存在的 problem_id 返回空列表，不崩溃
         assert resp.status_code == 200
         data = resp.json()
@@ -128,16 +135,27 @@ class TestProblems:
 
 
 class TestAdmin:
-    """管理后台接口。"""
+    """管理后台接口（2026-09-06 晚：独立密码已废除，鉴权 = JWT + role=admin）。"""
 
-    def test_admin_login(self, client):
-        """登录接口不崩溃即可。"""
+    def test_admin_login_endpoint_removed(self, client):
+        """/admin/login 兼容端点已移除。"""
         resp = client.post("/admin/login", json={"password": ""})
-        assert resp.status_code in (200, 401)
+        assert resp.status_code == 404
 
-    def test_admin_profile_endpoint(self, client):
-        """GET /admin/profile 返回默认画像。"""
-        resp = client.get("/admin/profile")
+    def test_admin_problems_requires_auth(self, client):
+        """/admin/problems 无 token → 401。"""
+        resp = client.post("/admin/problems")
+        assert resp.status_code == 401
+
+    def test_admin_problems_with_jwt(self, client):
+        """带 admin JWT（auth_headers 自动登录引导管理员）→ 200。"""
+        resp = client.post("/admin/problems", headers=auth_headers(client))
+        assert resp.status_code == 200
+        assert "problems" in resp.json()
+
+    def test_me_profile_endpoint(self, client):
+        """GET /auth/me/profile 返回当前用户画像（原 /admin/profile 已删）。"""
+        resp = client.get("/auth/me/profile", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert "proficiency" in data
@@ -151,7 +169,7 @@ class TestAdmin:
 
 
 class TestHealth:
-    """GET /health — 健康检查。"""
+    """GET /health — 健康检查（无需鉴权）。"""
 
     def test_health_endpoint(self, client):
         resp = client.get("/health")

@@ -273,7 +273,7 @@ function useFetch<T>(url: string, body: object, deps: unknown[]): { data: T | nu
 }
 
 // ── Tab: 概览 ──
-function OverviewTab({ password, range, model }: { password: string; range: RangeKey; model: string }) {
+function OverviewTab({ range, model }: { range: RangeKey; model: string }) {
   const { from, to } = rangeDates(range);
   const { data, loading, error } = useFetch<{
     kpis: { label: string; value: number; delta: number }[];
@@ -283,7 +283,7 @@ function OverviewTab({ password, range, model }: { password: string; range: Rang
     moduleTokenShare: { purpose: string; tokens: number; pct: number }[];
     topPurposes: { purpose: string; cost: number }[];
     range: { from: string; to: string; model: string };
-  }>('/admin/token/overview', { password, from_date: from, to_date: to, model_alias: model }, [password, range, model]);
+  }>('/admin/token/overview', { from_date: from, to_date: to, model_alias: model }, [range, model]);
 
   if (loading) return <Center><Spinner />加载概览中…</Center>;
   if (error) return <Center><ErrorMsg>{error}</ErrorMsg></Center>;
@@ -372,12 +372,12 @@ function OverviewTab({ password, range, model }: { password: string; range: Rang
 }
 
 // ── Tab: 用途分析 ──
-function PurposeTab({ password, range, model }: { password: string; range: RangeKey; model: string }) {
+function PurposeTab({ range, model }: { range: RangeKey; model: string }) {
   const { from, to } = rangeDates(range);
   const { data, loading, error } = useFetch<{ rows: {
     purpose: string; category: string; calls: number; promptK: number; completionK: number;
     cacheReadK: number; hit: number; cost: number; delta: number;
-  }[] }>('/admin/token/purposes', { password, from_date: from, to_date: to, model_alias: model }, [password, range, model]);
+  }[] }>('/admin/token/purposes', { from_date: from, to_date: to, model_alias: model }, [range, model]);
 
   if (loading) return <Center><Spinner />加载中…</Center>;
   if (error) return <Center><ErrorMsg>{error}</ErrorMsg></Center>;
@@ -424,11 +424,11 @@ function PurposeTab({ password, range, model }: { password: string; range: Range
 }
 
 // ── Tab: 缓存命中 ──
-function CacheTab({ password, range, model }: { password: string; range: RangeKey; model: string }) {
+function CacheTab({ range, model }: { range: RangeKey; model: string }) {
   const { from, to } = rangeDates(range);
   const { data, loading, error } = useFetch<{ rows: {
     purpose: string; category: string; hit: number; tip: string | null;
-  }[] }>('/admin/token/cache', { password, from_date: from, to_date: to, model_alias: model }, [password, range, model]);
+  }[] }>('/admin/token/cache', { from_date: from, to_date: to, model_alias: model }, [range, model]);
 
   if (loading) return <Center><Spinner />加载中…</Center>;
   if (error) return <Center><ErrorMsg>{error}</ErrorMsg></Center>;
@@ -473,11 +473,11 @@ function CacheTab({ password, range, model }: { password: string; range: RangeKe
 }
 
 // ── Tab: 预算预警 ──
-function BudgetTab({ password }: { password: string }) {
+function BudgetTab() {
   const { data, loading, error } = useFetch<{
     budgets: { name: string; used: number; limit: number }[];
     alerts: { level: string; title: string; detail: string }[];
-  }>('/admin/token/budget', { password }, [password]);
+  }>('/admin/token/budget', {}, []);
 
   if (loading) return <Center><Spinner />加载中…</Center>;
   if (error) return <Center><ErrorMsg>{error}</ErrorMsg></Center>;
@@ -526,19 +526,19 @@ function BudgetTab({ password }: { password: string }) {
 }
 
 // ── Tab: 调用明细 ──
-function DetailTab({ password, range }: { password: string; range: RangeKey }) {
+function DetailTab({ range }: { range: RangeKey }) {
   const { from, to } = rangeDates(range);
   const { data, loading, error } = useFetch<{ rows: {
     ts: string; session_id: string; purpose: string; model_alias: string;
     prompt_tokens: number; completion_tokens: number; cache_read_tokens: number; cost: number; latency_ms: number;
-  }[] }>('/admin/token/usage', { password, from_date: from, to_date: to, limit: 200 }, [password, range]);
+  }[] }>('/admin/token/usage', { from_date: from, to_date: to, limit: 200 }, [range]);
 
   // 导出走 POST(密码在 body,不进 URL/日志/Referer);收到 blob 后触发下载。
   const handleExport = useCallback(async () => {
     try {
       const res = await apiFetch(BASE + '/admin/token/usage/export', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, from_date: from, to_date: to, limit: 5000 }),
+        body: JSON.stringify({ from_date: from, to_date: to, limit: 5000 }),
       });
       if (!res.ok) throw new Error('导出失败(' + res.status + ')');
       const blob = await res.blob();
@@ -549,7 +549,7 @@ function DetailTab({ password, range }: { password: string; range: RangeKey }) {
     } catch (_e) {
       // 导出失败不影响明细浏览
     }
-  }, [password, from, to]);
+  }, [from, to]);
 
   if (loading) return <Center><Spinner />加载中…</Center>;
   if (error) return <Center><ErrorMsg>{error}</ErrorMsg></Center>;
@@ -608,7 +608,7 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 // ── main ──
-export default function CostCenter({ adminToken }: { adminToken: string }) {
+export default function CostCenter() {
   const [tab, setTab] = useState<CostTab>('overview');
   const [range, setRange] = useState<RangeKey>('30d');
   const [model, setModel] = useState<ModelKey>('全部');
@@ -616,13 +616,13 @@ export default function CostCenter({ adminToken }: { adminToken: string }) {
   const renderTab = useCallback(() => {
     const p = model === '全部' ? '' : model; // 后端:空=全部
     switch (tab) {
-      case 'overview': return <OverviewTab password={adminToken} range={range} model={p} />;
-      case 'purpose': return <PurposeTab password={adminToken} range={range} model={p} />;
-      case 'cache': return <CacheTab password={adminToken} range={range} model={p} />;
-      case 'budget': return <BudgetTab password={adminToken} />;
-      case 'detail': return <DetailTab password={adminToken} range={range} />;
+      case 'overview': return <OverviewTab range={range} model={p} />;
+      case 'purpose': return <PurposeTab range={range} model={p} />;
+      case 'cache': return <CacheTab range={range} model={p} />;
+      case 'budget': return <BudgetTab />;
+      case 'detail': return <DetailTab range={range} />;
     }
-  }, [tab, range, model, adminToken]);
+  }, [tab, range, model]);
 
   return (
     <div className="flex h-full flex-col">

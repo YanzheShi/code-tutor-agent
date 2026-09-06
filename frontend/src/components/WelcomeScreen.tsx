@@ -5,8 +5,59 @@ import { API_BASE } from '../api/config';
 
 const BASE = API_BASE;
 
-type Tab = 'existing' | 'agent' | 'profile' | 'admin';
+type Tab = 'existing' | 'agent' | 'profile' | 'subs' | 'admin';
 type ProblemBrief = { id: number; title: string; topic: string; difficulty: string; verdict?: string };
+
+type MySubmission = { id: number; problem_id: number; problem_title: string; verdict: string; code: string; created_at: string };
+
+const VERDICT_COLORS: Record<string, string> = {
+  AC: 'text-ct-success', WA: 'text-ct-warn',
+  TLE: 'text-ct-error', RE: 'text-ct-error', CE: 'text-ct-error',
+};
+
+/* ── 我的提交（个人中心：所有登录用户可看自己的记录）── */
+function MySubmissionsView() {
+  const [subs, setSubs] = useState<MySubmission[] | null>(null);
+  const [expandedCode, setExpandedCode] = useState<number | null>(null);
+
+  useEffect(() => {
+    apiFetch(BASE + '/auth/me/submissions')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => setSubs((d?.submissions ?? []) as MySubmission[]))
+      .catch(() => setSubs([]));
+  }, []);
+
+  if (subs === null) return <p className="text-sm text-ct-muted text-center py-8">加载提交记录中...</p>;
+  if (subs.length === 0) return <p className="text-sm text-ct-muted text-center py-8">还没有提交记录，去做几道题吧</p>;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="divide-y divide-ct-border/50 rounded-xl border border-ct-border bg-ct-surface">
+        {subs.map(sub => (
+          <div key={sub.id} className="px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2 text-sm">
+                <span className="truncate font-medium text-ct-text">#{sub.problem_id} {sub.problem_title}</span>
+                <span className={`shrink-0 font-bold text-xs ${VERDICT_COLORS[sub.verdict] || 'text-ct-muted'}`}>{sub.verdict || 'PENDING'}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="text-[11px] text-ct-muted">{sub.created_at}</span>
+                <button onClick={() => setExpandedCode(expandedCode === sub.id ? null : sub.id)}
+                  className="text-xs text-ct-accent hover:underline">
+                  {expandedCode === sub.id ? '收起' : '查看代码'}
+                </button>
+              </div>
+            </div>
+            {expandedCode === sub.id && (
+              <pre className="mt-2 max-h-48 overflow-x-auto rounded border border-ct-border bg-ct-surface-secondary p-3 text-xs font-mono text-ct-text">{sub.code}</pre>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 /* ── 错误模式 6 维定义（与后端 weakness.py DIM_KEYS / DIM_DISPLAY 同步）── */
 const ERROR_MODE_DIMS = [
@@ -27,11 +78,16 @@ const ERROR_MODE_DIMS = [
 type ErrorModeInfo = { count: number; severity: number; last_seen?: string; evidence?: string };
 type ErrorModes = Record<string, Record<string, ErrorModeInfo>>;
 
-/** 从 error_modes 计算每个维度的"能力分"(0~10)。无数据=10(满分), 有弱项则扣分。 */
+/** 无数据维度的默认分：中性「未知」，不奖励也不惩罚。
+ *  做题暴露弱项 → 扣分（severity 1 扣到 3）；持续干净练习 → severity 衰减回升。
+ *  取 5 而非更低，是因为可得分区间为 [3, 10]，默认分低于 3 会低于可达下限。 */
+const NO_DATA_SCORE = 5.0;
+
+/** 从 error_modes 计算每个维度的"能力分"(0~10)。无数据=5(中性未知), 有弱项则扣分。 */
 function dimScores(modes: ErrorModes): number[] {
   return ERROR_MODE_DIMS.map(d => {
     const tags = modes[d.key];
-    if (!tags || Object.keys(tags).length === 0) return 10;
+    if (!tags || Object.keys(tags).length === 0) return NO_DATA_SCORE;
     // 取该维度下最严重的 tag 的 severity，映射到扣分：severity 1→扣到 3 分，severity 0→不扣
     const maxSev = Math.max(...Object.values(tags).map(t => t.severity));
     return Math.round((1 - maxSev * 0.7) * 10 * 10) / 10; // 保留一位小数
@@ -255,6 +311,7 @@ export default function WelcomeScreen({
     { id: 'agent' as Tab, label: '🤖 Agent 导师' },
     { id: 'existing' as Tab, label: '从题库选' },
     { id: 'profile' as Tab, label: '📊 我的画像' },
+    { id: 'subs' as Tab, label: '📋 我的提交' },
     // 管理入口仅 admin 角色可见（多用户改造 P4）
     ...(onOpenAdmin && isAdmin() ? [{ id: 'admin' as Tab, label: '🛡️ 管理' }] : []),
   ];
@@ -367,6 +424,9 @@ export default function WelcomeScreen({
           {/* ── 我的画像 ── */}
           {tab === 'profile' && <ProfileView />}
           {tab === 'profile' && <ChangePasswordCard />}
+
+          {/* ── 我的提交 ── */}
+          {tab === 'subs' && <MySubmissionsView />}
         </div>
       </div>
     </div>

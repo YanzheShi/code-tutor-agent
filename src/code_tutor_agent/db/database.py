@@ -591,34 +591,58 @@ def _save_problem(cursor, problem_dict: dict) -> tuple[int, bool]:
     if not isinstance(constraints, str):
         constraints = json.dumps(constraints, ensure_ascii=False)
 
-    cursor.execute("""
-        INSERT INTO problems
-            (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
-             optimal_solution, brute_solution, function_signature, adversarial_spec_json,
-             time_complexity, space_complexity, novelty_score, starter_code, starter_code_norm,
-             source, source_url, alternative_solutions, constraints_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        title,
-        problem_dict.get("topic", ""),
-        problem_dict.get("difficulty", ""),
-        problem_dict.get("description", ""),
-        test_cases,
-        visible_tcs,
-        problem_dict.get("optimal_solution", ""),
-        problem_dict.get("brute_solution", ""),
-        problem_dict.get("function_signature", ""),
-        adv_spec_json,
-        problem_dict.get("time_complexity", ""),
-        problem_dict.get("space_complexity", ""),
-        problem_dict.get("novelty_score", 7.0),
-        problem_dict.get("starter_code", ""),
-        norm,
-        problem_dict.get("source", "generated"),
-        problem_dict.get("source_url", ""),
-        alt,
-        constraints,
-    ))
+    try:
+        cursor.execute("""
+            INSERT INTO problems
+                (title, topic, difficulty, description, test_cases_json, visible_test_cases_json,
+                 optimal_solution, brute_solution, function_signature, adversarial_spec_json,
+                 time_complexity, space_complexity, novelty_score, starter_code, starter_code_norm,
+                 source, source_url, alternative_solutions, constraints_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            title,
+            problem_dict.get("topic", ""),
+            problem_dict.get("difficulty", ""),
+            problem_dict.get("description", ""),
+            test_cases,
+            visible_tcs,
+            problem_dict.get("optimal_solution", ""),
+            problem_dict.get("brute_solution", ""),
+            problem_dict.get("function_signature", ""),
+            adv_spec_json,
+            problem_dict.get("time_complexity", ""),
+            problem_dict.get("space_complexity", ""),
+            problem_dict.get("novelty_score", 7.0),
+            problem_dict.get("starter_code", ""),
+            norm,
+            problem_dict.get("source", "generated"),
+            problem_dict.get("source_url", ""),
+            alt,
+            constraints,
+        ))
+    except sqlite3.IntegrityError:
+        # 并发竞态兜底：上面的"先查后插"不是原子的，两个用户同时落同一道题时，
+        # 双方查重都看不到对方未提交的行，后提交者会撞 title UNIQUE。
+        # 撞车后回查，把竞态归一成"复用旧题"，与查询路径的去重语义保持一致。
+        fallback_id: Optional[int] = None
+        if src_url:
+            cursor.execute(
+                "SELECT id FROM problems WHERE source_url = ?",
+                (src_url,),
+            )
+            row = cursor.fetchone()
+            fallback_id = row["id"] if row else None
+        if fallback_id is None:
+            cursor.execute("SELECT id FROM problems WHERE title = ?", (title,))
+            row = cursor.fetchone()
+            fallback_id = row["id"] if row else None
+        if fallback_id is None:
+            raise
+        logger.info(
+            "Problem '%s' dedup by concurrent INSERT fallback — reusing id=%d",
+            title, fallback_id,
+        )
+        return fallback_id, True
     problem_id = cursor.lastrowid
     logger.info("save_problem() — id=%d, title=%s, reused=False", problem_id, title)
     return problem_id, False
@@ -1002,15 +1026,28 @@ def delete_session_sidecar_data(session_id: str) -> None:
         logger.warning("delete_session_sidecar_data(%s) failed: %s", session_id, exc)
 
 
-def get_all_submissions(limit: int = 100) -> list[dict]:
-    """Return all recent submissions across all problems (for admin panel)."""
+def get_all_submissions(limit: int = 100, user_id: str | None = None) -> list[dict]:
+    """Return recent submissions (for admin panel / 个人中心).
+
+    ``user_id`` 传 None 时返回全部用户（管理端）；传具体 uid 只返回该用户的
+    提交（个人中心「我的提交」）。存量旧数据 user_id='default' 天然被过滤。
+    """
     try:
-        rows = _with_conn(lambda cursor: cursor.execute(
-            "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
-            "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
-            "ORDER BY s.id DESC LIMIT ?",
-            (limit,),
-        ).fetchall())
+        if user_id is not None:
+            rows = _with_conn(lambda cursor: cursor.execute(
+                "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
+                "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
+                "WHERE s.user_id = ? "
+                "ORDER BY s.id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall())
+        else:
+            rows = _with_conn(lambda cursor: cursor.execute(
+                "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
+                "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
+                "ORDER BY s.id DESC LIMIT ?",
+                (limit,),
+            ).fetchall())
         return [{
             "id": row[0],
             "problem_id": row[1],

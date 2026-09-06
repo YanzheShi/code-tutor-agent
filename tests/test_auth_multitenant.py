@@ -200,6 +200,46 @@ def test_submissions_user_isolation(temp_db):
     assert pid in dbmod.get_all_problem_verdicts()
 
 
+def test_me_submissions_endpoint_isolation(temp_db):
+    """GET /auth/me/submissions：个人中心「我的提交」，只返回 JWT 归属用户的数据。"""
+    import os as _os
+
+    from fastapi.testclient import TestClient
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api.main import app
+
+    uid1 = dbmod.create_user("mine1@test.com", a.hash_password("password123"))
+    uid2 = dbmod.create_user("mine2@test.com", a.hash_password("password123"))
+    a._RATE_BUCKETS.clear()
+
+    pid, _reused = dbmod.save_problem({
+        "title": f"T-{os.urandom(4).hex()}", "topic": "数组", "difficulty": "easy",
+        "description": "d", "test_cases": [{"input_args": ["[1]"], "expected_output": "1"}],
+    })
+    dbmod.save_submission(pid, "code-1", "AC", [], session_id="s1", user_id=str(uid1))
+    dbmod.save_submission(pid, "code-2", "WA", [], session_id="s2", user_id=str(uid2))
+
+    with TestClient(app) as c:
+        def _h(email):
+            tok = c.post("/auth/login", json={"email": email, "password": "password123"}).json()["token"]
+            return {"Authorization": f"Bearer {tok}"}
+
+        subs1 = c.get("/auth/me/submissions", headers=_h("mine1@test.com"))
+        assert subs1.status_code == 200
+        rows1 = subs1.json()["submissions"]
+        assert [s["verdict"] for s in rows1] == ["AC"]
+        assert all(s["problem_id"] == pid for s in rows1)
+
+        subs2 = c.get("/auth/me/submissions", headers=_h("mine2@test.com"))
+        assert [s["verdict"] for s in subs2.json()["submissions"]] == ["WA"]
+
+        # 无 token → 401
+        assert c.get("/auth/me/submissions").status_code == 401
+        # 清理临时目录引用（保持 temp_db fixture 语义）
+        del _os
+
+
 # ── build_run_config user_id 贯穿 ──
 
 

@@ -1,14 +1,20 @@
 """
-Verify: /admin/profile now returns ac_rate computed from submissions table.
+Verify: /auth/me/profile now returns ac_rate computed from submissions table.
 - Fresh DB (no submissions): ac_rate should be 0.0
 - DB with AC/WA/TLE/RE: ac_rate should match real stats
 """
 import json
+import sys
 import pytest
 import sqlite3
+from pathlib import Path
 from fastapi.testclient import TestClient
 from code_tutor_agent.api.main import app
 from code_tutor_agent.db.database import init_db, get_profile
+
+# tests/integration 下无 __init__，按目录加入 sys.path 后直接 import 辅助模块
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _agent_helpers import auth_headers
 
 
 @pytest.fixture(scope="module")
@@ -18,7 +24,7 @@ def client():
 
 def test_profile_has_ac_rate_key(client):
     """AC rate key must be present in the response."""
-    resp = client.get("/admin/profile")
+    resp = client.get("/auth/me/profile", headers=auth_headers(client))
     assert resp.status_code == 200
     data = resp.json()
     assert "ac_rate" in data, "ac_rate key missing from profile response"

@@ -1,22 +1,19 @@
 """Admin router — management endpoints（鉴权已上移：main.py 路由级 require_admin）。
 
 多用户改造（2026-09-06）：旧的明文密码 body 校验废弃，改用 JWT + role=admin。
-`_verify_admin` 保留仅为兼容（旧测试/旧调用方引用）；端点内不再调用。
+2026-09-06 晚：/admin/login 兼容端点与 AdminPasswordRequest 参数一并移除——
+管理后台入口由前端 isAdmin() 门禁 + 路由级 require_admin 全权负责，无独立密码。
 """
 from __future__ import annotations
 
 import json
 import logging
-import os
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from code_tutor_agent.api.auth import require_admin, user_key
 from code_tutor_agent.schemas.api import (
-    AdminLoginRequest,
-    AdminPasswordRequest,
     AdminProblemOut,
     AdminUpdateProblemRequest,
 )
@@ -24,24 +21,9 @@ from code_tutor_agent.schemas.api import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-def _get_admin_password() -> str | None:
-    # 不缓存:env 在进程启动时经 load_dotenv 注入,每次直读避免测试间状态污染
-    return os.getenv("ADMIN_PASSWORD")
-
-
-def _verify_admin(request_body: dict) -> bool:
-    """兼容保留：实际鉴权已由路由级 require_admin 完成，此处恒放行。"""
-    return True
-
-
-@router.post("/login")
-async def admin_login(body: AdminLoginRequest):
-    """兼容旧前端的登录端点：真实鉴权已走 /auth/login + JWT，这里恒返回 ok。"""
-    return {"ok": True, "message": "Admin mode (JWT role-based auth)"}
-
 
 @router.post("/problems")
-async def admin_list_problems(body: AdminPasswordRequest = AdminPasswordRequest()):
+async def admin_list_problems():
     """List all problems with full details."""
     from code_tutor_agent.db.database import get_all_problem_ids, get_problems_by_ids
 
@@ -135,7 +117,7 @@ async def admin_update_problem(problem_id: int, body: AdminUpdateProblemRequest)
 
 
 @router.post("/problem/{problem_id}/delete")
-async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = AdminPasswordRequest()):
+async def admin_delete_problem(problem_id: int):
     """Delete a problem."""
     from code_tutor_agent.db.database import get_problem_by_id, _get_conn
 
@@ -150,33 +132,6 @@ async def admin_delete_problem(problem_id: int, body: AdminPasswordRequest = Adm
     conn.close()
 
     return {"ok": True, "message": f"Problem {problem_id} deleted"}
-
-
-@router.get("/profile")
-async def admin_get_profile(
-    user_id: Optional[str] = None,
-    current: dict = Depends(require_admin),
-):
-    """Get a user's profile (old 5-dim)。默认当前 admin 自己；?user_id= 可查任意用户。"""
-    from code_tutor_agent.db.database import get_profile
-    return get_profile(user_id or user_key(current))
-
-
-@router.get("/profile/v2")
-async def admin_get_profile_v2(
-    user_id: Optional[str] = None,
-    current: dict = Depends(require_admin),
-):
-    """Get a user's per-tag UserProfile。默认当前 admin 自己；?user_id= 可查任意用户。"""
-    from code_tutor_agent.db.database import get_user_profile_v2
-    return get_user_profile_v2(user_id or f"{user_key(current)}_v2")
-
-
-@router.post("/submissions")
-async def admin_list_submissions(body: AdminPasswordRequest = AdminPasswordRequest()):
-    """List all recent submissions across all problems."""
-    from code_tutor_agent.db.database import get_all_submissions
-    return {"submissions": get_all_submissions()}
 
 
 # ── 用户管理（多用户防滥用改造，2026-09-06）──

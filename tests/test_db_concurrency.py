@@ -131,6 +131,44 @@ def _make_state() -> SessionState:
     )
 
 
+def test_save_problem_race_falls_back_to_reuse(tmp_db):
+    """并发落库竞态兜底：先查后插撞 title UNIQUE 时复用旧题而不是 500。
+
+    save_problem 是"先 SELECT 查重，再 INSERT"，两步之间不是原子的。
+    两个用户同时落同一道题时双方都查不到对方未提交的行，后提交者撞
+    title UNIQUE。修复后 INSERT 撞 IntegrityError 应回查旧 id 复用。
+
+    测试用确定性方式触发同一路径：同 title、不同 starter_code/source_url，
+    绕开查询路径去重，让 INSERT 必然撞 UNIQUE。
+    """
+    base = {
+        "title": "两数之和",
+        "topic": "数组",
+        "difficulty": "easy",
+        "description": "返回两数下标",
+        "test_cases": [{"input": "[2,7,11,15]\n9", "output": "[0,1]"}],
+        "starter_code": "class Solution:\n    def twoSum(self, nums, target):\n        pass",
+        "source_url": "https://leetcode.com/problems/two-sum/",
+    }
+    pid_first, reused_first = db.save_problem(dict(base))
+    assert reused_first is False
+
+    # 不同内容但同 title —— 查询路径去重全部 miss，INSERT 撞 title UNIQUE
+    variant = dict(base)
+    variant["starter_code"] = "class Solution:\n    def twoSum(self, nums, target):\n        # 另一套 starter\n        pass"
+    variant["source_url"] = "https://example.com/other/two-sum/"
+    pid_fallback, reused_fallback = db.save_problem(variant)
+
+    assert reused_fallback is True
+    assert pid_fallback == pid_first, "竞态撞 UNIQUE 后应复用旧题 id"
+
+    # 库里始终只有一行，不会出现半截写入
+    count = db._with_conn(
+        lambda cur: cur.execute("SELECT COUNT(*) FROM problems").fetchone()[0]
+    )
+    assert count == 1
+
+
 def test_judge_node_survives_db_error(monkeypatch):
     """前置加载抛 DB 异常时返回 status=error 保活，而不是让异常击穿会话。
 

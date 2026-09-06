@@ -1,7 +1,7 @@
 """集成测试：新画像系统（per-tag UserProfile）读写。
 
 覆盖场景：
-- GET /admin/profile/v2 返回完整结构
+- GET /auth/me/profile/v2 返回完整结构
 - 提交代码后画像更新（prof、stab、attempts 有变化）
 - 多次提交后画像持续更新
 - 新旧画像接口共存
@@ -22,7 +22,7 @@ from code_tutor_agent.api.main import app
 # agent-only 重构辅助：驱动「对话 → 出题」流程（tests/integration 下无 __init__，
 # 故按目录加入 sys.path 后直接 import 模块）。
 sys.path.insert(0, str(PROJECT_ROOT / "tests" / "integration"))
-from _agent_helpers import create_session_with_problem, drive_dialog_to_problem
+from _agent_helpers import auth_headers, create_session_with_problem, drive_dialog_to_problem
 
 
 @pytest.fixture(scope="module")
@@ -35,15 +35,15 @@ class TestProfileV2API:
     """新画像 API 测试。"""
 
     def test_v2_endpoint_returns_valid_json(self, client):
-        """GET /admin/profile/v2 返回有效 JSON。"""
-        resp = client.get("/admin/profile/v2")
+        """GET /auth/me/profile/v2 返回有效 JSON。"""
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert isinstance(data, dict)
 
     def test_v2_has_all_required_sections(self, client):
         """新画像应包含所有必需字段。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         required = ["prof", "prof_elo_raw", "stab", "forget", "errors", "attempts", "meta"]
         for field in required:
@@ -51,7 +51,7 @@ class TestProfileV2API:
 
     def test_v2_errors_structure(self, client):
         """errors 字段应有 _global 和 per_tag。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         errors = data["errors"]
         assert "_global" in errors
@@ -61,13 +61,13 @@ class TestProfileV2API:
 
     def test_v2_attempts_is_dict(self, client):
         """"attempts 是 dict (problem_id → AttemptRecord)。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         assert isinstance(data["attempts"], dict)
 
     def test_v2_meta_schema_version(self, client):
         """meta.schema_version 应为 'mvp@1'。"""
-        resp = client.get("/admin/profile/v2")
+        resp = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         data = resp.json()
         assert data["meta"].get("schema_version") == "mvp@1"
 
@@ -76,8 +76,8 @@ class TestProfileV1Compatibility:
     """旧画像 API 兼容性。"""
 
     def test_v1_still_works(self, client):
-        """GET /admin/profile 旧接口仍可用。"""
-        resp = client.get("/admin/profile")
+        """GET /auth/me/profile 旧接口仍可用。"""
+        resp = client.get("/auth/me/profile", headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         # 旧接口返回 5 维字段
@@ -89,14 +89,14 @@ class TestProfileV1Compatibility:
 
     def test_v1_v2_both_available(self, client):
         """新旧接口同时可用。"""
-        v1 = client.get("/admin/profile")
-        v2 = client.get("/admin/profile/v2")
+        v1 = client.get("/auth/me/profile", headers=auth_headers(client))
+        v2 = client.get("/auth/me/profile/v2", headers=auth_headers(client))
         assert v1.status_code == 200
         assert v2.status_code == 200
 
     def test_v1_values_are_reasonable(self, client):
         """旧画像数值范围合理。"""
-        resp = client.get("/admin/profile")
+        resp = client.get("/auth/me/profile", headers=auth_headers(client))
         data = resp.json()
         assert 0 <= data["proficiency"] <= 1.0
         assert 0 <= data["stability"] <= 1.0
@@ -111,7 +111,7 @@ class TestProfileUpdateAfterJudge:
     def test_profile_updated_after_submit(self, client):
         """提交代码后画像被更新（prof/attempts 有变化）。"""
         # 先记录当前画像
-        before = client.get("/admin/profile/v2").json()
+        before = client.get("/auth/me/profile/v2", headers=auth_headers(client)).json()
         before_prof_len = len(before.get("prof", {}))
 
         # 创建 session 并驱动 agent 对话 → 题目就绪（agent-only 重构后必须先对话）
@@ -119,10 +119,11 @@ class TestProfileUpdateAfterJudge:
         client.post(
             f"/session/{sid}/submit",
             json={"code": "class Solution:\n    def solve(self):\n        return 42", "language": "python"},
+            headers=auth_headers(client),
         )
 
         # 提交后画像应有变化
-        after = client.get("/admin/profile/v2").json()
+        after = client.get("/auth/me/profile/v2", headers=auth_headers(client)).json()
         # attempts 可能增加（或至少不为空）
         assert isinstance(after.get("attempts"), dict)
         # prof 可能存在（刚刚提交后，画像有更新）
@@ -131,18 +132,19 @@ class TestProfileUpdateAfterJudge:
 
     def test_profile_v2_after_submit_has_meta_updated_at(self, client):
         """提交后 meta.updated_at 应为时间戳。"""
-        before = client.get("/admin/profile/v2").json()
+        before = client.get("/auth/me/profile/v2", headers=auth_headers(client)).json()
 
-        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"})
+        resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         sid = resp.json()["session_id"]
         # 驱动 agent 对话 → 题目就绪（agent-only 重构后必须先对话，否则 /submit 会失败）
         drive_dialog_to_problem(client, sid, "我想练习数组，简单难度，直接开始吧")
         client.post(
             f"/session/{sid}/submit",
             json={"code": "class Solution:\n    def solve(self):\n        return 42", "language": "python"},
+            headers=auth_headers(client),
         )
 
-        after = client.get("/admin/profile/v2").json()
+        after = client.get("/auth/me/profile/v2", headers=auth_headers(client)).json()
         # updated_at 应为时间戳（float）
         updated_at = after.get("meta", {}).get("updated_at", 0)
         assert isinstance(updated_at, (int, float))

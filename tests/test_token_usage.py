@@ -273,6 +273,65 @@ class TestCallback:
         assert rec["topic"] == "dp"
         assert rec["problem_id"] == 7
 
+    def _user_key_skip_setup(self, monkeypatch):
+        """构造 FakeSink + handler 的公共脚手架,返回 (captured, handler, callback)。"""
+        from code_tutor_agent.token_usage import callback
+
+        captured = []
+
+        class FakeSink:
+            def enqueue(self, rec):
+                captured.append(rec)
+
+        monkeypatch.setattr(callback, "get_token_sink", lambda: FakeSink())
+        return captured, callback.TokenUsageCallbackHandler(), callback
+
+    _USER_KEY_UM = {"input_tokens": 100, "output_tokens": 50, "total_tokens": 150}
+
+    def test_user_custom_key_skipped(self, monkeypatch):
+        """用户自配 appkey（custom 模式）的调用不计入平台统计。
+
+        请求上下文存在 llm_override（用户自己的 key）时,即使调用完成、
+        用量可提取,也跳过落库——成本中心只统计系统内置 key 的消耗。
+        """
+        from code_tutor_agent.runtime_settings import set_llm_override
+
+        captured, handler, callback = self._user_key_skip_setup(monkeypatch)
+        meta = {"purpose": "judge", "model_name": "gpt-x", "model_alias": "user-custom",
+                "session_id": "s-own", "user_id": "42"}
+        token = set_llm_override({"api_key": "sk-user-own", "base_url": "https://api.x.com"})
+        try:
+            handler.on_llm_start({}, ["prompt"], run_id="rk1", metadata=meta)
+            handler.on_llm_end(self._fake_result(self._USER_KEY_UM), run_id="rk1")
+        finally:
+            from code_tutor_agent.runtime_settings import llm_override_ctx
+            llm_override_ctx.reset(token)
+
+        assert captured == [], "用户自配 key 的用量不应落库"
+        # 跳过路径同样要消费掉 start 缓存,否则 _run_meta 跨调用泄漏
+        assert "rk1" not in handler._run_meta
+
+    def test_platform_key_still_recorded_after_user_key_context_reset(self, monkeypatch):
+        """同一进程里,用户 key 上下文结束后,内置 key 的调用照常统计。"""
+        from code_tutor_agent.runtime_settings import set_llm_override, llm_override_ctx
+
+        captured, handler, callback = self._user_key_skip_setup(monkeypatch)
+        meta = {"purpose": "judge", "model_name": "deepseek-chat", "model_alias": "default"}
+
+        token = set_llm_override({"api_key": "sk-user-own"})
+        try:
+            handler.on_llm_start({}, ["prompt"], run_id="rk2", metadata=meta)
+            handler.on_llm_end(self._fake_result(self._USER_KEY_UM), run_id="rk2")
+        finally:
+            llm_override_ctx.reset(token)
+        assert captured == []
+
+        # 覆盖已 reset(内置 key 语义),新调用正常落库
+        handler.on_llm_start({}, ["prompt"], run_id="rk3", metadata=meta)
+        handler.on_llm_end(self._fake_result(self._USER_KEY_UM), run_id="rk3")
+        assert len(captured) == 1
+        assert captured[0]["total_tokens"] == 150
+
 
 # ── sink ──
 class TestSink:

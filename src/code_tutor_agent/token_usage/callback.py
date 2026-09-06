@@ -11,6 +11,12 @@
   (模型实例属性,经 bind_tools / with_structured_output 后仍存活)
 - session_id / mode / topic / difficulty / problem_id ← build_run_config 注入
 
+统计口径(2026-09-06):成本中心只统计**系统内置 key** 的消耗。请求上下文
+存在用户自配 key 覆盖(runtime_settings.llm_override_ctx 非 None,即用户在
+设置页配了自己的 appkey)时,本次调用费用归属用户自己,**跳过落库**。
+ContextVar 在 asyncio.to_thread(判题/出题线程池)里可读到覆盖;直接 spawn
+的后台线程(错误模式分析)读不到 → 用的是服务器内置 key → 照常统计。
+
 线程模型:全局单例 handler,``_run_meta`` 用锁保护(回调可并发)。
 """
 from __future__ import annotations
@@ -23,6 +29,7 @@ from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
 
+from code_tutor_agent.runtime_settings import get_llm_override
 from code_tutor_agent.token_usage.cost import cost_calculator
 from code_tutor_agent.token_usage.sink import get_token_sink
 
@@ -94,6 +101,14 @@ class TokenUsageCallbackHandler(BaseCallbackHandler):
             m = extra.get("metadata")
             if isinstance(m, dict):
                 meta.update(m)
+
+        # 用户自配 key（custom 模式）不计入平台统计：本次调用走的是用户自己的
+        # appkey，成本归属用户而非系统。必须在 pop 掉 _run_meta 之后 return，
+        # 否则 start 缓存的 metadata 会泄漏堆积。
+        if get_llm_override() is not None:
+            logger.debug("[token] skip user-key usage (custom appkey), purpose=%s",
+                         meta.get("purpose") or "unknown")
+            return
 
         purpose = meta.get("purpose") or "unknown"
         model_name = meta.get("model_name") or ""
