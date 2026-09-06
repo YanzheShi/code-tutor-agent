@@ -327,6 +327,10 @@ async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get
         state = graph.get_state(config)
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
+    # 不存在的会话：get_state 返回空 values，显式 404（否则后续 resume 会
+    # 撞 SessionState 校验 500——2026-09-06 集成测试实锤）
+    if not state.values or not state.values.get("session_id"):
+        raise HTTPException(404, f"Session {sid} not found")
     # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
     config = build_run_config(
         sid,
@@ -772,7 +776,11 @@ async def create_session_with_existing(
     )
 
     initial_dict = {
-        "session_id": sid, "problem": meta, "status": "awaiting_submit",
+        "session_id": sid,
+        # 归属必须注入：否则 state.user_id 停留默认 'default'，判题落库/画像
+        # 全记到 default 头上，多用户隔离被绕过（2026-09-06 集成测试实锤）
+        "user_id": _uid,
+        "problem": meta, "status": "awaiting_submit",
         "mode": "agent", "topic": meta.topic, "difficulty": meta.difficulty,
         "submissions": [], "hint_level": 0, "tutor_messages": [],
         "last_verdict": None, "error_message": "",

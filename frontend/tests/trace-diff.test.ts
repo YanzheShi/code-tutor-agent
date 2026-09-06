@@ -1,15 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 /**
  * 全量方案下的轨迹存储语义验证（取代旧的 diff 往返测试）：
  * 1) 每个 edit/run/submit 事件自带全量 code（不再有 diff 链 / 检查点 / code_format）；
  * 2) same_as_prev 事件不携带 code，读取时继承上一条 code（纯去重，不丢真相）；
  * 3) 单点丢失只丢那一条、绝不传染半场（无 diff 链拼接）。
  *
- * 用真实轨迹文件 a.json 验证存储真相即代码本身。
+ * 用编辑轨迹 fixture 验证存储真相即代码本身。
+ * （原 a.json 是 Python repr 转储且内嵌引号未转义，从未可解析——2026-09-06 换成
+ *   形状一致的 tests/data/edit-trace-sample.json，覆盖 same_as_prev 去重场景。）
  */
+
+import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 // 后端 database.reconstruct_edit_trace 的 JS 对照实现（全量方案分支）
 function reconstruct(events: any[]): { out: any[]; dropped: number } {
@@ -51,9 +53,9 @@ function compressSnapshots(events: any[]) {
   return { out, samePrev, full };
 }
 
-describe('trace full-snapshot storage on real a.json', () => {
+describe('trace full-snapshot storage on fixture', () => {
   const raw = JSON.parse(
-    readFileSync(resolve(__dirname, '..', '..', 'a.json'), 'utf-8'),
+    readFileSync(resolve(__dirname, '..', '..', 'tests', 'data', 'edit-trace-sample.json'), 'utf-8'),
   ) as any[];
   const snapEvents = raw.filter((e) => e && typeof e.code === 'string');
 

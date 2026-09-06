@@ -355,12 +355,15 @@ def test_change_password_flow(temp_db):
     assert not a.verify_password("oldpassword1", user["password_hash"])
 
 
-def test_forgot_reset_no_brevo(temp_db):
+def test_forgot_reset_no_brevo(temp_db, monkeypatch):
     """未配置 Brevo：forgot 返回引导信息（不发码），reset 任何码都 400。"""
     import anyio
     from fastapi import HTTPException
 
     from code_tutor_agent.api import auth as a
+
+    # 显式清空 key，隔离本地 .env（2026-09-06 起真 key 已配置，隐式依赖会假红）
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
 
     dbmod.create_user("nr@test.com", a.hash_password("whatever123"))
 

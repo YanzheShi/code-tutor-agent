@@ -362,3 +362,117 @@ async def test_analyze_intent_allows_generic_ds_topic():
     assert intent.difficulty == "medium"
     assert intent.is_ready is True
     assert "设计类" not in (intent.next_message or "")
+
+
+# ── 2026-09-06 出题死路 bug（"请出一道中等难度的队列题"卡 dialog 态）回归 ──
+
+class TestExplicitRequestDetection:
+    """_detect_explicit_request：确定性提取 (topic, difficulty)。"""
+
+    def test_queue_medium_full_phrase(self):
+        from code_tutor_agent.agents.agent_dialog import _detect_explicit_request
+        assert _detect_explicit_request("请出一道中等难度、主题关于「队列」的算法题。") == ("队列", "medium")
+
+    def test_easy_dp(self):
+        from code_tutor_agent.agents.agent_dialog import _detect_explicit_request
+        assert _detect_explicit_request("来个简单的动态规划") == ("动态规划", "easy")
+
+    def test_medium_before_hard_keyword_collision(self):
+        """「中等难度」的「难」不得被 hard 分支抢走（顺序敏感，勿回退）。"""
+        from code_tutor_agent.agents.agent_dialog import _detect_explicit_request
+        assert _detect_explicit_request("中等难度的题")[1] == "medium"
+
+    def test_topic_without_difficulty_no_force(self):
+        from code_tutor_agent.agents.agent_dialog import _detect_explicit_request
+        assert _detect_explicit_request("我想练队列") == ("队列", "")
+
+    def test_no_signal(self):
+        from code_tutor_agent.agents.agent_dialog import _detect_explicit_request
+        assert _detect_explicit_request("随便") == ("", "")
+
+
+class TestExplicitGenerateSignals:
+    """chat.py 确定性兜底关键词：必须覆盖"请出一道…"这个口语变体。"""
+
+    def test_chu_yi_dao_hits(self):
+        from code_tutor_agent.api.routers.chat import _explicit_generate_signals
+        assert _explicit_generate_signals("请出一道中等难度、主题关于「队列」的算法题。") is True
+
+    def test_variants_hit(self):
+        from code_tutor_agent.api.routers.chat import _explicit_generate_signals
+        for msg in ("出一题", "来一题", "给我出题", "出道题吧", "开始做题"):
+            assert _explicit_generate_signals(msg) is True, msg
+
+    def test_plain_chat_no_hit(self):
+        from code_tutor_agent.api.routers.chat import _explicit_generate_signals
+        assert _explicit_generate_signals("队列和栈有什么区别？") is False
+
+
+@pytest.mark.asyncio
+async def test_backstop_forces_ready_on_llm_inconsistency():
+    """精确复现生产 bug：LLM 结构化输出成功但 is_ready=False（嘴上说出题）。
+
+    正向兜底必须在设计围栏放行后强制 is_ready=True，会话不得死在 dialog 态。
+    """
+    from unittest.mock import patch
+
+    from code_tutor_agent.agents import agent_dialog
+    from code_tutor_agent.schemas.state import Message
+
+    history = [
+        Message(role="tutor", content="想练什么类型的题？"),
+        Message(role="user", content="请出一道中等难度、主题关于「队列」的算法题。"),
+    ]
+
+    class _FakeStructured:
+        def invoke(self, messages):
+            # LLM 的自相矛盾输出（生产实锤原样复刻）
+            return agent_dialog.DialogIntent(
+                topic="队列", difficulty="medium", is_ready=False,
+                next_message="我会为你准备一道应用类的中等难度队列题，稍等，马上出题 🚀",
+            )
+
+    class _FakeLLM:
+        def with_structured_output(self, schema):
+            return _FakeStructured()
+
+    with patch.object(agent_dialog, "_build_profile_summary", return_value=""), \
+         patch.object(agent_dialog, "_build_memory_summary", return_value=""), \
+         patch.object(agent_dialog, "get_llm", return_value=_FakeLLM()):
+        intent = await agent_dialog.analyze_user_intent(history)
+
+    assert intent.is_ready is True
+    assert intent.topic == "队列"
+    assert intent.difficulty == "medium"
+
+
+@pytest.mark.asyncio
+async def test_backstop_never_overrides_design_refusal():
+    """设计类硬守护优先于正向兜底：明确要求设计题时不得被强推 ready。"""
+    from unittest.mock import patch
+
+    from code_tutor_agent.agents import agent_dialog
+    from code_tutor_agent.schemas.state import Message
+
+    history = [
+        Message(role="tutor", content="想练什么类型的题？"),
+        Message(role="user", content="我要做一道中等难度的 LRU 缓存设计题"),
+    ]
+
+    class _FakeStructured:
+        def invoke(self, messages):
+            return agent_dialog.DialogIntent(
+                topic="设计", difficulty="medium", is_ready=False,
+                next_message="设计类暂不支持哦",
+            )
+
+    class _FakeLLM:
+        def with_structured_output(self, schema):
+            return _FakeStructured()
+
+    with patch.object(agent_dialog, "_build_profile_summary", return_value=""), \
+         patch.object(agent_dialog, "_build_memory_summary", return_value=""), \
+         patch.object(agent_dialog, "get_llm", return_value=_FakeLLM()):
+        intent = await agent_dialog.analyze_user_intent(history)
+
+    assert intent.is_ready is False  # 设计围栏 return 在前，正向兜底不得翻案

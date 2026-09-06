@@ -1,0 +1,56 @@
+# ──────────────────────────────────────────────────────────
+#  Code Tutor Agent — ARM (linux/arm64) 部署 override
+#
+#  背景：官方 judge0/judge0:1.13.1 镜像仅 amd64，ARM 服务器上拉不到。
+#  本文件将其替换为社区 aarch64 构建（fork 自官方 1.13.1，API 同版本）：
+#     https://github.com/Undiluted7027/judge0-arm
+#     镜像：mechaadi/judge0:1.0.0-aarch64
+#
+#  用法（在项目根目录执行）：
+#     docker compose -f docker/docker-compose.yml \
+#                    -f docker/docker-compose.arm.yml \
+#                    --profile judge0 up -d
+#
+#  注意：
+#  1. 该 fork 将 server 与 worker 拆为两个容器，worker 必须同时启动，
+#     否则任务队列无人消费，提交会一直 pending。
+#  2. 两个 judge0 容器均需 privileged: true（isolate 沙箱要求，与官方一致）。
+#  3. 宿主机内核仍需满足 isolate 的 cgroup 要求（部分新发行版默认 cgroup v2，
+#     需在 GRUB_CMDLINE_LINUX 加 systemd.unified_cgroup_hierarchy=0）。
+#  4. 首次部署前先验证镜像可拉取：
+#     docker pull mechaadi/judge0:1.0.0-aarch64
+# ──────────────────────────────────────────────────────────
+
+services:
+  # 替换 Judge0 主服务（API）为 aarch64 镜像；env/healthcheck 沿用主 compose 定义
+  judge0:
+    image: mechaadi/judge0:1.0.0-aarch64
+    privileged: true
+
+  # fork 拆分出的判题 worker（消费 Sidekiq 队列，必须与 judge0 成对出现）
+  judge0-worker:
+    image: mechaadi/judge0:1.0.0-aarch64
+    command: ["./scripts/workers"]
+    container_name: cta-judge0-worker
+    restart: unless-stopped
+    privileged: true
+    depends_on:
+      judge0-db:
+        condition: service_healthy
+      judge0-redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: judge0-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: judge0
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${JUDGE0_POSTGRES_PASSWORD:-ct_pg_pwd}
+      REDIS_PASSWORD: ${JUDGE0_REDIS_PASSWORD:-ct_redis_pwd}
+      MEMORY_LIMIT: ${JUDGE0_MEM_LIMIT:-512000000}
+      CPU_TIME_LIMIT: ${JUDGE0_CPU_TIME_LIMIT:-5}
+      CPU_EXTRA_TIME: 1
+      MAX_PROCESSES_PER_USER: 64
+      NETWORK_ENABLED: false
+      ALLOW_REQUEST_ORIGIN: "*"
+    networks:
+      - cta-network

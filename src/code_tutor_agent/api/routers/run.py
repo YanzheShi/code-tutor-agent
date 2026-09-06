@@ -40,6 +40,11 @@ async def run_code(
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
+    # 不存在的会话：get_state 不抛错而是返回空 values，必须显式判 404
+    # （否则会落进下方 400「未在等待提交」，语义错误且 500 风险）
+    if not state.values or not state.values.get("session_id"):
+        raise HTTPException(404, f"Session {sid} not found")
+
     # ── 卡死兜底：会话停在终态但题已就绪（无挂起节点）时重新挂到 wait_for_submit ──
     # 两种历史卡死：
     #   1) dialog + problem：旧会话 graph 停在 END、无挂起中断，resume 空转；

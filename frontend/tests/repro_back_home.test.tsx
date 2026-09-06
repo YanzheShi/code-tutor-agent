@@ -3,23 +3,23 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import App from '../src/App';
 import { ThemeProvider } from '../src/hooks/useTheme';
 
+// 多租户改造后 App 有登录门禁，且 useSession 的 RESTORE_KEY 在模块导入时
+// 就按 userKey() 计算（code-tutor:session:<uid>）——因此 auth 必须在导入前就位。
+// vi.hoisted 在所有 import 之前执行，此时 jsdom 环境已就绪。
+vi.hoisted(() => {
+  localStorage.setItem(
+    'code-tutor:auth',
+    JSON.stringify({ token: 'test-token', user: { id: 1, email: 't@test.com', role: 'user' } }),
+  );
+  localStorage.setItem(
+    'code-tutor:session:1',
+    JSON.stringify({ screen: 'main', sessionId: 's1', mode: 'agent' }),
+  );
+});
+
 vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="monaco-stub" />,
 }));
-
-class EventSourceStub {
-  url: string;
-  listeners: Record<string, (e: any) => void> = {};
-  constructor(url: string) { this.url = url; }
-  addEventListener(type: string, cb: (e: any) => void) { this.listeners[type] = cb; }
-  close() {}
-}
-
-beforeAll(() => {
-  if (!Element.prototype.scrollIntoView) {
-    Element.prototype.scrollIntoView = () => {};
-  }
-});
 
 const DIALOG_STATE = {
   session_id: 's1',
@@ -38,19 +38,39 @@ const DIALOG_STATE = {
 function mockFetch() {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     const u = String(url);
+    if (u.includes('/auth/me')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ user: { id: 1, email: 't@test.com', role: 'user' } }),
+      } as unknown as Response;
+    }
     if (u.includes('/session/') && u.includes('/state')) {
-      return { ok: true, json: async () => DIALOG_STATE } as Response;
+      return { ok: true, status: 200, json: async () => DIALOG_STATE } as unknown as Response;
+    }
+    if (u.includes('/progress/stream')) {
+      // SSE fetch 流：永久挂起不关闭（关闭会被判为「连接已断开」→ error 屏；
+      // 组件卸载时 abort 主动退出，不触发 onError）
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream<Uint8Array>({ start() { /* pending */ } }),
+      } as unknown as Response;
     }
     if (u === '/__edit_trace') {
-      return { ok: true, status: 204 } as Response;
+      return { ok: true, status: 204 } as unknown as Response;
     }
     throw new Error('unexpected fetch: ' + u);
   }));
 }
 
+beforeAll(() => {
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = () => {};
+  }
+});
+
 beforeEach(() => {
-  vi.stubGlobal('EventSource', EventSourceStub as any);
-  localStorage.clear();
   mockFetch();
 });
 
@@ -61,7 +81,6 @@ afterEach(() => {
 
 describe('back to home', () => {
   it('renders WelcomeScreen after clicking 回到主页', async () => {
-    localStorage.setItem('code-tutor:session', JSON.stringify({ screen: 'main', sessionId: 's1', mode: 'agent' }));
     render(
       <ThemeProvider><App /></ThemeProvider>,
     );
@@ -90,7 +109,6 @@ describe('back to home', () => {
       onDidChangeModelContent: () => disposable,
     };
 
-    localStorage.setItem('code-tutor:session', JSON.stringify({ screen: 'main', sessionId: 's1', mode: 'agent' }));
     render(
       <ThemeProvider><App /></ThemeProvider>,
     );
