@@ -96,6 +96,29 @@ class Judge0SubmissionResult:
 
 # ── Helpers ──
 
+_FUTURE_ANNOTATIONS_IMPORT = "from __future__ import annotations"
+_BUILTIN_GENERIC_RE = re.compile(r"\b(?:list|dict|tuple|set)\s*\[")
+
+
+def _py38_compat_source(source: str, language_id: int) -> str:
+    """Judge0 CE 的 Python 只有 3.8.1（lang=71）：内建泛型注解（``list[str]`` 等）
+    会在函数定义时被求值，直接 ``TypeError: 'type' object is not subscriptable``。
+
+    预置 PEP 563 延迟注解求值（``from __future__ import annotations``，3.7+ 支持）
+    即可让 3.8 兼容这类注解。仅当：语言是 Judge0 Python、源码含内建泛型模式、
+    且尚未带 future import 时才前置一行。
+
+    ⚠️ 行号影响：前置会使 traceback 行号 +1（submit_test_cases 的 user_start
+    行号映射是在前置后的 harness 上重算的，不受影响）。
+    """
+    if language_id != JUDGE0_PYTHON_ID:
+        return source
+    if _FUTURE_ANNOTATIONS_IMPORT in source:
+        return source
+    if not _BUILTIN_GENERIC_RE.search(source):
+        return source
+    return _FUTURE_ANNOTATIONS_IMPORT + "\n" + source
+
 
 def _build_test_case_harness(
     source_code: str,
@@ -301,6 +324,7 @@ def run_code(
         Normalised ``Judge0SubmissionResult``.
     """
     logger.info("▶ judge0.run_code() — %d chars, lang=%d", len(source_code), language_id)
+    source_code = _py38_compat_source(source_code, language_id)
     try:
         raw = _call_api({
             "source_code": source_code,
@@ -352,6 +376,9 @@ def submit_test_cases(
     logger.info("▶ judge0.submit_test_cases() — %d test cases, %d chars", n, len(source_code))
 
     harness = _build_test_case_harness(source_code, test_cases, function_signature)
+    # PEP 563 前置必须在 harness 顶部（future import 必须是文件第一条语句），
+    # user_start 行号映射在下方基于最终 harness 重算，前置不影响其正确性。
+    harness = _py38_compat_source(harness, language_id)
     stdin = json.dumps(test_cases)
 
     try:
