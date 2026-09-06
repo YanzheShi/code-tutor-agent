@@ -106,6 +106,20 @@ function formatTraceAnalysis(a: any): string {
   return lines.join('\n');
 }
 
+/**
+ * 去掉相邻且 (role, content) 完全相同的消息，避免后端/本地双写导致对话里出现重复气泡。
+ * 仅合并相邻同类重复，不影响正常的多轮对话（不同内容/不同角色不会被误删）。
+ */
+function dedupeMessages(msgs: Message[]): Message[] {
+  const out: Message[] = [];
+  for (const m of msgs) {
+    const last = out[out.length - 1];
+    if (last && last.role === m.role && (last.content || '') === (m.content || '')) continue;
+    out.push(m);
+  }
+  return out;
+}
+
 export function useSession() {
   const initial = getInitialPersist();
   // 只恢复 main 屏（做题页）；loading/error/admin 刷新后回 welcome 更安全
@@ -117,6 +131,9 @@ export function useSession() {
   // 当前题 problem_id / 导师对话 → 供 useEditTrace 计算 dialogue_before（对话相关性）
   const problemIdRef = useRef<string | null>(null);
   const tutorMessagesRef = useRef<Message[]>([]);
+  // 防重入锁：避免「开始出题」/发送按钮被连点/双击时重复触发 handleAgentSend，
+  // 导致本地对话数组被重复追加 user + 出题占位（done 事件若被错过，重复气泡会残留）。
+  const sendLockRef = useRef(false);
   // 编辑器代码 ref：始终同步 React state 中的最新代码，供 mark 在编辑器未挂载时兜底
   const editorCodeRef = useRef('');
   // 编辑轨迹采集（仅前端采集 + 落本地文件，不做后端处理）
@@ -184,7 +201,7 @@ export function useSession() {
   function applySessionState(resp: SessionStateResp, fillEditor = false) {
     setSessionId(resp.session_id); setProblem(resp.problem);
     if (resp.mode) setMode(resp.mode);
-    setTutorMessages(resp.tutor_messages); setHintLevel(resp.hint_level);
+    setTutorMessages(dedupeMessages(resp.tutor_messages)); setHintLevel(resp.hint_level);
     setLatestVerdict(resp.last_verdict);
     if ((resp as any).phase) setPhase((resp as any).phase);
     setJudgeReport(resp.last_review_payload as JudgeReport | null);
@@ -348,13 +365,15 @@ export function useSession() {
 
   // ── Agent 对话 ──
   const handleAgentSend = useCallback(async (text: string) => {
-    if (!sessionId) return;
-    setTutorMessages(prev => [...prev, { role: 'user', content: text }, { role: 'tutor', content: '' }]);
+    if (!sessionId || sendLockRef.current) return;
+    sendLockRef.current = true;
     try {
+      setTutorMessages(prev => [...prev, { role: 'user', content: text }, { role: 'tutor', content: '' }]);
       await readStream(sessionId, text, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
       });
     } catch (e) { console.error('Agent chat error:', e); return; }
+    finally { sendLockRef.current = false; }
     // 对话若触发出下一题，题目就绪时后端会经 SSE 推送 done 事件自动进入主界面，
     // 无需轮询 getState。纯对话（无题）时 SSE 也会推 dialog-ready 的 done，无副作用。
     startProgress(sessionId);
@@ -362,16 +381,19 @@ export function useSession() {
 
   // ── 普通聊天 ──
   const handleChat = useCallback(async () => {
-    if (!chatInput.trim() || !sessionId) return;
+    if (!chatInput.trim() || !sessionId || sendLockRef.current) return;
+    sendLockRef.current = true;
     const msg = chatInput.trim(); setChatInput('');
-    setTutorMessages(prev => [...prev, { role: 'user' as const, content: msg }, { role: 'tutor' as const, content: '' }]);
     try {
+      setTutorMessages(prev => [...prev, { role: 'user' as const, content: msg }, { role: 'tutor' as const, content: '' }]);
       const ok = await readStream(sessionId, msg, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor' as const, content: (last.content || '') + token }; return next; });
       }, undefined, editorCode);
       if (!ok) setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat not available)' }; return next; });
     } catch {
       setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat error)' }; return next; });
+    } finally {
+      sendLockRef.current = false;
     }
   }, [chatInput, sessionId, readStream, editorCode]);
 
@@ -470,7 +492,7 @@ export function useSession() {
       setEditorCode('');
       clearDraft(sessionId);
       editorInitialized.current = false;
-      if (data?.tutor_messages?.length) setTutorMessages(data.tutor_messages as Message[]);
+      if (data?.tutor_messages?.length) setTutorMessages(dedupeMessages(data.tutor_messages as Message[]));
       setHintLevel(0); setLatestVerdict(null); setJudgeReport(null);
       setRunResults(null); setSubmissions([]);
       setProgressMsgs([]);
@@ -504,7 +526,7 @@ export function useSession() {
           initEditor(data.problem as ProblemMeta, sessionId);
           // Agent 模式保留后端返回的 tutor_messages，不清空
           if (mode === 'agent' && data.tutor_messages?.length) {
-            setTutorMessages(data.tutor_messages as Message[]);
+            setTutorMessages(dedupeMessages(data.tutor_messages as Message[]));
           } else {
             setTutorMessages([]);
           }

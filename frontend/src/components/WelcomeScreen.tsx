@@ -224,10 +224,14 @@ export default function WelcomeScreen({
   onStart,
   onStartExisting,
   onOpenAdmin,
+  onLogout,
+  user,
 }: {
   onStart: (topic: string, difficulty: string, mode: string) => void;
   onStartExisting?: (problemId: number) => void;
   onOpenAdmin?: () => void;
+  onLogout?: () => void;
+  user?: { id: number; email: string; role: string } | null;
 }) {
   const [tab, setTab] = useState<Tab>('agent');
   const [problems, setProblems] = useState<ProblemBrief[]>([]);
@@ -258,9 +262,19 @@ export default function WelcomeScreen({
       {/* 固定高度卡片：标题+标签栏+内容整体打包，所有 tab 共享同一卡片高度 → 切换零跳动 */}
       <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-ct-border bg-ct-surface px-6 py-6 shadow-sm max-h-[calc(100vh-2rem)] min-h-[520px] h-[760px]">
         {/* 标题（钉在卡片顶部，不随内容移动） */}
-        <div className="shrink-0 text-center">
+        <div className="relative shrink-0 text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
           <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 对抗判题 · 渐进辅导</p>
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              title={user?.email ? `退出登录 (${user.email})` : '退出登录'}
+              className="absolute right-0 top-0 rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+            >
+              退出登录
+            </button>
+          )}
         </div>
 
         {/* 标签切换（固定，切换 tab 不漂移） */}

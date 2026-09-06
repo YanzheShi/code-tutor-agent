@@ -17,6 +17,11 @@ export default function ProblemDesc({ problem }: { problem: ProblemMeta }) {
         }`}>
           {problem.difficulty}
         </span>
+        {problem.problem_id != null && (
+          <span className="rounded bg-ct-hover px-2 py-0.5 text-xs font-medium text-ct-muted" title="题目 ID">
+            #{problem.problem_id}
+          </span>
+        )}
       </div>
 
       {/* 描述 — 富文本 HTML 或 Markdown */}

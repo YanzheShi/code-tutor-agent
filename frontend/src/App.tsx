@@ -4,7 +4,7 @@ import LoginScreen from './components/LoginScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import AdminPanel from './components/AdminPanel';
 import MainLayout, { type MainLayoutProps } from './components/MainLayout';
-import { fetchMe, getStoredAuth, isAdmin, type AuthUser } from './api/auth';
+import { fetchMe, getStoredAuth, isAdmin, clearAuth, type AuthUser } from './api/auth';
 import { useSession } from './hooks/useSession';
 import { useTheme } from './hooks/useTheme';
 
@@ -36,6 +36,14 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
 
+  // ── 退出登录：JWT 无状态，前端清掉 localStorage 凭证即视为登出（无需后端接口）──
+  const logout = () => {
+    clearAuth();
+    setUser(null);
+    // 整页重载回到登录页，并清空内存态（useSession 会以未登录身份重新初始化）
+    window.location.reload();
+  };
+
   const s = useSession();
   const { screen, errorMsg, progressMsgs } = s;
 
@@ -55,7 +63,7 @@ export default function App() {
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'welcome') return (
     <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-      onOpenAdmin={s.onOpenAdmin} /></>
+      onOpenAdmin={s.onOpenAdmin} onLogout={logout} user={user} /></>
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') {
@@ -63,7 +71,7 @@ export default function App() {
     if (!isAdmin()) {
       return (
         <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-          onOpenAdmin={s.onOpenAdmin} /></>
+          onOpenAdmin={s.onOpenAdmin} onLogout={logout} user={user} /></>
       );
     }
     return <AdminPanel onClose={() => s.setScreen('welcome')} />;
@@ -93,6 +101,7 @@ export default function App() {
     onSetProgressMsgs: s.setProgressMsgs,
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
         onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
+    onLogout: logout,
     analyzingTrace: s.analyzingTrace, onAnalyzeTrace: s.onAnalyzeTrace,
     traceFailed: s.traceFailed,
     traceAnalysis: s.traceAnalysis, traceMessages: s.traceMessages,
