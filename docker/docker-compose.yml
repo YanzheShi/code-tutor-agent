@@ -105,6 +105,7 @@ services:
       dockerfile: docker/Dockerfile
     image: code-tutor-agent-backend:latest
     container_name: cta-backend
+    restart: unless-stopped
     ports:
       - "8765:8765"
     volumes:
@@ -141,6 +142,7 @@ services:
       dockerfile: docker/Dockerfile.frontend
     image: code-tutor-agent-frontend:latest
     container_name: cta-frontend
+    restart: unless-stopped
     ports:
       - "3000:80"
     depends_on:

@@ -20,7 +20,6 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app/src"
 
 # 复制源码（PYTHONPATH 使 code_tutor_agent 可导入）
 COPY src/ src/
-COPY data/ data/
 COPY .env.example .env.example
 
 EXPOSE 8765

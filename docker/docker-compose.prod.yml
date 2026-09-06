@@ -9,25 +9,38 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    volumes: []
+    # 🔴 必须挂载命名卷持久化数据：数据库 / JWT 密钥文件(.jwt_secret) / checkpoint 都在 /app/data 下。
+    # 不挂的话，容器重建会丢失全部用户、会话与登录态（JWT 密钥重新随机 → 旧 token 全失效）。
+    volumes:
+      - cta_data:/app/data
     environment:
       - UVICORN_RELOAD=false
+      # JWT 密钥：留空（默认）时应用首次启动生成随机密钥并持久化到挂载卷 data/db/.jwt_secret，
+      # 配合上方命名卷即可在重建容器后保持登录态稳定。如需显式指定可在 .env 设 JWT_SECRET。
+      - JWT_SECRET=${JWT_SECRET:-}
     deploy:
-      replicas: 2
+      # 🔴 固定为 1 副本：当前架构用 SQLite（单文件写锁）+ 内存态 _generation_progress + 每容器 JWT 密钥，
+      # 多副本会导致写锁争用、SSE 进度丢失、跨副本 token 互不相认。要水平扩展需先换 Postgres + 外部 KV。
+      replicas: 1
       resources:
         limits:
           memory: 2G
           cpus: "1.0"
 
-   frontend:
-     build:
-       context: ..
-       dockerfile: docker/Dockerfile.frontend
-       args:
-         VITE_API_BASE: /
-     environment: []
-     deploy:
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      args:
+        VITE_API_BASE: /
+    environment: []
+    deploy:
       resources:
         limits:
           memory: 128M
           cpus: "0.25"
+
+# 持久化卷（数据库 / JWT 密钥 / checkpoint，重建容器不丢失）
+volumes:
+  cta_data:
+    driver: local
