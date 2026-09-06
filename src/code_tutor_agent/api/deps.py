@@ -54,6 +54,24 @@ def get_graph() -> CompiledStateGraph:
     return _graph
 
 
+def invoke_graph_tracked(graph: CompiledStateGraph, graph_input, config, entry: str = ""):
+    """graph.invoke 的监控包装（docs/monitoring-alerts-design.md §14.3）。
+
+    行为与 graph.invoke 完全一致（异常原样上抛），仅追加埋点：
+    graph_ok/graph_fail 计数 + graph_fail streak（连续 ≥2 次 → critical 告警）。
+    埋点本身永不抛异常，不影响主流程。
+    """
+    from code_tutor_agent.monitoring.metrics import record_graph_call
+
+    try:
+        result = graph.invoke(graph_input, config)
+        record_graph_call(entry, True)
+        return result
+    except Exception:
+        record_graph_call(entry, False)
+        raise
+
+
 def pause_safe_update(
     graph: CompiledStateGraph,
     config: dict,

@@ -13,7 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from langgraph.types import Command
 
 from code_tutor_agent.api.auth import get_current_user, user_key
-from code_tutor_agent.api.deps import get_graph, run_with_concurrency_limit
+from code_tutor_agent.api.deps import (
+    get_graph,
+    invoke_graph_tracked,
+    run_with_concurrency_limit,
+)
 from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.api import RunCodeRequest, RunCodeResponse
@@ -69,7 +73,7 @@ async def run_code(
         _resume_input["agent_dialog_complete"] = True
         _resume_input["status"] = "awaiting_submit"
         _resume_input["error_message"] = ""
-        await asyncio.to_thread(graph.invoke, _resume_input, config)
+        await asyncio.to_thread(invoke_graph_tracked, graph, _resume_input, config, "run_resume")
         state = graph.get_state(config)
 
     # 只有 graph 暂停在 wait_for_submit（等待提交/运行）时才允许运行；
@@ -92,9 +96,11 @@ async def run_code(
     def _do_run() -> None:
         # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，
         # 避免独占事件循环、拖垮同进程的其它请求与 SSE 推流。
-        graph.invoke(
+        invoke_graph_tracked(
+            graph,
             Command(resume={"code": body.code, "language": body.language, "scope": "sample"}),
             config,
+            entry="run_sample",
         )
 
     # 并发护栏（P3）：运行判题计入全局信号量，超员排队

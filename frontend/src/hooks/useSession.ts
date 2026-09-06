@@ -8,6 +8,7 @@ import { useSSE } from './useSSE';
 import { useProgressSSE } from './useProgressSSE';
 import { API_BASE } from '../api/config';
 import { useEditTrace } from './useEditTrace';
+import { reportError } from './useErrorReport';
 
 const BASE = API_BASE;
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin' | 'settings';
@@ -225,6 +226,7 @@ export function useSession() {
         setScreen('main');
       },
       onError: (msg) => {
+        reportError('sse_error', msg, { sessionId: sid });
         setErrorMsg(msg);
         setScreen('error');
       },
@@ -281,7 +283,7 @@ export function useSession() {
         setScreen('main'); setMode('agent');
       }
       startProgress(resp.session_id);
-    } catch (e) { setScreen('error'); setErrorMsg(String(e)); }
+    } catch (e) { reportError('screen_error', String(e)); setScreen('error'); setErrorMsg(String(e)); }
   }, [startProgress]);
 
   const handleStartExisting = useCallback(async (problemId: number) => {
@@ -292,7 +294,7 @@ export function useSession() {
       const r = await apiFetch(BASE + '/session/by-problem/' + problemId, { method: 'POST' });
       if (!r.ok) throw new Error('failed: ' + r.status);
       applySessionState(await r.json(), true); setScreen('main');
-    } catch (e) { setScreen('error'); setErrorMsg(String(e)); }
+    } catch (e) { reportError('screen_error', String(e), { problemId }); setScreen('error'); setErrorMsg(String(e)); }
   }, []);
 
   // ── 提交 ──

@@ -7,8 +7,13 @@ import SettingsPanel from './components/SettingsPanel';
 import MainLayout, { type MainLayoutProps } from './components/MainLayout';
 import { fetchMe, getStoredAuth, isAdmin, clearAuth, type AuthUser } from './api/auth';
 import { useSession } from './hooks/useSession';
+import { useErrorReport } from './hooks/useErrorReport';
+import AnnouncementsBanner from './components/AnnouncementsBanner';
 
 export default function App() {
+  // 前端错误上报全局兜底（幂等安装，docs/monitoring-alerts-design.md §14.2）
+  useErrorReport();
+
   // ── 登录门禁（多用户改造 P4）：本地有凭证则后台校验 token，无凭证直接进登录页 ──
   const [user, setUser] = useState<AuthUser | null>(() => getStoredAuth()?.user ?? null);
   const [authChecked, setAuthChecked] = useState(() => !getStoredAuth());
@@ -96,5 +101,10 @@ export default function App() {
     traceAsking: s.traceAsking, traceInput: s.traceInput,
     onSetTraceInput: s.setTraceInput, onTraceAsk: s.onTraceAsk,
   };
-  return <MainLayout {...mainProps} />;
+  return (
+    <>
+      <AnnouncementsBanner />
+      <MainLayout {...mainProps} />
+    </>
+  );
 }

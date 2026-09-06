@@ -29,6 +29,9 @@ from code_tutor_agent.api.routers import (
     settings,
     token,
 )
+from code_tutor_agent.api.routers.monitoring import admin_router as monitoring_admin_router
+from code_tutor_agent.api.routers.monitoring import client_router as monitoring_client_router
+from code_tutor_agent.api.routers.monitoring import public_router as monitoring_public_router
 from code_tutor_agent.progress import _generation_progress
 
 # ── 结构化 JSON 日志（必须在所有 logger 使用之前调用）──
@@ -55,15 +58,26 @@ async def lifespan(_app: FastAPI):
     cleanup_task = asyncio.create_task(_session_cleanup_loop())
     logger.info("Background session cleanup task started")
 
+    # 启动监控告警 watcher（docs/monitoring-alerts-design.md §3 ③）
+    monitor_task: asyncio.Task | None = None
+    if os.getenv("CTA_ALERTS_ENABLED", "1").strip().lower() not in ("0", "false", "no", "off"):
+        from code_tutor_agent.monitoring.watcher import run_watch_loop
+
+        monitor_task = asyncio.create_task(run_watch_loop())
+        logger.info("Monitoring watcher task started")
+
     yield
 
-    # Shutdown: 取消清理任务
-    cleanup_task.cancel()
-    try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-    logger.info("Background session cleanup task stopped")
+    # Shutdown: 取消后台任务
+    for task, name in ((cleanup_task, "cleanup"), (monitor_task, "monitor")):
+        if task is None:
+            continue
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Background %s task stopped", name)
 
 
 app = FastAPI(
@@ -94,6 +108,19 @@ app.add_middleware(
 )
 
 
+# ── 监控埋点辅助（非侵入：失败静默，docs/monitoring-alerts-design.md §4.2）──
+def _m_http(status_code: int) -> None:
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        reg = get_registry()
+        reg.record("http_total")
+        if status_code >= 500:
+            reg.record("http_5xx")
+    except Exception:
+        pass
+
+
 # ── 请求链路追踪：注入 request_id + 记录请求日志 ──
 @app.middleware("http")
 async def request_tracing_middleware(request: Request, call_next):
@@ -113,6 +140,7 @@ async def request_tracing_middleware(request: Request, call_next):
         response = await call_next(request)
         duration_ms = round((time.monotonic() - start) * 1000, 2)
         response.headers["X-Request-ID"] = request_id
+        _m_http(response.status_code)
         logger.info("request completed", extra={
             "method": request.method,
             "path": request.url.path,
@@ -122,6 +150,7 @@ async def request_tracing_middleware(request: Request, call_next):
         return response
     except Exception:
         duration_ms = round((time.monotonic() - start) * 1000, 2)
+        _m_http(500)
         logger.exception("request failed", extra={
             "method": request.method,
             "path": request.url.path,
@@ -177,6 +206,13 @@ app.include_router(admin.router, prefix="/admin", tags=["admin"],
                    dependencies=[Depends(require_admin)])
 app.include_router(token.router, prefix="/admin/token", tags=["token"],
                    dependencies=[Depends(require_admin)])
+# 监控告警 / 公告（admin 部分要求管理员；公告读取登录即可）
+app.include_router(monitoring_admin_router, prefix="/admin", tags=["monitoring"],
+                   dependencies=[Depends(require_admin)])
+app.include_router(monitoring_public_router, tags=["monitoring"],
+                   dependencies=[Depends(get_current_user)])
+# 前端错误上报：公开（出错时 token 可能已失效），字段白名单+限长防滥用
+app.include_router(monitoring_client_router, tags=["monitoring"])
 
 
 @app.get("/health")

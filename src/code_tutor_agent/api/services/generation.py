@@ -6,7 +6,7 @@ import logging
 import os
 import re
 
-from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked
 from code_tutor_agent.generation import ProblemGenerationAgent
 from code_tutor_agent.generation.state import GenEvent
 from code_tutor_agent.generation.suite import build_suite
@@ -70,7 +70,7 @@ async def run_generation(sid: str, initial_dict: dict):
 
         # 带超时的 graph invoke：不能在生成阶段无限等待 LLM
         await asyncio.wait_for(
-            asyncio.to_thread(graph.invoke, initial.model_dump(), config),
+            asyncio.to_thread(invoke_graph_tracked, graph, initial.model_dump(), config, "generation"),
             timeout=GENERATION_TIMEOUT,
         )
         _generation_progress.setdefault(sid, []).append("\u2705 题目已就绪，正在后台生成完整测试用例...")
@@ -163,7 +163,7 @@ async def _fallback_static_problem(sid: str, config: dict, initial_dict: dict):
             tutor_messages=[TutorMsg(role="tutor", content=f"从备用题库选取 **{meta.title}**，加油~")],
         )
         graph = get_graph()
-        await asyncio.to_thread(graph.invoke, state.model_dump(), config)
+        await asyncio.to_thread(invoke_graph_tracked, graph, state.model_dump(), config, "static_fallback")
         _generation_progress.setdefault(sid, []).append(
             f"\u2705 已从备用题库选取 **{meta.title}**（{meta.difficulty}）"
         )

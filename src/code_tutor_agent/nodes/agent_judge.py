@@ -32,6 +32,32 @@ from code_tutor_agent.schemas.state import JudgeResult, SessionState
 
 logger = logging.getLogger(__name__)
 
+
+def _m_judge_error(detail: str = "") -> None:
+    """判题基础设施故障埋点（非侵入：失败静默）。只计 infra 错误，用户 WA/RE 不算。"""
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        reg = get_registry()
+        reg.record("judge_error")
+        streak = reg.record_streak("judge_fail", ok=False)
+        if streak >= 3:
+            logger.error("[metrics] judge infra failure streak=%d (last: %s)", streak, detail)
+    except Exception:
+        pass
+
+
+def _m_judge_ok() -> None:
+    """判题正常出结果（任意 verdict，含 WA/RE/TLE——那是教学结果不是故障）。"""
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        reg = get_registry()
+        reg.record("judge_total")
+        reg.record_streak("judge_fail", ok=True)
+    except Exception:
+        pass
+
 # Timeout per test case during agent judging
 AGENT_JUDGE_TIMEOUT = 5.0
 
@@ -329,6 +355,7 @@ def agent_judge_node(state: SessionState) -> dict:
         # 返回 status=error 由 agent_judge_router 路由到 wait_for_submit_node 保活，
         # 用户改代码再提交即可重试。
         logger.exception("agent_judge_node — 前置加载失败，会话保活: %s", exc)
+        _m_judge_error(f"前置加载失败：{exc}")
         return {"status": "error", "error_message": f"判题前置加载失败：{exc}"}
     if isinstance(resolved, dict):
         return resolved
@@ -353,6 +380,7 @@ def agent_judge_node(state: SessionState) -> dict:
     # ── 判题分析（sample 跳过 LLM / full 走 LLM）──
     analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
     logger.info("Verdict: %s | should_retry=%s", analysis.verdict, analysis.should_retry)
+    _m_judge_ok()
 
     # ── Build the tutor message with warm feedback ──
     feedback_msg = analysis.warm_feedback

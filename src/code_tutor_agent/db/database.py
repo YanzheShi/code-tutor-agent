@@ -82,6 +82,16 @@ def _all_thread_stacks() -> str:
     return " // ".join(parts)
 
 
+def _m_record(name: str, value: float = 1.0) -> None:
+    """监控埋点（非侵入：失败静默，绝不影响 DB 主流程）。"""
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        get_registry().record(name, value)
+    except Exception:
+        pass
+
+
 def _with_conn(fn):
     """Execute *fn(cursor)* inside a try/commit/except/rollback/finally block.
 
@@ -93,12 +103,18 @@ def _with_conn(fn):
         result = fn(conn.cursor())
         conn.commit()
         return result
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        try:
+            if "database is locked" in str(exc).lower():
+                _m_record("db_locked")
+        except Exception:
+            pass
         raise
     finally:
         elapsed = time.perf_counter() - started
         if elapsed >= _SLOW_TXN_SEC:
+            _m_record("db_slow_tx")
             frame = sys._current_frames().get(threading.current_thread().ident)
             logger.warning(
                 "slow DB transaction %.2fs | self: %s | threads: %s",
@@ -428,6 +444,38 @@ def _init_db_tables(cursor) -> None:
             cache_read_tokens INTEGER DEFAULT 0,
             cost REAL DEFAULT 0.0,
             PRIMARY KEY (day, purpose, model_alias, user_id)
+        )
+    """)
+    # 监控告警历史（docs/monitoring-alerts-design.md §8）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alert_history (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_id      TEXT NOT NULL,
+            severity     TEXT NOT NULL,
+            status       TEXT NOT NULL,
+            title        TEXT NOT NULL,
+            detail       TEXT,
+            triggered_at TEXT NOT NULL,
+            notified     INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_alert_history_time "
+        "ON alert_history(triggered_at)"
+    )
+    # 主页公告横幅（docs/monitoring-alerts-design.md §15，P1 双来源）
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS announcements (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            level      TEXT NOT NULL,
+            title      TEXT NOT NULL,
+            content    TEXT NOT NULL DEFAULT '',
+            source     TEXT NOT NULL DEFAULT 'admin',
+            rule_id    TEXT,
+            active     INTEGER DEFAULT 1,
+            starts_at  TEXT,
+            ends_at    TEXT,
+            created_at TEXT NOT NULL
         )
     """)
 
@@ -1423,6 +1471,192 @@ def purge_trace_data(days: int = 30, dry_run: bool = False) -> dict:
     except Exception as exc:
         logger.error("purge_trace_data(%d) failed: %s", days, exc)
     return stats
+
+
+# ── 监控告警：alert_history（docs/monitoring-alerts-design.md §8）──
+
+def save_alert(
+    rule_id: str,
+    severity: str,
+    status: str,
+    title: str,
+    detail: str | None = None,
+    notified: bool = False,
+) -> int:
+    """落一条告警历史。返回行 id；失败返回 0（告警落库绝不外抛）。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "INSERT INTO alert_history "
+                "(rule_id, severity, status, title, detail, triggered_at, notified) "
+                "VALUES (?, ?, ?, ?, ?, datetime('now','localtime'), ?)",
+                (rule_id, severity, status, title, detail, 1 if notified else 0),
+            )
+            return int(cursor.lastrowid or 0)
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.warning("save_alert(%s) failed (non-fatal): %s", rule_id, exc)
+        return 0
+
+
+def get_recent_alerts(limit: int = 50) -> list[dict]:
+    """告警历史，倒序。失败返回空列表。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "SELECT id, rule_id, severity, status, title, detail, triggered_at, notified "
+                "FROM alert_history ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.warning("get_recent_alerts failed (non-fatal): %s", exc)
+        return []
+
+
+def purge_alerts(days: int = 90) -> int:
+    """清理过期告警历史（默认保留 90 天），返回删除行数。"""
+    try:
+        cutoff = f"datetime('now','localtime', '-{int(days)} days')"
+        n = _with_conn(lambda cursor: cursor.execute(
+            f"DELETE FROM alert_history WHERE triggered_at < {cutoff}"
+        ).rowcount)
+        if n:
+            logger.info("purge_alerts: cleaned %d rows older than %dd", n, days)
+        return n
+    except Exception as exc:
+        logger.warning("purge_alerts failed (non-fatal): %s", exc)
+        return 0
+
+
+# ── 主页公告横幅（docs/monitoring-alerts-design.md §15）──
+
+def _deactivate_monitor_rows(cursor, rule_id: str) -> None:
+    """把某规则的历史 monitor 公告全部置 inactive（自动横幅：一次一条）。"""
+    cursor.execute(
+        "UPDATE announcements SET active = 0 "
+        "WHERE source = 'monitor' AND rule_id = ? AND active = 1",
+        (rule_id,),
+    )
+
+
+def upsert_monitor_announcement(rule_id: str, level: str, title: str, content: str) -> None:
+    """监控触发 firing 时同步一条自动横幅（同规则旧横幅失效，一次只挂一条）。"""
+    try:
+        def _do(cursor):
+            _deactivate_monitor_rows(cursor, rule_id)
+            cursor.execute(
+                "INSERT INTO announcements "
+                "(level, title, content, source, rule_id, active, created_at) "
+                "VALUES (?, ?, ?, 'monitor', ?, 1, datetime('now','localtime'))",
+                (level, title, content, rule_id),
+            )
+        _with_conn(_do)
+    except Exception as exc:
+        logger.warning("upsert_monitor_announcement(%s) failed (non-fatal): %s", rule_id, exc)
+
+
+def deactivate_monitor_announcement(rule_id: str) -> None:
+    """告警 resolved 时撤下自动横幅。"""
+    try:
+        _with_conn(lambda cursor: _deactivate_monitor_rows(cursor, rule_id))
+    except Exception as exc:
+        logger.warning("deactivate_monitor_announcement(%s) failed (non-fatal): %s", rule_id, exc)
+
+
+def create_announcement(
+    level: str,
+    title: str,
+    content: str,
+    starts_at: str | None = None,
+    ends_at: str | None = None,
+) -> int:
+    """管理员手动公告。返回行 id；失败返回 0。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "INSERT INTO announcements "
+                "(level, title, content, source, active, starts_at, ends_at, created_at) "
+                "VALUES (?, ?, ?, 'admin', 1, ?, ?, datetime('now','localtime'))",
+                (level, title, content, starts_at, ends_at),
+            )
+            return int(cursor.lastrowid or 0)
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.warning("create_announcement failed (non-fatal): %s", exc)
+        return 0
+
+
+def deactivate_announcement(announcement_id: int) -> bool:
+    """下线公告（admin 手动或通用）。返回是否命中。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE announcements SET active = 0 WHERE id = ?",
+                (int(announcement_id),),
+            )
+            return cursor.rowcount > 0
+        return bool(_with_conn(_do))
+    except Exception as exc:
+        logger.warning("deactivate_announcement(%s) failed (non-fatal): %s", announcement_id, exc)
+        return False
+
+
+def deactivate_all_monitor_announcements() -> int:
+    """watcher 启动时清空全部 monitor 横幅（进程重启 = 告警状态机重置，横幅一并撤下）。
+
+    admin 手动公告不受影响。返回撤下行数。
+    """
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE announcements SET active = 0 WHERE source = 'monitor' AND active = 1"
+            )
+            return cursor.rowcount
+        return int(_with_conn(_do))
+    except Exception as exc:
+        logger.warning("deactivate_all_monitor_announcements failed (non-fatal): %s", exc)
+        return 0
+
+
+def get_today_token_cost() -> float:
+    """今日 token 总成本（元）。按 token_usage.ts 本地日期聚合；失败返回 0。"""
+    try:
+        row = _with_conn(lambda c: c.execute(
+            "SELECT COALESCE(SUM(cost),0) FROM token_usage "
+            "WHERE substr(ts,1,10) = date('now','localtime')"
+        ).fetchone())
+        return float(row[0] or 0)
+    except Exception as exc:
+        logger.debug("get_today_token_cost failed (non-fatal): %s", exc)
+        return 0.0
+
+
+def get_active_announcements(now: str | None = None) -> list[dict]:
+    """当前生效中的公告（admin 公告按生效窗口过滤，monitor 公告按 active）。
+
+    now: ISO 格式 'YYYY-MM-DD HH:MM:SS'（本地时区），None 则取当前时间。
+    """
+    try:
+        from datetime import datetime  # 本文件 datetime 在末尾聚合区导入，此处就地取
+        if now is None:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        def _do(cursor):
+            cursor.execute(
+                "SELECT id, level, title, content, source, rule_id, starts_at, ends_at, created_at "
+                "FROM announcements WHERE active = 1 "
+                "AND (starts_at IS NULL OR starts_at = '' OR starts_at <= ?) "
+                "AND (ends_at IS NULL OR ends_at = '' OR ends_at >= ?) "
+                "ORDER BY id DESC LIMIT 20",
+                (now, now),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.warning("get_active_announcements failed (non-fatal): %s", exc)
+        return []
 
 
 def save_trace_thread(session_id: str, problem_id: str, messages: list[dict]) -> None:

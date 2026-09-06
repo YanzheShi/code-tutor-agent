@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.auth import get_current_user, user_key
-from code_tutor_agent.api.deps import get_graph
+from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked
 from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.guards.design_guard import mentions_design_topic
 from code_tutor_agent.mcp.search_client import search_mcp_configured
@@ -287,7 +287,7 @@ async def _run_graph_and_generate_tests(graph, config, sid: str):
     会重建状态、清掉本路由已 update_state 的 leetcode / tutor_messages 数据。
     """
     cur = graph.get_state(config)
-    await asyncio.to_thread(graph.invoke, dict(cur.values), config)
+    await asyncio.to_thread(invoke_graph_tracked, graph, dict(cur.values), config, "leetcode_generation")
     from code_tutor_agent.api.services.generation import _run_suite_safe
     try:
         state = graph.get_state(config)

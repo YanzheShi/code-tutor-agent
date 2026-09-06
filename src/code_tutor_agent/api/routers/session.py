@@ -15,7 +15,11 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from code_tutor_agent.api.auth import get_current_user, require_admin, user_key
-from code_tutor_agent.api.deps import get_graph, run_with_concurrency_limit
+from code_tutor_agent.api.deps import (
+    get_graph,
+    invoke_graph_tracked,
+    run_with_concurrency_limit,
+)
 from code_tutor_agent.api.serializers import empty_state, serialize_state
 from code_tutor_agent.api.services.generation import GENERATION_TIMEOUT, run_generation
 from code_tutor_agent.config import get_checkpoint_db_path
@@ -372,7 +376,7 @@ async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get
         _resume_input["agent_dialog_complete"] = True
         _resume_input["status"] = "awaiting_submit"
         _resume_input["error_message"] = ""
-        await asyncio.to_thread(graph.invoke, _resume_input, config)
+        await asyncio.to_thread(invoke_graph_tracked, graph, _resume_input, config, "submit_resume")
         state = graph.get_state(config)
         _next = list(state.next or [])
         if "wait_for_submit_node" not in _next:
@@ -400,9 +404,11 @@ async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get
         # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，
         # 避免独占事件循环、拖垮同进程的其它请求与 SSE 推流。
         with collect_runs() as runs:
-            graph.invoke(
+            invoke_graph_tracked(
+                graph,
                 Command(resume={"code": body.code, "language": body.language, "scope": "full"}),
                 config,
+                entry="submit_judge",
             )
             # collect_runs() 返回 RunCollectorCallbackHandler，需用 .traced_runs 取 run 列表
             traced = runs.traced_runs if runs else []
@@ -798,7 +804,7 @@ async def create_session_with_existing(
         "agent_dialog_complete": True,
     }
     initial = SessionState(**initial_dict)
-    graph.invoke(initial.model_dump(), config)
+    invoke_graph_tracked(graph, initial.model_dump(), config, entry="session_create")
     # 记录归属（by-problem 路径此前从不 touch，多用户下必须补上归属记录）
     try:
         touch_session(sid, _uid)
@@ -1066,9 +1072,11 @@ async def next_problem(
         raise HTTPException(409, "当前会话不在等待提交状态，无法换题")
 
     await run_with_concurrency_limit(
-        graph.invoke,
+        invoke_graph_tracked,
+        graph,
         Command(resume={"abandon": True, "preference": body.preference}),
         config,
+        "next_problem",
     )
 
     # Read new state

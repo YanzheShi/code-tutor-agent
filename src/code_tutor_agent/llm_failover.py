@@ -46,6 +46,25 @@ def is_rate_limit_error(exc: BaseException) -> bool:
     return any(marker in msg for marker in _RATE_LIMIT_MARKERS)
 
 
+def _m_record(name: str, value: float = 1.0) -> None:
+    """监控埋点（非侵入：失败静默）。"""
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        get_registry().record(name, value)
+    except Exception:
+        pass
+
+
+def _m_streak(ok: bool) -> None:
+    try:
+        from code_tutor_agent.monitoring.metrics import get_registry
+
+        get_registry().record_streak("llm_fail", ok)
+    except Exception:
+        pass
+
+
 def failover_enabled() -> bool:
     """降级开关：LLM_FAILOVER=0 关闭；ALT 模型/key 未配置时视为不可用。"""
     if os.getenv("LLM_FAILOVER", "1") != "1":
@@ -75,15 +94,19 @@ def invoke_with_failover(
         原样上抛非限流异常；限流但降级不可用/不允许时也原样上抛。
     """
     try:
-        return invoke_fn(primary_llm)
+        result = invoke_fn(primary_llm)
+        _m_streak(True)
+        return result
     except Exception as exc:
         if not is_rate_limit_error(exc):
+            _m_streak(False)
             raise
         if not failover_enabled():
             logger.warning(
                 "LLM rate-limited but failover disabled/unconfigured (purpose=%s): %s",
                 purpose, exc,
             )
+            _m_streak(False)
             raise
         # 用户自配 key 的请求不降级：平台备用 key 不替用户买单
         from code_tutor_agent.runtime_settings import get_llm_override
@@ -93,10 +116,18 @@ def invoke_with_failover(
                 "LLM rate-limited but user custom key in effect — no failover (purpose=%s)",
                 purpose,
             )
+            _m_streak(False)
             raise
         logger.warning(
             "LLM rate-limited (purpose=%s) — failing over to secondary ALT key: %s",
             purpose, exc,
         )
+        _m_record("llm_failover")
         fallback_llm = get_llm(purpose, alias="secondary")
-        return invoke_fn(fallback_llm)
+        try:
+            result = invoke_fn(fallback_llm)
+            _m_streak(True)
+            return result
+        except Exception:
+            _m_streak(False)
+            raise
