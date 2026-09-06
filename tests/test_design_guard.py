@@ -114,6 +114,26 @@ def test_mentions_design_topic():
     assert mentions_design_topic("") is False
 
 
+def test_mentions_design_topic_ignores_generic_ds_topics():
+    """栈/队列/堆/哈希表等数据结构主题本身允许，绝不能误判为设计类。
+
+    设计类围栏的判定依据应是『生成的代码形态』（主类非 Solution），
+    而非主题名；这些主题既有设计题也有应用题，关键词兜底必须放行它们，
+    否则普通『队列中等难度』请求会被对话层软拒（2026-09-06 实踩的坑）。
+    """
+    allowed_topics = [
+        "请出一道中等难度、主题关于「队列」的算法题。",
+        "队列 中等难度",
+        "栈 中等",
+        "堆 中等难度",
+        "哈希表 中等",
+        "链表 简单",
+        "二叉树 困难",
+    ]
+    for text in allowed_topics:
+        assert mentions_design_topic(text) is False, f"普通数据结构主题被误判为设计类：{text!r}"
+
+
 # ──────────────────────────────────────────────
 # 2) LeetCode 导入围栏
 # ──────────────────────────────────────────────
@@ -313,3 +333,32 @@ async def test_analyze_intent_blocks_design_topic_from_llm():
 
     assert intent.is_ready is False
     assert "设计类" in (intent.next_message or "")
+
+
+@pytest.mark.asyncio
+async def test_analyze_intent_allows_generic_ds_topic():
+    """普通数据结构主题（队列中等难度）绝不能被判为设计类而软拒。
+
+    这里走 LLM 不可用的兜底分支（正则抽 topic=队列 + 难度=medium → is_ready=True），
+    验证对话意图硬守护不会误伤普通栈/队列/堆/哈希表主题——它们应放行到出题层，
+    由代码的 class Solution 校验兜底（2026-09-06 修复的设计类围栏误伤）。
+    """
+    from unittest.mock import patch
+
+    from code_tutor_agent.agents import agent_dialog
+    from code_tutor_agent.schemas.state import Message
+
+    history = [
+        Message(role="tutor", content="想练什么类型的题？"),
+        Message(role="user", content="请出一道中等难度、主题关于「队列」的算法题。"),
+    ]
+
+    with patch.object(agent_dialog, "_build_profile_summary", return_value=""), \
+         patch.object(agent_dialog, "_build_memory_summary", return_value=""), \
+         patch.object(agent_dialog, "get_llm", side_effect=Exception("LLM unavailable")):
+        intent = await agent_dialog.analyze_user_intent(history)
+
+    assert intent.topic == "队列"
+    assert intent.difficulty == "medium"
+    assert intent.is_ready is True
+    assert "设计类" not in (intent.next_message or "")
