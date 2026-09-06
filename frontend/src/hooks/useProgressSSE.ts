@@ -47,7 +47,7 @@ export function useProgressSSE() {
           headers: { Accept: 'text/event-stream' },
         });
         if (!resp.ok || !resp.body) {
-          handlers?.onError?.(`进度订阅失败 (${resp.status})`);
+          handlers?.onError?.(`进度连接没建立成功（${resp.status}），点「再试一次」通常就能恢复～`);
           finish();
           return;
         }
@@ -73,7 +73,7 @@ export function useProgressSSE() {
               handlers?.onDone?.(data);
               finish();
             } else if (event === 'error') {
-              handlers?.onError?.(data?.message || '生成失败，请重试');
+              handlers?.onError?.(data?.message || '出题没有成功，点击重试再试一次，或先回主页从题库选题练习～');
               finish();
             }
           } catch {
@@ -94,12 +94,12 @@ export function useProgressSSE() {
         }
         if (!finished) {
           // 连接正常结束但未收到 done/error：让上层走 /state 轮询兜底
-          handlers?.onError?.('连接已断开');
+          handlers?.onError?.('进度连接中断了，点「再试一次」重新开始出题～');
           finish();
         }
       } catch (e: any) {
         if (finished || e?.name === 'AbortError') return; // 主动关闭不算错误
-        handlers?.onError?.('连接已断开');
+        handlers?.onError?.('进度连接中断了，点「再试一次」重新开始出题～');
         finish();
       }
     })();

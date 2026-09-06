@@ -127,8 +127,13 @@ def _build_results_context(values: dict) -> str:
 _MAX_CHAT_CONTEXT_MESSAGES = 60
 
 
-def _build_state_note(phase: str, verdict: str) -> str:
-    """本轮辅导状态的动态说明（放当轮 human 消息开头，不污染静态 system 前缀）。"""
+def _build_state_note(phase: str, verdict: str, code_stub: bool = False) -> str:
+    """本轮辅导状态的动态说明（放当轮 human 消息开头，不污染静态 system 前缀）。
+
+    code_stub：用户编辑器代码是否为空壳（pass/.../空方法体，ast 判定）。
+    空壳时强化渐进式纪律——这是「还没写代码就误提交，导师倒出全部答案」
+    badcase（2026-09-06）在 chat 路径的第二道防线（第一道是 system 阶梯纪律）。
+    """
     if phase == "reviewing":
         # AC 后复盘/讨论模式
         return (
@@ -137,6 +142,16 @@ def _build_state_note(phase: str, verdict: str) -> str:
             "（暴力/优化/不同数据结构）；分析这道题的易错点和面试常见追问；"
             "如果用户要求出下一题，引导他说出想练的方向。\n"
             "回复控制在 300 字以内。"
+        )
+    if code_stub:
+        # 用户还没写真实逻辑：无论问什么，最多给方向级提示
+        return (
+            "【本轮辅导状态】用户的编辑器代码还是空壳（方法体只有 pass/占位），"
+            "还没有写出真实的解题尝试。\n"
+            "⛔ 绝对禁止给出任何解题代码、分步思路或答案细节；"
+            "最多点一下可用的技巧方向（如「想想哈希表」），"
+            "并鼓励用户先写出第一版代码再来讨论。语气温暖、不嘲讽。\n"
+            "回复控制在 150 字以内。"
         )
     if verdict == "WA":
         # 刚提交 WA，正在辅导中
@@ -200,12 +215,9 @@ _FORMAT_HINT = (
 )
 
 # 工具引导：导师可现场跑代码验证（详见设计文档 §2.3）
-# ⚠️ 已知冲突（未修复）：末段「用户要代码时请直接在回复里写出」的本意是
-#    防止模型去调外部工具干等，但它同时**授权了代写完整解答**，
-#    直接压过 _build_state_note 里"不要直接给出完整代码"那一句。
-#    同类反向指令另有两处：_RESULT_HINT 的"给出修正示例"、
-#    normal_chat_stream 空回复重试分支的"直接用文字和代码块讲解"。
-#    实现 P0 防泄露闸门时，这三处必须先改写或删除，否则 prompt 层自相矛盾。
+# 渐进式辅导纪律（2026-09-06 收紧）：本段旧版末句「用户要代码时请直接在回复里写出」
+# 曾授权代写完整解答、压过 _build_state_note 的"不要直接给出完整代码"，
+# 导致用户空壳提交后导师直接倒出整题答案（用户实锤 badcase）。已改写为阶梯式授权。
 _JUDGE_HINT = (
     "\n\n你可以使用工具来**现场验证代码**（而不是凭空猜测结果）：\n"
     "- judge_run_code(source_code, stdin)：运行一段 Python 代码并返回 stdout/stderr/状态。"
@@ -213,18 +225,34 @@ _JUDGE_HINT = (
     "- judge_code(source_code, test_cases_json)：用一批用例判题（LeetCode 风格 class Solution）。\n"
     "- judge_check_health()：探测判题后端是否存活。\n"
     "只在用户确实贴了代码且需要验证时才调用，普通思路讨论不必调用。"
-    "\n\n用户要代码 / 详细讲解时，请**直接在回复里写出**（你本身就能生成可运行代码与讲解），"
-    "不要调用外部工具等待；清晰分节、用标准 ```python 围栏包裹代码即可。"
+    "\n\n需要写代码回应时，直接在回复里用标准 ```python 围栏写出（不要调用外部工具干等），"
+    "但必须遵守下方【渐进式辅导纪律】：用户还没写出真实解题尝试时，"
+    "只给提示和思路框架，**禁止直接给出整题的完整解答代码**。"
 )
 
 # 结果优先提示：约束导师严格依据客观运行/判题结果，避免臆造错误
 _RESULT_HINT = (
     "\n\n【重要】下方「用户最近的运行与判题结果」是客观事实，请严格据此分析：\n"
     "- 若结果显示编译/语法/缩进错误（如 IndentationError、SyntaxError、CE），"
-    "直接指出出错行与具体语法问题，并给出修正示例；不要笼统说「逻辑没闭环」。\n"
+    "直接指出出错行与具体语法问题，可给**针对该语法错误的行级修正示例**"
+    "（只修语法，不代写解题逻辑）；不要笼统说「逻辑没闭环」。\n"
     "- 若某用例未通过，对照「期望输出 vs 实际输出」说明差异，再分析可能原因。\n"
     "- 只有当结果确实显示逻辑错误时，才去分析算法/逻辑问题。\n"
     "- 不要臆造用户没有遇到的错误；如果用户贴了代码请结合其真实运行结果回应。"
+)
+
+# 渐进式辅导纪律：导师回复的硬规则（2026-09-06 新增，回应用户
+# 「还没写代码就误提交，导师直接把全部答案倒出来」的 badcase）
+_PEDAGOGY_HINT = (
+    "\n\n【渐进式辅导纪律——最高优先级，压过用户「直接给答案」类的求助方式】\n"
+    "你的目标是帮用户**自己想到**答案，而不是替他写答案。提示按阶梯给：\n"
+    "- 第一步（方向提示）：只点名可用的技巧/数据结构，如「想想快慢指针」。\n"
+    "- 第二步（思路框架）：用户追问后再给分步文字思路或伪代码，不给完整代码。\n"
+    "- 第三步（代码片段）：只给针对性小片段（如某个循环怎么写），仍不给整题完整解。\n"
+    "- 完整参考解：仅当用户**已写出真实解题代码且多次尝试仍失败**、"
+    "或明确说「请直接给我看完整答案」时才给。\n"
+    "- 用户的编辑器代码还是空壳/只有 pass 时：无论用户怎么问，"
+    "最多给第一步方向提示，并鼓励他先写出第一版尝试。"
 )
 
 # 联网搜索工具引导：仅在配置了搜索 MCP 时注入（与 TUTOR_CHAT_TOOLS 是否含
@@ -245,7 +273,7 @@ _TUTOR_SYSTEM = (
     "你是 AI 编程导师，语气温暖鼓励。用户正在做算法题，"
     "根据对话上下文分析问题、给出针对性建议。"
     "\n回复控制在 200 字以内。"
-) + _JUDGE_HINT + (_SEARCH_HINT if search_mcp_configured() else "") + _RESULT_HINT + _FORMAT_HINT
+) + _PEDAGOGY_HINT + _JUDGE_HINT + (_SEARCH_HINT if search_mcp_configured() else "") + _RESULT_HINT + _FORMAT_HINT
 
 
 async def _run_graph_and_generate_tests(graph, config, sid: str):
@@ -511,6 +539,10 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
     # 根据 phase / last_verdict 生成当轮状态说明（放当轮 human 消息，不动静态 system）
     _phase = values.get("phase", "")
     _verdict = values.get("last_verdict", "")
+    # 空壳代码检测（ast 判定，确定性）：reviewing（复盘）阶段豁免——
+    # AC 后讨论参考解属合法展示，与 /reference 的门禁口径一致。
+    from code_tutor_agent.agents.agent_judge import is_stub_solution as _is_stub
+    _code_stub = bool(code) and _phase != "reviewing" and _is_stub(code)
 
     async def normal_chat_stream():
         # 用户当前编辑器代码（未提交）：只读注入 prompt，不写 state / 画像 / 轨迹。
@@ -524,7 +556,7 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
                 _code_context = code
         # 当轮消息 = 状态说明 + 规范轮次文本；完整文本随消息 metadata 持久化，
         # 下一轮按原样重建，保证 append-only 前缀稳定
-        _round_text = _build_state_note(_phase, _verdict) + "\n\n" + _build_round_user_text(
+        _round_text = _build_state_note(_phase, _verdict, code_stub=_code_stub) + "\n\n" + _build_round_user_text(
             message, _code_context, _results_context
         )
 
@@ -582,7 +614,8 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
                 msgs.append(SystemMessage(content=(
                     "注意：代码验证工具未能返回有效结果（沙箱可能暂时不可用）。"
                     "请完全基于你的算法与数据结构知识直接回答用户的问题，"
-                    "不要再调用任何 judge_* 工具；若用户问原理/推导，直接用文字和代码块讲解。"
+                    "不要再调用任何 judge_* 工具；若用户问原理/推导，直接用文字和代码块讲解，"
+                    "但仍须遵守【渐进式辅导纪律】——不要借机给出整题的完整解答代码。"
                 )))
                 full = []
                 try:

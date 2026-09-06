@@ -89,8 +89,7 @@ export default function App() {
     onSetProgressMsgs: s.setProgressMsgs,
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
         onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
-    onLogout: logout,
-    onOpenSettings: () => s.setScreen('settings'),
+    // 设置 / 退出登录只保留在主页（WelcomeScreen），做题界面不再传入
     analyzingTrace: s.analyzingTrace, onAnalyzeTrace: s.onAnalyzeTrace,
     traceFailed: s.traceFailed,
     traceAnalysis: s.traceAnalysis, traceMessages: s.traceMessages,

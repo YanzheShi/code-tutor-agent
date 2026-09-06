@@ -114,9 +114,46 @@ def init_db() -> None:
     logger.info("▶ init_db()")
     try:
         _with_conn(lambda cursor: _init_db_tables(cursor))
+        backfill_submissions_user_id()
     except Exception as exc:
         logger.error("init_db() failed: %s", exc)
         raise
+
+
+def backfill_submissions_user_id() -> int:
+    """存量提交归属回填（幂等，2026-09-06）。
+
+    背景：save_submission 曾漏传 user_id，历史提交全部记在 'default' 名下，
+    而查询端按真实用户 ID 过滤 → 个人中心「我的提交」一直为空。
+    修复落库后，此处把「user_id='default' 但会话归属已知」的存量行回填成
+    会话真实归属；会话无归属记录（遗留数据）保持不动，绝不臆测归属。
+    每次启动幂等执行：回填过的行不再满足 WHERE 条件。
+    """
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE submissions SET user_id = ("
+                "  SELECT sa.user_id FROM session_activity sa"
+                "  WHERE sa.session_id = submissions.session_id"
+                "    AND sa.user_id != 'default'"
+                ") "
+                "WHERE user_id = 'default' "
+                "  AND session_id != '' "
+                "  AND EXISTS ("
+                "    SELECT 1 FROM session_activity sa2"
+                "    WHERE sa2.session_id = submissions.session_id"
+                "      AND sa2.user_id != 'default'"
+                ")",
+            )
+            return cursor.rowcount
+        n = _with_conn(_do)
+        if n:
+            logger.info("backfill_submissions_user_id(): %d legacy rows re-owned", n)
+        return n
+    except Exception as exc:
+        # 非致命：回填失败不影响启动（表不存在/锁竞争等）
+        logger.warning("backfill_submissions_user_id() failed (non-fatal): %s", exc)
+        return 0
 
 
 def _init_db_tables(cursor) -> None:

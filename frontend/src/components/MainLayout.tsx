@@ -60,8 +60,8 @@ export type MainLayoutProps = {
   onNext: () => void;
   onBackToWelcome: () => void;
   onAgentSend: (text: string) => void;
-  onLogout?: () => void;
-  onOpenSettings?: () => void;
+  // 设置 / 退出登录入口只保留在主页 WelcomeScreen（2026-09-06 产品决策），
+  // 做题界面不再出现这两个按钮。
   analyzingTrace?: boolean;
   onAnalyzeTrace?: () => void;
   traceFailed?: boolean;
@@ -81,7 +81,7 @@ export default function MainLayout(props: MainLayoutProps) {
     dragging, dragTab, chatEndRef,
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
     onSetTutorMessages, onSetRunResults, onSetProgressMsgs,
-    onRun, onSubmit, onChat, onNext, onBackToWelcome, onAgentSend, onLogout, onOpenSettings,
+    onRun, onSubmit, onChat, onNext, onBackToWelcome, onAgentSend,
   analyzingTrace = false, onAnalyzeTrace,
   traceFailed = false,
   traceAnalysis = null, traceMessages = [], traceAsking = false, traceInput = '',
@@ -302,12 +302,6 @@ export default function MainLayout(props: MainLayoutProps) {
               <div className="flex border-b border-ct-border bg-ct-surface-secondary text-xs min-h-[34px]">
                 <button onClick={onBackToWelcome} className="rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text" title="回到主页">← 回到主页</button>
                 <TabButton label="Agent 对话" active={true} onClick={() => {}} />
-                {onOpenSettings && (
-                  <button onClick={onOpenSettings} className="ml-auto rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text" title="设置（主题 / 模型服务）">⚙️ 设置</button>
-                )}
-                {onLogout && (
-                  <button onClick={onLogout} className={`rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text ${onOpenSettings ? '' : 'ml-auto'}`} title="退出登录">退出登录</button>
-                )}
               </div>
               <div className="flex-1 overflow-hidden relative">
                 <AgentChat messages={tutorMessages} onSend={onAgentSend} showSelector disabled={!!problem || isGenerating || (isDialogPhase && progressMsgs.length > 0)} />
@@ -332,12 +326,6 @@ export default function MainLayout(props: MainLayoutProps) {
                 ))}
                 {panelTabs.left.length === 0 && (
                   <span className="px-3 py-2 text-ct-muted text-xs italic">拖入标签页</span>
-                )}
-                {onOpenSettings && (
-                  <button onClick={onOpenSettings} className="ml-auto rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text shrink-0" title="设置（主题 / 模型服务）">⚙️ 设置</button>
-                )}
-                {onLogout && (
-                  <button onClick={onLogout} className={`rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text shrink-0 ${onOpenSettings ? '' : 'ml-auto'}`} title="退出登录">退出登录</button>
                 )}
               </div>
               {renderPanelContent('left')}

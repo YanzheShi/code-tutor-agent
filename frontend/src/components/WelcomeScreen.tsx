@@ -228,14 +228,17 @@ function DimCard({ dim, tags }: { dim: typeof ERROR_MODE_DIMS[number]; tags?: Re
 
 function ProfileView() {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
+  const [profileV2, setProfileV2] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setLoading(true);
-    apiFetch(BASE + '/auth/me/profile')
-      .then(r => r.ok ? r.json() : null)
-      .then(setProfile)
-      .catch(() => setProfile(null))
+    // v1 = 六维错误模式画像；v2 = per-tag 各知识点熟练度（2026-09-06 从管理端迁入个人中心）
+    Promise.all([
+      apiFetch(BASE + '/auth/me/profile').then(r => r.ok ? r.json() : null),
+      apiFetch(BASE + '/auth/me/profile/v2').then(r => r.ok ? r.json() : null),
+    ]).then(([p1, p2]) => { setProfile(p1); setProfileV2(p2); })
+      .catch(() => { setProfile(null); setProfileV2(null); })
       .finally(() => setLoading(false));
   }, []);
 
@@ -245,6 +248,11 @@ function ProfileView() {
 
   if (loading) return <p className="text-sm text-ct-muted text-center py-8">加载画像中...</p>;
   if (!profile) return <p className="text-sm text-ct-muted text-center py-8">暂无画像数据，做几道题后再来看看</p>;
+
+  // v2 per-tag 熟练度（按熟练度降序）
+  const v2Prof = profileV2?.prof as Record<string, number> | undefined;
+  const tagNames = (profileV2?.tag_names ?? {}) as Record<string, string>;
+  const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
 
   return (
     <section className="space-y-5">
@@ -265,6 +273,25 @@ function ProfileView() {
           <DimCard key={d.key} dim={d} tags={modes[d.key]} />
         ))}
       </div>
+
+      {/* 各知识点熟练度（v2 per-tag 画像） */}
+      {tagEntries.length > 0 && (
+        <div className="rounded-xl border border-ct-border bg-ct-surface p-4 space-y-3">
+          <h3 className="text-sm font-semibold text-ct-text">各知识点熟练度（{tagEntries.length} 个）</h3>
+          {tagEntries.map(([tag, prof]) => (
+            <div key={tag}>
+              <div className="mb-0.5 flex items-center justify-between text-xs">
+                <span className="text-ct-muted">{tagNames[tag] ?? tag}</span>
+                <span className="font-mono text-ct-text">{(prof * 100).toFixed(0)}%</span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-ct-hover">
+                <div className="h-2 rounded-full bg-ct-accent"
+                  style={{ width: `${Math.max(0, Math.min(100, Math.round(prof * 100)))}%` }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* 底部提示 */}
       <p className="text-[11px] text-ct-muted text-center pt-1">

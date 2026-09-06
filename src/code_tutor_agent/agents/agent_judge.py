@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import ast
 import logging
 
 from pydantic import BaseModel, Field
@@ -58,7 +59,13 @@ JUDGE_ANALYSIS_SYSTEM = """你是 AI 编程导师，负责分析学生提交的�
 1. **温暖第一** — 即使代码错了，也要先肯定学生的努力（"已经接近了！"、"思路是对的"）
 2. **具体有用** — 指出具体哪个用例错了、期望输出 vs 实际输出、为什么错
 3. **面试导向** — 从面试官角度分析：这道题考察的核心算法思维是什么？学生的解法在面试中能拿多少分？
-4. **自由引导** — 按学生需要提供提示，必要时可直接给出代码示例，像真人私教一样灵活
+4. **渐进式引导（最重要）** — 像真人私教一样按阶梯给提示，**绝不主动泄露完整答案**：
+   - L1 方向提示：只点名可用的技巧/数据结构（如"想想快慢指针"），不给具体步骤
+   - L2 思路框架：给分步思路（文字或伪代码级），不给可直接提交的完整代码
+   - L3 代码示例：只允许给**针对性的小片段**（如某个循环怎么写），禁止给整题的完整解答代码
+   - 只有学生已经**自己写出过真实的解题尝试且多次失败**、或明确说"我实在不行了请给我看答案"时，
+     才可以在反馈中给出完整参考解——否则一律停留在 L1/L2。
+   - 学生代码基本没写（空壳/pass/只有框架）时，最多给 L1 方向提示，并鼓励他先写出第一版。
 
 ## 分析步骤
 
@@ -85,7 +92,8 @@ JUDGE_ANALYSIS_SYSTEM = """你是 AI 编程导师，负责分析学生提交的�
 1. **先肯定** — "代码结构很好，只是一个小细节没处理好"
 2. **定位问题** — 哪个用例失败了？期望输出 vs 实际输出各是什么？
 3. **分析原因** — 说明背后的逻辑错误（如"边界条件没处理空数组"、"循环条件少了一个等号"）
-4. **修复方向** — 给提示，必要时可直接给出代码示例（按学生请求）
+4. **修复方向** — 按「渐进式引导」阶梯给提示（L1 方向 → L2 思路框架 → 小片段），
+   **不要直接给完整解答代码**
 5. **面试提示** — 如果是面试题，面试官会重点考察哪一点？
 
 ## 输出格式
@@ -184,6 +192,73 @@ def _deterministic_verdict(results: list) -> str:
     return "WA"
 
 
+def is_stub_solution(code: str) -> bool:
+    """检测提交是否为「空壳代码」——用户还没写真正的解题逻辑。
+
+    判定口径（基于 ast，确定性、无 LLM 参与）：
+    - 解析失败（语法错）不算空壳——那是写了代码但有 CE，走正常反馈；
+    - 找不到任何函数定义不算空壳（可能是完全乱写的，交给正常反馈）；
+    - 所有函数体都只由 pass / ... / docstring / return None(常量) 构成 → 空壳。
+    典型场景：用户直接提交 starter_code 模板（方法体 pass）。
+
+    用途：空壳提交绝不触发 LLM 写「修复建议」——否则导师会把整题答案
+    全文倒出（2026-09-06 用户实锤 badcase），违背渐进式辅导原则。
+    """
+    if not code or not code.strip():
+        return True
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+
+    funcs = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    if not funcs:
+        return False
+
+    def _is_trivial_body(body: list[ast.stmt]) -> bool:
+        for stmt in body:
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                continue  # docstring
+            if isinstance(stmt, ast.Pass):
+                continue
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
+                continue  # ...
+            if isinstance(stmt, ast.Return):
+                # return / return None / return 常量 都视为占位
+                if stmt.value is None:
+                    return True
+                if isinstance(stmt.value, ast.Constant):
+                    return True
+                return False
+            return False
+        return True
+
+    # 题目模板自带的结构定义（如 ListNode.__init__ 的 self.val = val）是样板代码，
+    # 不参与空壳判定——只看用户要写的解题方法（非 dunder 函数）。
+    meaningful = [f for f in funcs if not f.name.startswith("__")]
+    if not meaningful:
+        # 只有结构定义、没有任何解题方法 = 还什么都没写
+        return True
+    return all(_is_trivial_body(list(f.body)) for f in meaningful)
+
+
+def _stub_feedback(verdict: str, topic: str) -> JudgeAnalysis:
+    """空壳提交的确定性反馈（零 LLM）：鼓励动笔 + 方向级提示，绝不泄露解法。"""
+    topic_hint = f"这道题考察的是「{topic}」方向的思路。" if topic else ""
+    return JudgeAnalysis(
+        verdict=verdict,
+        warm_feedback=(
+            "代码框架已经就位，不过方法体还是空的——相当于还没开始「播放」呢 😄\n"
+            "别怕写错，先把你的第一版思路写出来（哪怕是暴力解），跑一遍样例找找感觉。"
+        ),
+        repair_suggestion=(
+            f"{topic_hint}先动手试试；卡住的时候随时在对话里问我，"
+            "我会一步步给你提示，但答案要靠你自己写出来才真正属于你 💪"
+        ),
+        should_retry=True,
+    )
+
+
 def analyze_judge_results(
     code: str,
     title: str,
@@ -216,6 +291,15 @@ def analyze_judge_results(
     passed = sum(1 for r in results if r.status == "Passed")
     # 权威 verdict：永远以执行引擎客观结果为准，LLM 的主观判断不可信。
     authoritative = forced_verdict or _deterministic_verdict(results)
+
+    # ── 空壳代码闸门（渐进式辅导硬护栏）──
+    # 用户还没写真实逻辑（pass/.../空方法体）时，绝不进 LLM 写「修复建议」——
+    # 否则模型会把整题标准答案全文倒出（2026-09-06 用户实锤 badcase）。
+    # 直接给确定性反馈：鼓励先写第一版 + 方向级提示，不含任何解法细节。
+    if is_stub_solution(code) and authoritative != "AC":
+        logger.info("stub submission detected — returning deterministic no-spoiler feedback")
+        return _stub_feedback(authoritative, topic)
+
     results_text = format_results_for_prompt(results)
 
     user_prompt = JUDGE_ANALYSIS_USER.format(

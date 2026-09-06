@@ -436,7 +436,14 @@ async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get
                     r.model_dump() if hasattr(r, "model_dump") else r
                     for r in raw_results
                 ]
-                last_row_id = save_submission(pid, body.code, verdict, serialised, session_id=sid)
+                # user_id 必须落库（2026-09-06 修复）：此前漏传导致全部记成
+                # "default"，而查询端 /auth/me/submissions、/problem/{id}/submissions
+                # 都按真实用户 ID 过滤 → 个人中心/提交记录永远为空。
+                # 优先取 state.user_id（会话归属），缺失回退当前登录用户。
+                save_submission(
+                    pid, body.code, verdict, serialised, session_id=sid,
+                    user_id=str(values.get("user_id") or uid),
+                )
                 logger.info("saved submission successfully lastrowid,  %s", last_row_id)
     except Exception as exc:
         logger.warning("Failed to persist submission: %s", exc)
@@ -679,17 +686,17 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
             if mode == "agent" and status == "dialog" and tutor_msgs:
                 yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
                 return
-            # 仅当无任何题目、且出现“终态错误”消息（降级也失败）时才报错。
+            # 仅当无任何题目、且出现"终态错误"消息（降级也失败）时才报错。
             if not problem and any(
                 any(mk in m for mk in TERMINAL_ERROR_MARKERS) for m in msgs
             ):
-                yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"
+                yield f"event: error\ndata: {json.dumps({'message': '\u51fa\u9898\u6ca1\u6709\u6210\u529f\uff0c\u522b\u7070\u5fc3\u2014\u2014\u70b9\u51fb\u91cd\u8bd5\u518d\u6765\u4e00\u6b21\uff0c\u6216\u5148\u56de\u4e3b\u9875\u4ece\u9898\u5e93\u9009\u4e00\u9053\u9898\u7ec3\u4e60\uff5e'}, ensure_ascii=False)}\n\n"
                 return
 
             # 生成彻底失败（后端已置 status=error，无题目）：立即报错，不空等超时。
             # 练习/普通模式走此路径（agent 模式失败会回 dialog 态，由上面 done 分支处理）。
             if not problem and status == "error":
-                _emsg = (state or {}).get("error_message") or "\u51fa\u9898\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5"
+                _emsg = (state or {}).get("error_message") or "\u51fa\u9898\u6ca1\u6709\u6210\u529f\uff0c\u70b9\u51fb\u91cd\u8bd5\u518d\u8bd5\u4e00\u6b21\uff5e"
                 yield f"event: error\ndata: {json.dumps({'message': _emsg}, ensure_ascii=False)}\n\n"
                 return
 
@@ -698,7 +705,7 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
                     await asyncio.sleep(0.05)
                     yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"
                 else:
-                    yield f"event: error\ndata: {json.dumps({'message': '\u751f\u6210\u8d85\u65f6\uff0c\u8bf7\u91cd\u8bd5'}, ensure_ascii=False)}\n\n"
+                    yield f"event: error\ndata: {json.dumps({'message': '\u51fa\u9898\u6bd4\u9884\u671f\u6162\u4e86\u4e9b\u2014\u2014AI \u5bfc\u5e08\u53ef\u80fd\u6b63\u5fd9\u70b9\u4ec0\u4e48\u3002\u70b9\u51fb\u91cd\u8bd5\u518d\u8bd5\u4e00\u6b21\uff0c\u6216\u5148\u56de\u4e3b\u9875\u4ece\u9898\u5e93\u9009\u4e00\u9053\u9898\u7ec3\u4e60\uff5e'}, ensure_ascii=False)}\n\n"
                 return
 
             await asyncio.sleep(0.4)
