@@ -1,4 +1,5 @@
 import { API_BASE } from './config';
+import { clearAuth, getStoredAuth } from './auth';
 
 /** 统一带 Bearer 的 fetch 包装（多用户改造 P4）。
  *
@@ -9,14 +10,15 @@ import { API_BASE } from './config';
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const isAuthPath = /[/?]auth\//.test(input) || input.includes(`${API_BASE}/auth`);
   const headers = new Headers(init?.headers || {});
-  const token = localStorage.getItem('code-tutor:auth');
+  // auth.ts 存的是 JSON.stringify({token, user})，必须解析取 token（直读会把整串 JSON 当 token → 401）
+  const token = getStoredAuth()?.token;
   if (token && !isAuthPath && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
   }
   const r = await fetch(input, { ...init, headers });
   if (r.status === 401 && !isAuthPath) {
     // token 过期/无效：清凭证回登录页（App 检测不到 auth 则渲染 LoginScreen）
-    localStorage.removeItem('code-tutor:auth');
+    clearAuth();
     if (!window.location.pathname.includes('_login')) {
       window.location.reload();
     }
