@@ -105,11 +105,16 @@ def test_register_never_creates_admin(temp_db, monkeypatch):
     monkeypatch.setenv("CTA_ADMIN_EMAIL", "reserve@corp.com")
     auth_mod.ensure_bootstrap_admin()
 
+    dbmod.create_invite_code("TESTCODE1", 10, None)
+    a._RATE_BUCKETS.clear()
+
     async def _do():
         with pytest.raises(HTTPException) as exc:
-            await a.register(a.RegisterRequest(email="reserve@corp.com", password="password123"))
+            await a.register(a.RegisterRequest(
+                email="reserve@corp.com", password="password123", invite_code="TESTCODE1"))
         assert exc.value.status_code == 409
-        return await a.register(a.RegisterRequest(email="normal@corp.com", password="password123"))
+        return await a.register(a.RegisterRequest(
+            email="normal@corp.com", password="password123", invite_code="TESTCODE1"))
 
     resp_user = anyio.run(_do)
     assert resp_user["user"]["role"] == "user"  # register 直接返回 dict（无 response_model 序列化时）
@@ -207,3 +212,210 @@ def test_build_run_config_user_id():
     cfg2 = build_run_config("sid-x")  # 不传 → 不注入（legacy 行为不变）
     assert "user_id" not in cfg2["configurable"]
     assert "user_id" not in cfg2["metadata"]
+
+
+# ── 邀请码 / 限流 / 改密 / 重置（防滥用改造，2026-09-06）──
+
+
+def test_register_requires_invite_code(temp_db):
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    a._RATE_BUCKETS.clear()
+
+    async def _do():
+        with pytest.raises(HTTPException) as exc:
+            await a.register(a.RegisterRequest(
+                email="nocode@test.com", password="password123", invite_code="BADCODE9"))
+        return exc.value.status_code
+
+    assert anyio.run(_do) == 400
+
+
+def test_invite_code_quota_expiry_disable(temp_db):
+    """额度用完 / 已过期 / 已停用的码都不可用；额度内可多次使用。"""
+    from datetime import datetime as dt, timedelta as td
+
+    # 额度=2
+    assert dbmod.create_invite_code("QUOTA01", 2, None)
+    assert dbmod.consume_invite_code("QUOTA01")  # DB 层不做大小写归一（归一在 register 边界）
+    assert dbmod.consume_invite_code("QUOTA01")
+    assert not dbmod.consume_invite_code("QUOTA01")  # 第 3 次超额
+
+    # 已过期
+    expired = (dt.now() - td(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    assert dbmod.create_invite_code("EXPIRE01", 10, expired)
+    assert not dbmod.consume_invite_code("EXPIRE01")
+
+    # 停用
+    assert dbmod.create_invite_code("DEAD0001", 10, None)
+    assert dbmod.consume_invite_code("DEAD0001")
+    assert dbmod.set_invite_code_active("DEAD0001", False)
+    assert not dbmod.consume_invite_code("DEAD0001")
+
+    rows = dbmod.list_invite_codes()
+    assert {r["code"] for r in rows} >= {"QUOTA01", "EXPIRE01", "DEAD0001"}
+
+
+def test_register_rate_limit(temp_db, monkeypatch):
+    """每 IP 每小时 5 次注册上限（direct 调用共桶）。"""
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    dbmod.create_invite_code("RATELIM1", 100, None)
+    monkeypatch.setattr(a, "_RATE_BUCKETS", {})  # 独立桶避免污染其他测试
+
+    async def _do():
+        codes = []
+        for i in range(6):
+            try:
+                await a.register(a.RegisterRequest(
+                    email=f"rl{i}@test.com", password="password123", invite_code="RATELIM1"))
+                codes.append(200)
+            except HTTPException as exc:
+                codes.append(exc.status_code)
+        return codes
+
+    codes = anyio.run(_do)
+    assert codes[:5] == [200] * 5
+    assert codes[5] == 429
+
+
+def test_change_password_flow(temp_db):
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    uid = dbmod.create_user("cp@test.com", a.hash_password("oldpassword1"))
+    current = {"id": uid, "email": "cp@test.com", "role": "user"}
+
+    async def _do():
+        # 旧密码错 → 400
+        with pytest.raises(HTTPException) as exc:
+            await a.change_my_password(
+                a.ChangePasswordRequest(old_password="wrong-pass-1", new_password="newpassword1"),
+                current,
+            )
+        assert exc.value.status_code == 400
+        # 正确 → 更新成功
+        r = await a.change_my_password(
+            a.ChangePasswordRequest(old_password="oldpassword1", new_password="newpassword1"),
+            current,
+        )
+        assert r["ok"] is True
+
+    anyio.run(_do)
+    user = dbmod.get_user_by_id(uid)
+    assert a.verify_password("newpassword1", user["password_hash"])
+    assert not a.verify_password("oldpassword1", user["password_hash"])
+
+
+def test_forgot_reset_no_brevo(temp_db):
+    """未配置 Brevo：forgot 返回引导信息（不发码），reset 任何码都 400。"""
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    dbmod.create_user("nr@test.com", a.hash_password("whatever123"))
+
+    async def _do():
+        r = await a.forgot_password(a.ForgotPasswordRequest(email="nr@test.com"), None)
+        assert r["delivered"] is False and "管理员" in r["message"]
+        with pytest.raises(HTTPException) as exc:
+            await a.reset_password(a.ResetPasswordRequest(
+                email="nr@test.com", code="222222", new_password="newpassword1"), None)
+        assert exc.value.status_code == 400
+
+    anyio.run(_do)
+
+
+def test_forgot_reset_with_brevo(temp_db, monkeypatch):
+    """配置 Brevo（mock 发信）：验证码送达 → 重置成功 → 旧密码失效 → 码一次性。"""
+    import anyio
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api import email as email_svc
+
+    uid = dbmod.create_user("br@test.com", a.hash_password("oldpassword1"))
+    monkeypatch.setenv("BREVO_API_KEY", "test-key")
+    monkeypatch.setattr(email_svc, "send_email", lambda *a2, **k: True)
+    # 固定验证码为 222222（choice 恒返 '2'）
+    monkeypatch.setattr(a.secrets, "choice", lambda s: "2")
+
+    async def _do():
+        r = await a.forgot_password(a.ForgotPasswordRequest(email="br@test.com"), None)
+        assert r["delivered"] is True
+        await a.reset_password(a.ResetPasswordRequest(
+            email="br@test.com", code="222222", new_password="newpassword1"), None)
+        # 同一码再用 → 已作废 → 400
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException):
+            await a.reset_password(a.ResetPasswordRequest(
+                email="br@test.com", code="222222", new_password="anotherpass1"), None)
+
+    anyio.run(_do)
+    user = dbmod.get_user_by_id(uid)
+    assert a.verify_password("newpassword1", user["password_hash"])
+    # 忘记密码接口防枚举：不存在的邮箱也 200 + 统一措辞
+    async def _do2():
+        return await a.forgot_password(a.ForgotPasswordRequest(email="ghost@nowhere.com"), None)
+    r2 = anyio.run(_do2)
+    assert r2["delivered"] is None and "几分钟内送达" in r2["message"]
+
+
+def test_admin_users_and_invites_api(temp_db):
+    """admin 用户列表 / 重置密码 / 邀请码生成-停用（TestClient 全链路）。"""
+    import os as _os
+
+    from fastapi.testclient import TestClient
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api.main import app
+
+    admin_uid = dbmod.create_user("boss@test.com", a.hash_password("password123"), role="admin")
+    victim_uid = dbmod.create_user("victim@test.com", a.hash_password("password123"))
+    a._RATE_BUCKETS.clear()
+
+    with TestClient(app) as c:
+        tok = c.post("/auth/login", json={"email": "boss@test.com", "password": "password123"}).json()["token"]
+        ah = {"Authorization": f"Bearer {tok}"}
+
+        users = c.get("/admin/users", headers=ah).json()["users"]
+        assert {u["email"] for u in users} >= {"boss@test.com", "victim@test.com"}
+        assert all("password_hash" not in u for u in users)
+
+        # 普通用户访问 → 403
+        victim_tok = c.post("/auth/login", json={"email": "victim@test.com", "password": "password123"}).json()["token"]
+        assert c.get("/admin/users", headers={"Authorization": f"Bearer {victim_tok}"}).status_code == 403
+
+        # 生成邀请码（额度 1）→ 用它注册一个新用户 → 第二次用同码超额
+        inv = c.post("/admin/invites", headers=ah,
+                     json={"max_uses": 1, "expires_days": 1, "note": "t"}).json()
+        assert inv["ok"] and len(inv["code"]) == 8
+        r = c.post("/auth/register", json={
+            "email": "invited@test.com", "password": "password123", "invite_code": inv["code"]})
+        assert r.status_code == 200
+        assert c.post("/auth/register", json={
+            "email": "invited2@test.com", "password": "password123", "invite_code": inv["code"]}).status_code == 400
+
+        # admin 重置 victim 密码 → 临时密码可登录
+        reset = c.post(f"/admin/users/{victim_uid}/reset-password", headers=ah).json()
+        assert reset["ok"] and reset["temp_password"]
+        c2 = TestClient(app)
+        login_r = c2.post("/auth/login", json={
+            "email": "victim@test.com", "password": reset["temp_password"]})
+        assert login_r.status_code == 200
+
+        # 停用码立即失效
+        inv2 = c.post("/admin/invites", headers=ah, json={"max_uses": 5, "expires_days": 0}).json()
+        assert c.post(f"/admin/invites/{inv2['code']}/disable", headers=ah).status_code == 200
+        assert c.post("/auth/register", json={
+            "email": "after@test.com", "password": "password123", "invite_code": inv2["code"]}).status_code == 400
+        # 清理临时目录引用（保持 temp_db fixture 语义）
+        del _os

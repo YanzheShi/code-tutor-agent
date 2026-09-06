@@ -184,6 +184,31 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
+    # ── 邀请码表（注册准入：额度 + 有效期，admin 面板生成/停用）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS invite_codes (
+            code TEXT PRIMARY KEY,
+            max_uses INTEGER NOT NULL DEFAULT 1,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            expires_at TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            note TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
+    # ── 密码重置码（忘记密码自助流程， Brevo 可选；存哈希不存明文）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TIMESTAMP NOT NULL,
+            used INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
     # ── 会话活跃时间表（TTL 自动清理用；user_id 记录归属，越权校验的事实源）──
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_activity (
@@ -1655,6 +1680,146 @@ def has_admin() -> bool:
     except Exception as exc:
         logger.error("has_admin() failed: %s", exc)
         return False
+
+
+# ── 用户管理（admin 重置密码 / 用户列表）──
+
+def update_user_password(user_id: int, password_hash: str) -> bool:
+    """更新用户密码哈希（自助改密 / admin 重置共用）。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (password_hash, user_id),
+            )
+            return cursor.rowcount > 0
+        ok = _with_conn(_do)
+        logger.info("update_user_password(%s) → %s", user_id, ok)
+        return ok
+    except Exception as exc:
+        logger.error("update_user_password(%s) failed: %s", user_id, exc)
+        return False
+
+
+def list_users() -> list[dict]:
+    """用户列表（admin 面板）。不含密码哈希。"""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT id, email, role, created_at FROM users ORDER BY id"
+        ).fetchall())
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.error("list_users() failed: %s", exc)
+        return []
+
+
+# ── 邀请码（注册准入：额度 + 有效期）──
+
+def create_invite_code(code: str, max_uses: int, expires_at: str | None, note: str = "") -> bool:
+    """插入邀请码（code 由调用方生成；重复码返回 False）。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "INSERT INTO invite_codes (code, max_uses, expires_at, note) VALUES (?, ?, ?, ?)",
+                (code, max_uses, expires_at, note),
+            )
+            return True
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.error("create_invite_code(%s) failed: %s", code, exc)
+        return False
+
+
+def consume_invite_code(code: str) -> bool:
+    """原子校验并扣减邀请码额度。
+
+    同时满足：码存在、active、未超额度、未过期 → used_count+1 并返回 True。
+    任何一条不满足返回 False（幂等，不抛错）。
+    """
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE invite_codes SET used_count = used_count + 1 "
+                "WHERE code = ? AND active = 1 AND used_count < max_uses "
+                "AND (expires_at IS NULL OR expires_at > datetime('now','localtime'))",
+                (code,),
+            )
+            return cursor.rowcount == 1
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.error("consume_invite_code(%s) failed: %s", code, exc)
+        return False
+
+
+def list_invite_codes() -> list[dict]:
+    """邀请码列表（admin 面板），按创建时间倒序。"""
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT code, max_uses, used_count, expires_at, active, note, created_at "
+            "FROM invite_codes ORDER BY created_at DESC, code LIMIT 200"
+        ).fetchall())
+        return [dict(r) for r in rows]
+    except Exception as exc:
+        logger.error("list_invite_codes() failed: %s", exc)
+        return []
+
+
+def set_invite_code_active(code: str, active: bool) -> bool:
+    """启用/停用邀请码。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE invite_codes SET active = ? WHERE code = ?",
+                (1 if active else 0, code),
+            )
+            return cursor.rowcount > 0
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.error("set_invite_code_active(%s) failed: %s", code, exc)
+        return False
+
+
+# ── 密码重置码（忘记密码自助流程， Brevo 可选）──
+
+def save_password_reset_code(email: str, code_hash: str, expires_at: str) -> None:
+    """落一条重置码（同一邮箱旧码作废，防多码并存混乱）。"""
+    def _do(cursor):
+        cursor.execute("UPDATE password_reset_codes SET used = 1 WHERE email = ?", (email,))
+        cursor.execute(
+            "INSERT INTO password_reset_codes (email, code_hash, expires_at) VALUES (?, ?, ?)",
+            (email, code_hash, expires_at),
+        )
+    try:
+        _with_conn(_do)
+    except Exception as exc:
+        logger.error("save_password_reset_code(%s) failed: %s", email, exc)
+
+
+def verify_password_reset_code(email: str, code_hash: str) -> bool:
+    """校验重置码：存在、未用、未过期、哈希匹配。"""
+    try:
+        row = _with_conn(lambda cursor: cursor.execute(
+            "SELECT 1 FROM password_reset_codes "
+            "WHERE email = ? AND code_hash = ? AND used = 0 "
+            "AND expires_at > datetime('now','localtime') LIMIT 1",
+            (email, code_hash),
+        ).fetchone())
+        return row is not None
+    except Exception as exc:
+        logger.error("verify_password_reset_code(%s) failed: %s", email, exc)
+        return False
+
+
+def consume_password_reset_code(email: str, code_hash: str) -> None:
+    """用后作废。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "UPDATE password_reset_codes SET used = 1 "
+            "WHERE email = ? AND code_hash = ? AND used = 0",
+            (email, code_hash),
+        ))
+    except Exception as exc:
+        logger.error("consume_password_reset_code(%s) failed: %s", email, exc)
 
 
 # ── Token 用量(成本计量,见 docs/token-cost-control-design.md)──

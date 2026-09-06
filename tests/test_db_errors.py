@@ -76,8 +76,12 @@ class TestUpdateProblemOptimalSolution:
 def _auth_headers(client) -> dict:
     """注册一个测试用户并返回带 Bearer 的请求头（多用户改造后端点需要 JWT）。"""
     import uuid as _uuid
+
+    from code_tutor_agent.db import database as _db
+    _db.create_invite_code("DBERRCODE", 100000, None)  # 邀请码注册制
     email = f"dberr-{_uuid.uuid4().hex[:8]}@test.com"
-    r = client.post("/auth/register", json={"email": email, "password": "password123"})
+    r = client.post("/auth/register", json={"email": email, "password": "password123",
+                                            "invite_code": "DBERRCODE"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
 

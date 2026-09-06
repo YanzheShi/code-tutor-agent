@@ -24,14 +24,18 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from code_tutor_agent.db.database import (
+    consume_password_reset_code,
     create_user,
     get_user_by_email,
     get_user_by_id,
+    save_password_reset_code,
+    update_user_password,
+    verify_password_reset_code,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,9 +193,52 @@ def ensure_bootstrap_admin() -> None:
 router = APIRouter()
 
 
+# ── IP 限流（内存滑动窗口；防脚本批量注册 / 穷举邀请码 / 轰炸找回接口）──
+
+_RATE_BUCKETS: dict[str, list[float]] = {}
+
+
+def rate_limit(key: str, max_requests: int, window_sec: float) -> None:
+    """超限抛 429；内存态，重启清零（本应用单进程部署，够用）。"""
+    now = time.monotonic()
+    bucket = _RATE_BUCKETS.setdefault(key, [])
+    cutoff = now - window_sec
+    while bucket and bucket[0] < cutoff:
+        bucket.pop(0)
+    if len(bucket) >= max_requests:
+        raise HTTPException(429, "操作过于频繁，请稍后再试")
+    bucket.append(now)
+
+
+def _client_ip(request: Request | None) -> str:
+    """取客户端 IP（X-Forwarded-For 由 nginx 设置时取第一跳）；单测直调无 Request → "direct"。"""
+    if request is None:
+        return "direct"
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 class RegisterRequest(BaseModel):
     email: str = Field(description="邮箱（登录账号）")
     password: str = Field(min_length=8, description="密码（至少 8 位）")
+    invite_code: str = Field(description="邀请码（admin 面板生成，额度内有效）")
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(description="当前密码")
+    new_password: str = Field(min_length=8, description="新密码（至少 8 位）")
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(description="注册邮箱")
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str = Field(description="注册邮箱")
+    code: str = Field(description="邮箱收到的验证码")
+    new_password: str = Field(min_length=8, description="新密码（至少 8 位）")
 
 
 class LoginRequest(BaseModel):
@@ -209,9 +256,14 @@ def _user_payload(user: dict) -> dict:
 
 
 @router.post("/register", response_model=AuthResponse)
-async def register(body: RegisterRequest):
-    """开放注册：注册用户一律 role=user（管理员由启动脚本分配，见 ensure_bootstrap_admin）。"""
+async def register(body: RegisterRequest, request: Request = None):
+    """邀请码注册：无有效码不能注册（额度/有效期/停用任一不满足即拒）。
+
+    注册用户一律 role=user（管理员由启动脚本分配，见 ensure_bootstrap_admin）。
+    """
+    rate_limit(f"reg:{_client_ip(request)}", 5, 3600)  # 每 IP 每小时 5 次注册
     email = body.email.strip().lower()
+    code = body.invite_code.strip().upper()
     if not _EMAIL_RE.match(email):
         raise HTTPException(400, "邮箱格式不正确")
     if len(body.password) < 8:
@@ -220,22 +272,28 @@ async def register(body: RegisterRequest):
     if get_user_by_email(email):
         raise HTTPException(409, "该邮箱已注册")
 
+    # 先扣额度（原子），后建号；建号失败属极端情况，额度已扣记日志即可
+    from code_tutor_agent.db.database import consume_invite_code
+    if not consume_invite_code(code):
+        raise HTTPException(400, "邀请码无效或已用完")
+
     try:
         uid = create_user(email, hash_password(body.password), role="user")
     except Exception as exc:
         # 并发注册撞 UNIQUE → 409；其余转 500
         if "UNIQUE" in str(exc):
             raise HTTPException(409, "该邮箱已注册")
-        logger.exception("register failed")
+        logger.exception("register failed (invite %s consumed)", code)
         raise HTTPException(500, "注册失败，请稍后重试")
 
     user = get_user_by_id(uid)
-    logger.info("user registered: id=%s email=%s", uid, email)
+    logger.info("user registered: id=%s email=%s (invite=%s)", uid, email, code)
     return {"token": create_access_token(user), "user": _user_payload(user)}
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(body: LoginRequest):
+async def login(body: LoginRequest, request: Request):
+    rate_limit(f"login:{_client_ip(request)}", 10, 600)  # 每 IP 10 分钟 10 次
     email = body.email.strip().lower()
     user = get_user_by_email(email)
     # 统一 401，不区分「邮箱不存在」与「密码错误」（防账号枚举）
@@ -262,3 +320,62 @@ async def my_profile_v2(current: dict = Depends(get_current_user)):
     """当前用户的 v2 per-tag 画像。"""
     from code_tutor_agent.db.database import get_user_profile_v2
     return get_user_profile_v2(profile_v2_key(current))
+
+
+@router.post("/me/password")
+async def change_my_password(body: ChangePasswordRequest, current: dict = Depends(get_current_user)):
+    """自助改密：验证旧密码后更新（忘记密码走 /forgot-password 或找管理员）。"""
+    user = get_user_by_id(current["id"])
+    if not user or not verify_password(body.old_password, user["password_hash"]):
+        raise HTTPException(400, "当前密码不正确")
+    if not update_user_password(current["id"], hash_password(body.new_password)):
+        raise HTTPException(500, "修改失败，请稍后重试")
+    logger.info("password changed: user=%s", current["id"])
+    return {"ok": True}
+
+
+@router.post("/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest, request: Request):
+    """忘记密码：配置 BREVO_API_KEY 时发 6 位验证码邮件；未配置返回引导信息。
+
+    无论邮箱是否存在一律 200 + 统一措辞（防账号枚举探测）。
+    """
+    rate_limit(f"forgot:{_client_ip(request)}", 3, 3600)
+    email = body.email.strip().lower()
+    generic = {"delivered": None, "message": "如果该邮箱已注册，验证码将在几分钟内送达；请查收（含垃圾箱）。"}
+
+    from code_tutor_agent.api import email as email_svc
+    if not email_svc.is_configured():
+        return {"delivered": False, "message": "邮件服务未配置，请联系管理员在后台为您重置密码。"}
+
+    user = get_user_by_email(email)
+    if not user:
+        return generic  # 不泄露邮箱是否存在
+
+    code = "".join(secrets.choice("23456789") for _ in range(6))  # 去掉易混 0/1
+    code_hash = hashlib.sha256((code + _get_jwt_secret()).encode("utf-8")).hexdigest()
+    from datetime import datetime as _dt
+    expires = (_dt.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    save_password_reset_code(email, code_hash, expires)
+    sent = email_svc.send_email(
+        email,
+        "Code Tutor 密码重置验证码",
+        f"您的密码重置验证码是：{code}\n\n15 分钟内有效。如果不是您本人操作，请忽略本邮件。",
+    )
+    return {**generic, "delivered": sent}
+
+
+@router.post("/reset-password")
+async def reset_password(body: ResetPasswordRequest, request: Request):
+    """用邮箱验证码重置密码（ Brevo 已配置时开放）。"""
+    rate_limit(f"reset:{_client_ip(request)}", 5, 3600)
+    email = body.email.strip().lower()
+    code_hash = hashlib.sha256((body.code.strip() + _get_jwt_secret()).encode("utf-8")).hexdigest()
+    user = get_user_by_email(email)
+    if not user or not verify_password_reset_code(email, code_hash):
+        raise HTTPException(400, "验证码错误或已过期")
+    if not update_user_password(user["id"], hash_password(body.new_password)):
+        raise HTTPException(500, "重置失败，请稍后重试")
+    consume_password_reset_code(email, code_hash)
+    logger.info("password reset via email code: user=%s", user["id"])
+    return {"ok": True}

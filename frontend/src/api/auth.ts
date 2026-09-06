@@ -54,16 +54,54 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   return data.user;
 }
 
-export async function register(email: string, password: string): Promise<AuthUser> {
+export async function register(email: string, password: string, inviteCode: string): Promise<AuthUser> {
   const r = await fetch(`${API_BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, invite_code: inviteCode.trim().toUpperCase() }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.detail || '注册失败');
   setAuth(data.token, data.user);
   return data.user;
+}
+
+/** 自助改密（验证旧密码）。 */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const auth = getStoredAuth();
+  if (!auth) throw new Error('未登录');
+  const r = await fetch(`${API_BASE}/auth/me/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify({ old_password: oldPassword, new_password: newPassword }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => ({}));
+    throw new Error(data?.detail || '修改失败');
+  }
+}
+
+/** 忘记密码：请求验证码邮件（delivered=false 表示邮件服务未配置，走 admin 重置）。 */
+export async function forgotPassword(email: string): Promise<{ delivered: boolean | null; message: string }> {
+  const r = await fetch(`${API_BASE}/auth/forgot-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim() }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.detail || '请求失败，请稍后再试');
+  return { delivered: data.delivered ?? null, message: data.message || '' };
+}
+
+/** 用邮箱验证码重置密码。 */
+export async function resetPassword(email: string, code: string, newPassword: string): Promise<void> {
+  const r = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim(), code: code.trim(), new_password: newPassword }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.detail || '重置失败');
 }
 
 /** 启动时校验 token 是否仍有效（后端回库查用户；失效返回 null）。 */

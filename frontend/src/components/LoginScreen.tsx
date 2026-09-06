@@ -1,15 +1,67 @@
 import { useState } from 'react';
-import { login, register } from '../api/auth';
+import { forgotPassword, login, register, resetPassword } from '../api/auth';
 
-/** 登录/注册页（多用户改造 P4）。开放注册；邮箱 + 密码（≥8 位）。 */
+/** 登录/注册/忘记密码页（多用户改造 P4 + 防滥用改造）。
+ *
+ * - 注册需要邀请码（admin 面板生成，额度内有效）
+ * - 忘记密码三步流：填邮箱 → 收验证码（Brevo 未配置时提示找管理员）→ 验证码 + 新密码重置
+ */
 export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  // 忘记密码流程状态
+  const [codeSent, setCodeSent] = useState(false);
+  const [resetCode, setResetCode] = useState('');
 
-  const canSubmit = email.includes('@') && password.length >= (mode === 'register' ? 8 : 1) && !busy;
+  const canSubmit =
+    email.includes('@') &&
+    password.length >= (mode === 'register' ? 8 : 1) &&
+    (mode !== 'register' || inviteCode.trim().length >= 4) &&
+    !busy;
+
+  const switchMode = (m: typeof mode) => {
+    setMode(m);
+    setError('');
+    setNotice('');
+    setCodeSent(false);
+  };
+
+  const handleForgotRequest = async () => {
+    if (!email.includes('@') || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await forgotPassword(email);
+      setNotice(r.message);
+      if (r.delivered === true) setCodeSent(true);
+      if (r.delivered === false) setCodeSent(false);
+      if (r.delivered === null) setCodeSent(true); // 后端统一措辞，按已发送处理
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '请求失败，请重试');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetSubmit = async () => {
+    if (!resetCode.trim() || password.length < 8 || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await resetPassword(email, resetCode, password);
+      setNotice('密码已重置，请用新密码登录');
+      setTimeout(() => switchMode('login'), 1200);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '重置失败');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,7 +72,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
       if (mode === 'login') {
         await login(email.trim(), password);
       } else {
-        await register(email.trim(), password);
+        await register(email.trim(), password, inviteCode);
       }
       onLoggedIn();
     } catch (err) {
@@ -30,69 +82,159 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
     }
   };
 
+  const inputCls =
+    'w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-ct-text outline-none focus:border-ct-accent';
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-ct-bg px-4">
       <div className="w-full max-w-sm rounded-2xl border border-ct-border bg-ct-panel p-8 shadow-sm">
         <h1 className="text-center text-xl font-medium text-ct-text">
-          {mode === 'login' ? '登录 Code Tutor' : '注册 Code Tutor'}
+          {mode === 'login' ? '登录 Code Tutor' : mode === 'register' ? '注册 Code Tutor' : '找回密码'}
         </h1>
         <p className="mt-2 text-center text-sm text-ct-muted">
-          {mode === 'login' ? '用邮箱继续你的算法练习' : '注册后即可开始练习'}
+          {mode === 'login' && '用邮箱继续你的算法练习'}
+          {mode === 'register' && '注册需要邀请码，可向管理员获取'}
+          {mode === 'forgot' && '输入注册邮箱，按提示重置密码'}
         </p>
 
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <div>
-            <label className="mb-1 block text-sm text-ct-muted">邮箱</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-ct-text outline-none focus:border-ct-accent"
-              autoComplete="email"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm text-ct-muted">
-              密码{mode === 'register' && '（至少 8 位）'}
-            </label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={mode === 'register' ? '至少 8 位' : '密码'}
-              className="w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-ct-text outline-none focus:border-ct-accent"
-              autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-            />
-          </div>
-
-          {error && (
-            <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-600">
-              {error}
+        {mode !== 'forgot' && (
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4">
+            <div>
+              <label className="mb-1 block text-sm text-ct-muted">邮箱</label>
+              <input
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={inputCls}
+                autoComplete="email"
+              />
             </div>
-          )}
+            {mode === 'register' && (
+              <div>
+                <label className="mb-1 block text-sm text-ct-muted">邀请码</label>
+                <input
+                  type="text"
+                  required
+                  value={inviteCode}
+                  onChange={(e) => setInviteCode(e.target.value)}
+                  placeholder="向管理员获取"
+                  className={`${inputCls} font-mono tracking-widest uppercase`}
+                  autoComplete="off"
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-1 block text-sm text-ct-muted">
+                密码{mode === 'register' && '（至少 8 位）'}
+              </label>
+              <input
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={mode === 'register' ? '至少 8 位' : '密码'}
+                className={inputCls}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+              />
+            </div>
 
+            {error && (
+              <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-600">
+                {error}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="w-full rounded-lg bg-ct-accent px-4 py-2 font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并登录'}
+            </button>
+          </form>
+        )}
+
+        {mode === 'forgot' && (
+          <div className="mt-6 space-y-4">
+            <div>
+              <label className="mb-1 block text-sm text-ct-muted">注册邮箱</label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className={inputCls}
+                disabled={codeSent}
+              />
+            </div>
+            {!codeSent ? (
+              <button
+                type="button"
+                onClick={handleForgotRequest}
+                disabled={!email.includes('@') || busy}
+                className="w-full rounded-lg bg-ct-accent px-4 py-2 font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {busy ? '发送中…' : '发送验证码'}
+              </button>
+            ) : (
+              <>
+                <div>
+                  <label className="mb-1 block text-sm text-ct-muted">邮箱验证码（15 分钟内有效）</label>
+                  <input
+                    type="text"
+                    value={resetCode}
+                    onChange={(e) => setResetCode(e.target.value)}
+                    placeholder="6 位数字"
+                    className={`${inputCls} font-mono tracking-widest`}
+                    autoComplete="one-time-code"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm text-ct-muted">新密码（至少 8 位）</label>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="至少 8 位"
+                    className={inputCls}
+                    autoComplete="new-password"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetSubmit}
+                  disabled={!resetCode.trim() || password.length < 8 || busy}
+                  className="w-full rounded-lg bg-ct-accent px-4 py-2 font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {busy ? '提交中…' : '重置密码'}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {notice && (
+          <div className="mt-3 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+            {notice}
+          </div>
+        )}
+
+        <div className="mt-4 flex w-full justify-between text-sm text-ct-muted">
           <button
-            type="submit"
-            disabled={!canSubmit}
-            className="w-full rounded-lg bg-ct-accent px-4 py-2 font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            type="button"
+            onClick={() => switchMode(mode === 'register' ? 'login' : 'register')}
+            className="hover:text-ct-text"
           >
-            {busy ? '请稍候…' : mode === 'login' ? '登录' : '注册并登录'}
+            {mode === 'register' ? '已有账号？去登录' : '没有账号？注册一个'}
           </button>
-        </form>
-
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === 'login' ? 'register' : 'login');
-            setError('');
-          }}
-          className="mt-4 w-full text-center text-sm text-ct-muted hover:text-ct-text"
-        >
-          {mode === 'login' ? '没有账号？注册一个' : '已有账号？去登录'}
-        </button>
+          {mode !== 'forgot' && (
+            <button type="button" onClick={() => switchMode('forgot')} className="hover:text-ct-text">
+              忘记密码？
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

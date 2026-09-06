@@ -121,7 +121,7 @@ interface AdminSubmission {
   verdict: string; code: string; created_at: string;
 }
 
-type AdminSection = 'questions' | 'submissions' | 'profile' | 'cost';
+type AdminSection = 'questions' | 'submissions' | 'profile' | 'cost' | 'users';
 type AdminTab = 'list' | 'view' | 'edit';
 
 const diffColorMap: Record<string, string> = {
@@ -386,6 +386,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     { id: 'submissions', label: '提交管理', icon: '📝' },
     { id: 'profile', label: '查看画像', icon: '📊' },
     { id: 'cost', label: '成本中心', icon: '💸' },
+    { id: 'users', label: '用户与邀请码', icon: '👥' },
   ];
 
   // ── Questions view (non-list) ──
@@ -574,6 +575,185 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
         <Suspense fallback={<div className="p-4 text-sm text-ct-muted">加载成本中心…</div>}>
           <CostCenter adminToken={adminToken ?? ''} />
         </Suspense>
+      )}
+
+      {/* 用户与邀请码管理 */}
+      {section === 'users' && <AdminUsersView />}
+    </div>
+  );
+}
+
+/* ── 用户与邀请码管理（防滥用改造，2026-09-06）── */
+
+interface AdminUserRow {
+  id: number;
+  email: string;
+  role: string;
+  created_at: string;
+}
+
+interface InviteRow {
+  code: string;
+  max_uses: number;
+  used_count: number;
+  expires_at: string | null;
+  active: number;
+  note: string;
+  created_at: string;
+}
+
+function AdminUsersView() {
+  const [users, setUsers] = useState<AdminUserRow[]>([]);
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [msg, setMsg] = useState('');
+  const [tempPw, setTempPw] = useState<{ email: string; pw: string } | null>(null);
+  const [maxUses, setMaxUses] = useState(100);
+  const [expiresDays, setExpiresDays] = useState(1);
+  const [note, setNote] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      const [u, i] = await Promise.all([
+        apiFetch(API_BASE + '/admin/users'),
+        apiFetch(API_BASE + '/admin/invites'),
+      ]);
+      if (u.ok) setUsers((await u.json()).users ?? []);
+      if (i.ok) setInvites((await i.json()).invites ?? []);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const resetPassword = async (userId: number, email: string) => {
+    setMsg('');
+    try {
+      const r = await apiFetch(`${API_BASE}/admin/users/${userId}/reset-password`, { method: 'POST' });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.temp_password) {
+        setTempPw({ email, pw: data.temp_password });
+      } else {
+        setMsg(data?.detail || '重置失败');
+      }
+    } catch { setMsg('网络错误'); }
+  };
+
+  const createInvite = async () => {
+    setMsg('');
+    try {
+      const r = await apiFetch(API_BASE + '/admin/invites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ max_uses: maxUses, expires_days: expiresDays, note }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.code) {
+        setMsg(`已生成邀请码：${data.code}（额度 ${data.max_uses}${data.expires_at ? `，有效期至 ${data.expires_at}` : '，永久'}）`);
+        setNote('');
+        load();
+      } else {
+        setMsg(data?.detail || '生成失败');
+      }
+    } catch { setMsg('网络错误'); }
+  };
+
+  const disableInvite = async (code: string) => {
+    setMsg('');
+    try {
+      const r = await apiFetch(`${API_BASE}/admin/invites/${code}/disable`, { method: 'POST' });
+      if (r.ok) load(); else setMsg('停用失败');
+    } catch { setMsg('网络错误'); }
+  };
+
+  const th = 'px-2 py-1 text-left text-xs font-medium text-ct-muted';
+  const td = 'px-2 py-1 text-xs text-ct-text';
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-ct-text">用户（{users.length}）</h3>
+        <div className="overflow-x-auto rounded-lg border border-ct-border">
+          <table className="w-full">
+            <thead className="bg-ct-bg"><tr><th className={th}>ID</th><th className={th}>邮箱</th><th className={th}>角色</th><th className={th}>注册时间</th><th className={th}>操作</th></tr></thead>
+            <tbody>
+              {users.map(u => (
+                <tr key={u.id} className="border-t border-ct-border">
+                  <td className={td}>{u.id}</td>
+                  <td className={td}>{u.email}</td>
+                  <td className={td}>{u.role === 'admin' ? '管理员' : '用户'}</td>
+                  <td className={td}>{(u.created_at || '').slice(0, 16)}</td>
+                  <td className={td}>
+                    <button
+                      onClick={() => resetPassword(u.id, u.email)}
+                      className="rounded border border-ct-border px-2 py-0.5 text-xs text-ct-muted hover:text-ct-text">
+                      重置密码
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-ct-text">生成邀请码</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-xs text-ct-muted">额度
+            <input type="number" min={1} max={10000} value={maxUses}
+              onChange={e => setMaxUses(Math.max(1, Number(e.target.value) || 1))}
+              className="ml-1 w-20 rounded border border-ct-border bg-ct-bg px-2 py-1 text-xs text-ct-text" />
+          </label>
+          <label className="text-xs text-ct-muted">有效天数（0=永久）
+            <input type="number" min={0} max={365} value={expiresDays}
+              onChange={e => setExpiresDays(Math.max(0, Number(e.target.value) || 0))}
+              className="ml-1 w-20 rounded border border-ct-border bg-ct-bg px-2 py-1 text-xs text-ct-text" />
+          </label>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="备注（可选）"
+            className="w-40 rounded border border-ct-border bg-ct-bg px-2 py-1 text-xs text-ct-text" />
+          <button onClick={createInvite}
+            className="rounded bg-ct-accent px-3 py-1 text-xs font-medium text-white hover:opacity-90">
+            生成
+          </button>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-ct-text">邀请码（{invites.length}）</h3>
+        <div className="overflow-x-auto rounded-lg border border-ct-border">
+          <table className="w-full">
+            <thead className="bg-ct-bg"><tr><th className={th}>码</th><th className={th}>已用/额度</th><th className={th}>过期时间</th><th className={th}>状态</th><th className={th}>备注</th><th className={th}>操作</th></tr></thead>
+            <tbody>
+              {invites.map(v => (
+                <tr key={v.code} className="border-t border-ct-border">
+                  <td className={`${td} font-mono`}>{v.code}</td>
+                  <td className={td}>{v.used_count}/{v.max_uses}</td>
+                  <td className={td}>{v.expires_at ? v.expires_at.slice(0, 16) : '永久'}</td>
+                  <td className={td}>{v.active ? '有效' : '已停用'}</td>
+                  <td className={td}>{v.note || '-'}</td>
+                  <td className={td}>
+                    {v.active === 1 && (
+                      <button onClick={() => disableInvite(v.code)}
+                        className="rounded border border-ct-border px-2 py-0.5 text-xs text-red-500 hover:text-red-600">
+                        停用
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+              {invites.length === 0 && (
+                <tr><td className={td} colSpan={6}>还没有邀请码，用上面的表单生成一个</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {msg && <div className="rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-sm text-ct-text">{msg}</div>}
+      {tempPw && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <b>{tempPw.email}</b> 的临时密码：<span className="font-mono font-bold">{tempPw.pw}</span>
+          （仅显示这一次，请立即发给用户；用户登录后建议自行修改）
+          <button onClick={() => setTempPw(null)} className="ml-2 text-xs underline">知道了</button>
+        </div>
       )}
     </div>
   );

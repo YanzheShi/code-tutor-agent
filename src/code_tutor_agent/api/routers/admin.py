@@ -11,6 +11,7 @@ import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from code_tutor_agent.api.auth import require_admin, user_key
 from code_tutor_agent.schemas.api import (
@@ -176,3 +177,78 @@ async def admin_list_submissions(body: AdminPasswordRequest = AdminPasswordReque
     """List all recent submissions across all problems."""
     from code_tutor_agent.db.database import get_all_submissions
     return {"submissions": get_all_submissions()}
+
+
+# ── 用户管理（多用户防滥用改造，2026-09-06）──
+
+@router.get("/users")
+async def admin_list_users(current: dict = Depends(require_admin)):
+    """用户列表（不含密码哈希）。"""
+    from code_tutor_agent.db.database import list_users
+    return {"users": list_users()}
+
+
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: int, current: dict = Depends(require_admin)):
+    """重置某用户密码为随机临时密码；明文只在本次响应返回一次，请立即发给用户。"""
+    import secrets as _secrets
+
+    from code_tutor_agent.api.auth import hash_password
+    from code_tutor_agent.db.database import get_user_by_id, update_user_password
+
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+    temp_password = "".join(_secrets.choice(alphabet) for _ in range(10))
+    if not update_user_password(user_id, hash_password(temp_password)):
+        raise HTTPException(500, "重置失败，请稍后重试")
+    logger.info("admin %s reset password of user %s", current["id"], user_id)
+    return {"ok": True, "temp_password": temp_password, "email": user["email"]}
+
+
+# ── 邀请码管理 ──
+
+@router.get("/invites")
+async def admin_list_invites(current: dict = Depends(require_admin)):
+    """邀请码列表（含额度使用情况）。"""
+    from code_tutor_agent.db.database import list_invite_codes
+    return {"invites": list_invite_codes()}
+
+
+class InviteCreateRequest(BaseModel):
+    max_uses: int = 100
+    expires_days: int = 1
+    note: str = ""
+
+
+@router.post("/invites")
+async def admin_create_invite(body: InviteCreateRequest, current: dict = Depends(require_admin)):
+    """生成邀请码：额度 + 有效天数自定（expires_days=0 表示永久）。"""
+    import secrets as _secrets
+
+    from datetime import datetime as _dt, timedelta as _td
+
+    from code_tutor_agent.db.database import create_invite_code
+
+    max_uses = max(1, min(int(body.max_uses), 10000))
+    expires_at = None
+    if body.expires_days > 0:
+        expires_at = (_dt.now() + _td(days=body.expires_days)).strftime("%Y-%m-%d %H:%M:%S")
+    # 去易混字符的 8 位码；主键冲突重试
+    for _ in range(5):
+        code = "".join(_secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
+        if create_invite_code(code, max_uses, expires_at, body.note):
+            logger.info("admin %s created invite %s (max_uses=%s, expires=%s)",
+                        current["id"], code, max_uses, expires_at or "never")
+            return {"ok": True, "code": code, "max_uses": max_uses, "expires_at": expires_at}
+    raise HTTPException(500, "邀请码生成失败，请重试")
+
+
+@router.post("/invites/{code}/disable")
+async def admin_disable_invite(code: str, current: dict = Depends(require_admin)):
+    """停用邀请码（立即失效，额度不恢复）。"""
+    from code_tutor_agent.db.database import set_invite_code_active
+    if not set_invite_code_active(code.upper(), False):
+        raise HTTPException(404, "邀请码不存在")
+    return {"ok": True}
