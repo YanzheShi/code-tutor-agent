@@ -224,12 +224,14 @@ export default function WelcomeScreen({
   onStart,
   onStartExisting,
   onOpenAdmin,
+  onOpenSettings,
   onLogout,
   user,
 }: {
   onStart: (topic: string, difficulty: string, mode: string) => void;
   onStartExisting?: (problemId: number) => void;
   onOpenAdmin?: () => void;
+  onOpenSettings?: () => void;
   onLogout?: () => void;
   user?: { id: number; email: string; role: string } | null;
 }) {
@@ -265,15 +267,29 @@ export default function WelcomeScreen({
         <div className="relative shrink-0 text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
           <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 对抗判题 · 渐进辅导</p>
-          {onLogout && (
-            <button
-              type="button"
-              onClick={onLogout}
-              title={user?.email ? `退出登录 (${user.email})` : '退出登录'}
-              className="absolute right-0 top-0 rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
-            >
-              退出登录
-            </button>
+          {(onOpenSettings || onLogout) && (
+            <div className="absolute right-0 top-0 flex gap-2">
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  title="设置（主题 / 模型服务）"
+                  className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+                >
+                  ⚙️ 设置
+                </button>
+              )}
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  title={user?.email ? `退出登录 (${user.email})` : '退出登录'}
+                  className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+                >
+                  退出登录
+                </button>
+              )}
+            </div>
           )}
         </div>
 

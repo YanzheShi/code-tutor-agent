@@ -10,7 +10,7 @@ import { API_BASE } from '../api/config';
 import { useEditTrace } from './useEditTrace';
 
 const BASE = API_BASE;
-export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin';
+export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin' | 'settings';
 export type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history' | 'trace';
 
 export const DEFAULT_TAB_PANEL: Record<TabId, 'left' | 'right'> = {
@@ -605,6 +605,7 @@ export function useSession() {
   }, [phase, latestVerdict, sessionId, mode, problem, traceAnalysis, summarizeAndInject]);
 
   const handleOpenAdmin = useCallback(() => setScreen('admin'), []);
+  const handleOpenSettings = useCallback(() => setScreen('settings'), []);
 
   // ── 始终回到欢迎页（不受 phase 影响） ──
   const handleBackToWelcome = useCallback(() => {
@@ -636,7 +637,7 @@ export function useSession() {
     onRun: handleRun, onChat: handleChat, onNext: handleNext,
     onAnalyzeTrace: handleAnalyzeTrace, onTraceAsk: handleTraceAsk,
     onBackToWelcome: handleBackToWelcome,
-    onOpenAdmin: handleOpenAdmin, onAgentSend: handleAgentSend,
+    onOpenAdmin: handleOpenAdmin, onOpenSettings: handleOpenSettings, onAgentSend: handleAgentSend,
     setScreen,
   };
 }

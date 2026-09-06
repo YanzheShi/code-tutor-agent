@@ -3,23 +3,10 @@ import LoadingScreen from './components/LoadingScreen';
 import LoginScreen from './components/LoginScreen';
 import WelcomeScreen from './components/WelcomeScreen';
 import AdminPanel from './components/AdminPanel';
+import SettingsPanel from './components/SettingsPanel';
 import MainLayout, { type MainLayoutProps } from './components/MainLayout';
 import { fetchMe, getStoredAuth, isAdmin, clearAuth, type AuthUser } from './api/auth';
 import { useSession } from './hooks/useSession';
-import { useTheme } from './hooks/useTheme';
-
-function ThemeToggle() {
-  const { theme, toggle } = useTheme();
-  return (
-    <button
-      onClick={toggle}
-      className="fixed top-3 right-3 z-50 rounded-full border border-ct-border bg-ct-panel/90 p-2 text-sm shadow-sm backdrop-blur-sm transition hover:opacity-80"
-      title={theme === 'dark' ? '切换浅色主题' : '切换深色主题'}
-    >
-      {theme === 'dark' ? '☀️' : '🌙'}
-    </button>
-  );
-}
 
 export default function App() {
   // ── 登录门禁（多用户改造 P4）：本地有凭证则后台校验 token，无凭证直接进登录页 ──
@@ -61,17 +48,18 @@ export default function App() {
   }
 
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
+  if (screen === 'settings') return <SettingsPanel onClose={() => s.setScreen('welcome')} />;
   if (screen === 'welcome') return (
-    <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-      onOpenAdmin={s.onOpenAdmin} onLogout={logout} user={user} /></>
+    <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
+      onOpenAdmin={s.onOpenAdmin} onOpenSettings={s.onOpenSettings} onLogout={logout} user={user} />
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') {
     // admin 入口仅 admin 角色可进（非 admin 误入时回落 welcome）
     if (!isAdmin()) {
       return (
-        <><ThemeToggle /><WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-          onOpenAdmin={s.onOpenAdmin} onLogout={logout} user={user} /></>
+        <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
+          onOpenAdmin={s.onOpenAdmin} onOpenSettings={s.onOpenSettings} onLogout={logout} user={user} />
       );
     }
     return <AdminPanel onClose={() => s.setScreen('welcome')} />;
@@ -102,6 +90,7 @@ export default function App() {
     onRun: s.onRun, onSubmit: s.onSubmit, onChat: s.onChat,
         onNext: s.onNext, onBackToWelcome: (s as any).onBackToWelcome || (() => {}), onAgentSend: s.onAgentSend,
     onLogout: logout,
+    onOpenSettings: () => s.setScreen('settings'),
     analyzingTrace: s.analyzingTrace, onAnalyzeTrace: s.onAnalyzeTrace,
     traceFailed: s.traceFailed,
     traceAnalysis: s.traceAnalysis, traceMessages: s.traceMessages,

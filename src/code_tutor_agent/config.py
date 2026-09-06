@@ -122,6 +122,17 @@ def get_llm(purpose: str, **kwargs):
     config.update(purpose_cfg)   # 用途默认参数（temperature, streaming 等）
     config.update(kwargs)        # 调用方显式覆盖
 
+    # 用户级覆盖（设置页自定义 API key / base URL / model）优先于服务器默认。
+    # 调用方显式 kwargs 仍最高（上面 update 在后？不——kwargs 已合并，这里再盖）：
+    # 语义定为「用户自选 key 优先于服务器默认，但调用方显式传参仍是最终决定权」的场景
+    # 不存在——所有业务调用都不传这三个字段，因此放在 kwargs 合并之后不会破坏任何调用点。
+    from code_tutor_agent.runtime_settings import get_llm_override
+    override = get_llm_override()
+    if override:
+        for k in ("model", "base_url", "api_key"):
+            if override.get(k):
+                config[k] = override[k]
+
     # 确保必填项不为空
     if not config.get("model") or not config.get("api_key"):
         raise ValueError(

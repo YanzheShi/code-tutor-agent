@@ -26,6 +26,7 @@ from code_tutor_agent.api.routers import (
     problems,
     run,
     session,
+    settings,
     token,
 )
 from code_tutor_agent.progress import _generation_progress
@@ -128,10 +129,42 @@ async def request_tracing_middleware(request: Request, call_next):
         })
         raise
 
+# ── 用户级 LLM 设置注入：请求进入时按 token 加载该用户自定义模型配置 ──
+# 解 token 失败（未登录/过期）静默跳过 —— 鉴权由路由依赖负责，这里只做增强。
+@app.middleware("http")
+async def user_llm_settings_middleware(request: Request, call_next):
+    from code_tutor_agent.api.routers.settings import load_user_llm_cfg
+    from code_tutor_agent.runtime_settings import set_llm_override
+
+    reset_token = None
+    try:
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            try:
+                from code_tutor_agent.api.auth import decode_token
+                uid = int(decode_token(auth[7:].strip()).get("sub", ""))
+            except Exception:
+                uid = 0
+            if uid:
+                cfg = load_user_llm_cfg(uid)
+                if cfg:
+                    reset_token = set_llm_override(cfg)
+    except Exception:
+        logger.debug("user llm settings injection skipped", exc_info=True)
+    try:
+        return await call_next(request)
+    finally:
+        if reset_token is not None:
+            from code_tutor_agent.runtime_settings import llm_override_ctx
+            llm_override_ctx.reset(reset_token)
+
+
 # ── Register routers ──
 # 多用户改造（2026-09-06）：/auth 开放；业务路由统一 Bearer 鉴权；
 # admin/token 路由要求 admin 角色（替代旧明文密码 body 校验）。
 app.include_router(auth_router, prefix="/auth", tags=["auth"])
+app.include_router(settings.router, prefix="/settings", tags=["settings"],
+                   dependencies=[Depends(get_current_user)])
 app.include_router(session.router, prefix="/session", tags=["session"],
                    dependencies=[Depends(get_current_user)])
 app.include_router(run.router, prefix="/session", tags=["run"],

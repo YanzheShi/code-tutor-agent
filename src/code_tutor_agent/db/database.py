@@ -184,6 +184,18 @@ def _init_db_tables(cursor) -> None:
         )
     """)
 
+    # ── 用户设置表（自定义 LLM 接入：API key / base URL / model，per-user）──
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            llm_mode TEXT NOT NULL DEFAULT 'default',
+            llm_model TEXT NOT NULL DEFAULT '',
+            llm_base_url TEXT NOT NULL DEFAULT '',
+            llm_api_key TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
     # ── 邀请码表（注册准入：额度 + 有效期，admin 面板生成/停用）──
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS invite_codes (
@@ -2252,3 +2264,46 @@ def export_token_usage_csv(from_date: str | None = None, to_date: str | None = N
                     r["prompt_tokens"], r["completion_tokens"], r["cache_read_tokens"],
                     r["cost"], r["latency_ms"]])
     return buf.getvalue()
+
+
+# ── 用户设置（自定义 LLM 接入，settings 路由使用）──
+
+def get_user_settings(user_id: int) -> dict | None:
+    """读取用户设置行；无记录返回 None（视为全部走服务器默认）。"""
+    rows = _with_conn(
+        lambda c: c.execute(
+            "SELECT user_id, llm_mode, llm_model, llm_base_url, llm_api_key, updated_at "
+            "FROM user_settings WHERE user_id = ?", (user_id,)
+        ).fetchall()
+    )
+    if not rows:
+        return None
+    r = rows[0]
+    return {
+        "user_id": r[0], "llm_mode": r[1], "llm_model": r[2],
+        "llm_base_url": r[3], "llm_api_key": r[4], "updated_at": r[5],
+    }
+
+
+def save_user_settings(user_id: int, mode: str, model: str, base_url: str, api_key: str) -> None:
+    """UPSERT 用户设置（llm_mode='custom' 时由调用方保证三项非空）。"""
+    _with_conn(
+        lambda c: c.execute(
+            """
+            INSERT INTO user_settings (user_id, llm_mode, llm_model, llm_base_url, llm_api_key)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                llm_mode = excluded.llm_mode,
+                llm_model = excluded.llm_model,
+                llm_base_url = excluded.llm_base_url,
+                llm_api_key = excluded.llm_api_key,
+                updated_at = datetime('now','localtime')
+            """,
+            (user_id, mode, model, base_url, api_key),
+        )
+    )
+
+
+def delete_user_settings(user_id: int) -> None:
+    """删除用户设置（切回服务器默认模式时调用）。"""
+    _with_conn(lambda c: c.execute("DELETE FROM user_settings WHERE user_id = ?", (user_id,)))
