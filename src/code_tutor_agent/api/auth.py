@@ -210,6 +210,36 @@ def rate_limit(key: str, max_requests: int, window_sec: float) -> None:
     bucket.append(now)
 
 
+def _env_int(name: str, default: int) -> int:
+    """限流阈值环境变量（次数）。非法值回退默认；≤0 视为关闭该限流（测试期放开用）。"""
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+# 限流阈值全部可配（环境变量在调用时惰性读取：测试阶段调大 / 值 ≤0 = 关闭该限流）。
+# 窗口期保持原语义不变：注册/找回/重置按小时，登录按 10 分钟。
+_RATE_LIMITS = {
+    "reg": ("REGISTER_RATE_LIMIT", 5, 3600),    # 次/小时/IP，默认 5
+    "login": ("LOGIN_RATE_LIMIT", 10, 600),     # 次/10分钟/IP，默认 10
+    "forgot": ("FORGOT_RATE_LIMIT", 3, 3600),   # 次/小时/IP，默认 3
+    "reset": ("RESET_RATE_LIMIT", 5, 3600),     # 次/小时/IP，默认 5
+}
+
+
+def _limited(key_prefix: str, ip: str) -> None:
+    """按可配置阈值执行 IP 限流；环境变量未设用默认，值 ≤0 关闭该限流。"""
+    env_name, default, window = _RATE_LIMITS[key_prefix]
+    limit = _env_int(env_name, default)
+    if limit <= 0:
+        return
+    rate_limit(f"{key_prefix}:{ip}", limit, window)
+
+
 def _client_ip(request: Request | None) -> str:
     """取客户端 IP（X-Forwarded-For 由 nginx 设置时取第一跳）；单测直调无 Request → "direct"。"""
     if request is None:
@@ -261,7 +291,7 @@ async def register(body: RegisterRequest, request: Request = None):
 
     注册用户一律 role=user（管理员由启动脚本分配，见 ensure_bootstrap_admin）。
     """
-    rate_limit(f"reg:{_client_ip(request)}", 5, 3600)  # 每 IP 每小时 5 次注册
+    _limited("reg", _client_ip(request))  # 每 IP 每小时 5 次注册（REGISTER_RATE_LIMIT 可配）
     email = body.email.strip().lower()
     code = body.invite_code.strip().upper()
     if not _EMAIL_RE.match(email):
@@ -293,7 +323,7 @@ async def register(body: RegisterRequest, request: Request = None):
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, request: Request):
-    rate_limit(f"login:{_client_ip(request)}", 10, 600)  # 每 IP 10 分钟 10 次
+    _limited("login", _client_ip(request))  # 每 IP 10 分钟 10 次（LOGIN_RATE_LIMIT 可配）
     email = body.email.strip().lower()
     user = get_user_by_email(email)
     # 统一 401，不区分「邮箱不存在」与「密码错误」（防账号枚举）
@@ -351,7 +381,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
 
     无论邮箱是否存在一律 200 + 统一措辞（防账号枚举探测）。
     """
-    rate_limit(f"forgot:{_client_ip(request)}", 3, 3600)
+    _limited("forgot", _client_ip(request))
     email = body.email.strip().lower()
     generic = {"delivered": None, "message": "如果该邮箱已注册，验证码将在几分钟内送达；请查收（含垃圾箱）。"}
 
@@ -379,7 +409,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
 @router.post("/reset-password")
 async def reset_password(body: ResetPasswordRequest, request: Request):
     """用邮箱验证码重置密码（ Brevo 已配置时开放）。"""
-    rate_limit(f"reset:{_client_ip(request)}", 5, 3600)
+    _limited("reset", _client_ip(request))
     email = body.email.strip().lower()
     code_hash = hashlib.sha256((body.code.strip() + _get_jwt_secret()).encode("utf-8")).hexdigest()
     user = get_user_by_email(email)

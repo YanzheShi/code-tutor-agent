@@ -19,6 +19,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.llm_failover import invoke_with_failover
 from code_tutor_agent.sandbox.runner import RunnerResult
 
 logger = logging.getLogger(__name__)
@@ -322,12 +323,16 @@ def analyze_judge_results(
 
     try:
         llm = get_llm(purpose=purpose, temperature=0.7)
-        structured_llm = llm.with_structured_output(JudgeAnalysis)
 
-        analysis: JudgeAnalysis = structured_llm.invoke([
-            ("system", JUDGE_ANALYSIS_SYSTEM),
-            ("human", user_prompt),
-        ])
+        # invoke_with_failover：主 key 撞 429/限流时本次请求改用 ALT 备用 key
+        analysis: JudgeAnalysis = invoke_with_failover(
+            llm,
+            lambda m: m.with_structured_output(JudgeAnalysis).invoke([
+                ("system", JUDGE_ANALYSIS_SYSTEM),
+                ("human", user_prompt),
+            ]),
+            purpose,
+        )
         # 最终 verdict 以客观执行结果为准，绝不被 LLM 覆盖。
         analysis.verdict = authoritative
         analysis.should_retry = (authoritative != "AC")

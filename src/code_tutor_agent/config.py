@@ -87,7 +87,7 @@ PURPOSE_CONFIGS = {
 }
 
 
-def get_llm(purpose: str, **kwargs):
+def get_llm(purpose: str, alias: str | None = None, **kwargs):
     """根据业务用途获取大模型实例。
 
     业务代码只表达"用途"（如 ``purpose="tutor-eval"``），
@@ -95,6 +95,8 @@ def get_llm(purpose: str, **kwargs):
 
     Args:
         purpose: 业务用途，对应 PURPOSE_CONFIGS 中的 key。
+        alias: 显式指定模型别名（覆盖用途默认映射）。
+            供 llm_failover 构造 secondary 备用实例用，业务代码勿传。
         **kwargs: 额外的模型参数，会覆盖用途配置中的默认值。
 
     Returns:
@@ -109,7 +111,8 @@ def get_llm(purpose: str, **kwargs):
         )
 
     purpose_cfg = PURPOSE_CONFIGS[purpose].copy()
-    alias = purpose_cfg.pop("alias")
+    default_alias = purpose_cfg.pop("alias")
+    alias = alias or default_alias
 
     if alias not in LLM_CONFIGS:
         raise ValueError(

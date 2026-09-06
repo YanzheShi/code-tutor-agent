@@ -28,6 +28,7 @@ import sys as _sys
 # 本模块引用，供 run_tool_loop 动态解析工具函数（便于测试 mock）
 _self_module = _sys.modules[__name__]
 
+from code_tutor_agent.llm_failover import invoke_with_failover
 from code_tutor_agent.sandbox.judge0_client import (
     run_code,
     submit_test_cases,
@@ -257,11 +258,19 @@ async def run_tool_loop(
         return messages
 
     allowed = {t.name for t in tools}
-    llm_with_tools = llm.bind_tools(tools)
     last_content = ""
+    # purpose 从模型实例 metadata 取（get_llm 注入），failover 构造备用模型时复用
+    _purpose = (getattr(llm, "metadata", None) or {}).get("purpose", "")
+
+    def _invoke_with_tools(m):
+        # bind_tools 放在 invoke_fn 内：主/备模型都要拿到同样的工具绑定
+        return m.bind_tools(tools).invoke(messages)
 
     for _ in range(max_rounds):
-        ai = llm_with_tools.invoke(messages)
+        # ⚠️ 放线程跑：本函数是 async，同步 .invoke 会阻塞 uvicorn 事件循环，
+        # 多用户并发 chat 时所有请求串行排队（云主机 6 路并发实测 30s+ 超时）。
+        # invoke_with_failover：主 key 撞 429/限流时本次请求改用 ALT 备用 key。
+        ai = await asyncio.to_thread(invoke_with_failover, llm, _invoke_with_tools, _purpose)
         last_content = _msg_text(getattr(ai, "content", ""))
         tcs = getattr(ai, "tool_calls", None) or []
         if not tcs:

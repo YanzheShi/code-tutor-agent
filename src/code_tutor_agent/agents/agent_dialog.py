@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -19,6 +20,7 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.llm_failover import invoke_with_failover
 from code_tutor_agent.guards.design_guard import (
     design_dialog_refusal,
     mentions_design_topic,
@@ -362,7 +364,9 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
             '- 若 topic + difficulty 都明确，is_ready=true\n'
             '- next_message 是给用户的自然语言回复\n'
         )
-        resp = llm.invoke([("human", prompt)])
+        resp = invoke_with_failover(
+            llm, lambda m: m.invoke([("human", prompt)]), purpose="dialog"
+        )
         text = resp.content if hasattr(resp, "content") else str(resp)
         # 提取 JSON
         json_match = re.search(r'\{[\s\S]*"topic"[\s\S]*"next_message"[\s\S]*\}', text)
@@ -536,19 +540,33 @@ async def analyze_user_intent(
         llm = get_llm(purpose=purpose, temperature=0.7)
     except Exception as exc:
         # get_llm 失败（配置/网络）→ 直接走兜底，避免工具循环也崩
+        # （_fallback_parse_intent 内部还会再调一次 LLM，同样放线程，别堵事件循环）
         logger.warning("get_llm failed, using fallback: %s", exc)
-        intent = _fallback_parse_intent(transcript, profile_summary)
+        intent = await asyncio.to_thread(
+            _fallback_parse_intent, transcript, profile_summary
+        )
     else:
         # ── 结构化意图判定（LeetCode 已在上面短链返回，此处只处理非 LeetCode 意图）──
         try:
-            structured_llm = llm.with_structured_output(DialogIntent)
-            intent = structured_llm.invoke([
+            _msgs = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt),
-            ])
+            ]
+            # ⚠️ 必须放线程跑：本函数是 async，被 uvicorn 事件循环直接驱动，
+            # 同步 .invoke 会阻塞整个事件循环——多用户并发 chat 时所有请求
+            # 串行排队，6 路并发即可把全部请求拖到 30s+ 超时（云主机实测）。
+            # invoke_with_failover：主 key 撞 429/限流时本次请求改用 ALT 备用 key。
+            intent = await asyncio.to_thread(
+                invoke_with_failover,
+                llm,
+                lambda m: m.with_structured_output(DialogIntent).invoke(_msgs),
+                purpose,
+            )
         except Exception as exc:
             logger.error("LLM structured output failed, fallback: %s", exc)
-            intent = _fallback_parse_intent(transcript, profile_summary)
+            intent = await asyncio.to_thread(
+                _fallback_parse_intent, transcript, profile_summary
+            )
 
     # ── 硬守护：设计类题目拦截（prompt 约束被无视时的关键词兜底）──
     # 必须覆盖 LLM 成功 / 失败两条路径，命中即强制 is_ready=False，

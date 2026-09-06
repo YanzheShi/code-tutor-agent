@@ -32,6 +32,7 @@ from typing import Optional
 from langchain_core.prompts import ChatPromptTemplate
 
 from code_tutor_agent.config import get_llm
+from code_tutor_agent.llm_failover import invoke_with_failover
 from code_tutor_agent.guards.design_guard import extract_main_classes, is_design_style_code
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.prompts.generate_problem import (
@@ -298,14 +299,11 @@ def generate_problem(
     # temperature 调至 0.7 增加多样性，减少 AC 题目重复出题。
     # 全部尝试（含重试）均失败（problem 为 None）时抛 RuntimeError，交由 ProblemAgent 降级到静态库。
     llm = get_llm(purpose=purpose)
-    structured_llm = llm.with_structured_output(Problem)
 
     prompt = ChatPromptTemplate.from_messages([
         ("system", GENERATE_PROBLEM_SYSTEM),
         ("human", GENERATE_PROBLEM_USER + (user_suffix or "")),
     ])
-
-    chain = prompt | structured_llm
 
     problem: Problem | None = None
     # 调用重试
@@ -313,7 +311,15 @@ def generate_problem(
         logger.info("LLM call attempt %d/%d …", attempt + 1, max_retries + 1)
 
         try:
-            problem = chain.invoke({"topic": topic, "difficulty": difficulty})
+            # invoke_with_failover：主 key 撞 429/限流时本次请求改用 ALT 备用 key
+            # （bind 链放在 invoke_fn 内，使 fallback 实例获得同样的结构化输出包装）
+            problem = invoke_with_failover(
+                llm,
+                lambda m: (
+                    prompt | m.with_structured_output(Problem)
+                ).invoke({"topic": topic, "difficulty": difficulty}),
+                purpose,
+            )
         except Exception as exc:
             logger.warning("LLM structured output failed: %s", exc)
             continue
