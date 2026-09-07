@@ -34,7 +34,8 @@ services:
     # 不使用 compose 内置 app-db 容器：去掉对它的健康检查依赖
     depends_on: !override []
 
-# 固定复用既有 cta-network（不带 compose 项目前缀），保住 judge0 别名
+# 复用既有 cta-network（external：网络由 judge0-arm 侧/历史部署创建，
+# compose 直接引用不重建），保住 judge0 别名解析
 networks:
   cta-network:
-    name: cta-network
+    external: true
