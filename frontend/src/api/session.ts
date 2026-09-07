@@ -92,6 +92,49 @@ export async function fetchTraceAnalysis(sid: string, problemId = 'default'): Pr
   return r.json();
 }
 
+/** 轨迹分析多轮追问的流式版本：POST /session/{sid}/analyze/stream，SSE 逐 token 回调。 */
+export async function analyzeTraceStream(
+  sid: string,
+  problemId = 'default',
+  message?: string,
+  onToken?: (token: string) => void,
+): Promise<boolean> {
+  const r = await apiFetch(`${BASE}/session/${sid}/analyze/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ problem_id: problemId, message }),
+  });
+  if (!r.ok || !r.body) return false;
+
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || '';
+    for (const ev of events) {
+      if (!ev.startsWith('data: ')) continue;
+      const raw = ev.slice(6);
+      if (raw.trim() === '__DONE__') continue;
+      let token = raw;
+      const trimmed = raw.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          if (parsed && typeof parsed.t === 'string') token = parsed.t;
+        } catch {
+          /* 保留原始文本 */
+        }
+      }
+      onToken?.(token);
+    }
+  }
+  return true;
+}
+
 export async function summarizeTrace(
   sid: string,
   problemId = 'default',

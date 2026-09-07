@@ -375,6 +375,45 @@ def continue_analysis(session_id: str, problem_id: str, message: str) -> str:
         return "（分析追问暂时不可用，请稍后再试。）"
 
 
+async def continue_analysis_stream(session_id: str, problem_id: str, message: str):
+    """多轮追问的流式版本：实时 yield SSE token，结束时把完整回复落库分析线程。
+
+    与 continue_analysis 语义一致（含线程不存在时先跑首轮建立上下文），但正文走
+    llm.astream 逐 token 吐出，前端可边生成边渲染。SSE 事件格式复用 chat.py 的
+    _sse_payload（data: {"t": text}\\n\\n + __DONE__ 哨兵）。
+    """
+    def _sse(text: str) -> str:
+        return f"data: {json.dumps({'t': text}, ensure_ascii=False)}\n\n"
+
+    msgs = _load_thread(session_id, problem_id)
+    if not msgs:
+        # 线程不存在（如刷新后或已被归档）：先跑首轮建立上下文，再回答追问
+        first_round_analysis(session_id, problem_id)
+        msgs = _load_thread(session_id, problem_id) or []
+    msgs.append(HumanMessage(content=message))
+    # 先落库（含未回答的问题），保证缓存与 DB 一致
+    _save_thread(session_id, problem_id, msgs)
+
+    full: list[str] = []
+    try:
+        llm = get_llm(purpose="edit-trace")
+        async for chunk in llm.astream(msgs):
+            content = chunk.content if hasattr(chunk, "content") else ""
+            if isinstance(content, list):
+                content = "".join(str(p) for p in content)
+            if content:
+                full.append(content)
+                yield _sse(content)
+        text = "".join(full)
+    except Exception as exc:
+        logger.error("continue_analysis_stream LLM failed: %s", exc)
+        text = "（分析追问暂时不可用，请稍后再试。）"
+        yield _sse(text)
+    msgs.append(AIMessage(content=text))
+    _save_thread(session_id, problem_id, msgs)
+    yield _sse("__DONE__")
+
+
 def archive_thread(session_id: str, problem_id: str) -> None:
     """过渡时归档（清空）当前题分析线程：缓存 + trace_threads 表。"""
     _THREADS.pop(_thread_key(session_id, problem_id), None)

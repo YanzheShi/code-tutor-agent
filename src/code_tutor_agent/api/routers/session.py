@@ -550,6 +550,27 @@ async def analyze_trace_endpoint(
         raise HTTPException(500, "trace analysis failed")
 
 
+@router.post("/{sid}/analyze/stream")
+async def analyze_trace_stream_endpoint(
+    sid: str, body: Optional[AnalyzeRequest] = None, current: dict = Depends(get_current_user),
+):
+    """轨迹分析多轮追问的流式版本：SSE 实时吐出追问回复，结束时落库分析线程。
+
+    与 POST /{sid}/analyze（带 message）语义一致，只是回复走 token 级流式而非一次性 JSON。
+    首轮结构化分析（无 message）仍走非流式 /analyze，不在本端点范围。
+    """
+    _require_owner(sid, current)
+    body = body or AnalyzeRequest()
+    if not body.message:
+        raise HTTPException(400, "message is required for streaming follow-up")
+    from code_tutor_agent.trace.agent import continue_analysis_stream
+    return StreamingResponse(
+        continue_analysis_stream(sid, body.problem_id, body.message),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @router.get("/{sid}/analysis")
 async def get_trace_analysis_endpoint(
     sid: str, problem_id: str = "default", current: dict = Depends(get_current_user),

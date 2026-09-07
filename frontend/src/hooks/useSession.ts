@@ -1,7 +1,7 @@
 import { apiFetch } from '../api/client';
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, summarizeTrace, fetchTraceAnalysis } from '../api/session';
+import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, analyzeTraceStream, summarizeTrace, fetchTraceAnalysis } from '../api/session';
 import type { Message, ProblemMeta, RunResult, SessionStateResp, Submission } from '../types/session';
 import type { JudgeReport } from '../types/judge';
 import { useSSE } from './useSSE';
@@ -429,12 +429,17 @@ export function useSession() {
     setTraceMessages(prev => [...prev, { role: 'user', content: question }, { role: 'tutor', content: '' }]);
     setTraceInput('');
     try {
-      const reply = await analyzeTrace(sessionId, pid, question);
-      setTraceMessages(prev => {
-        const next = [...prev];
-        if (next.length) next[next.length - 1] = { role: 'tutor', content: reply ?? '' };
-        return next;
+      const ok = await analyzeTraceStream(sessionId, pid, question, (token) => {
+        setTraceMessages(prev => {
+          const next = [...prev];
+          if (next.length) {
+            const last = next[next.length - 1];
+            next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token };
+          }
+          return next;
+        });
       });
+      if (!ok) throw new Error('stream failed');
     } catch {
       setTraceMessages(prev => {
         const next = [...prev];

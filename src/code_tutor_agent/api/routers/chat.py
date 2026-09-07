@@ -521,7 +521,7 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
     """
     from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-    from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, run_tool_loop
+    from code_tutor_agent.agents.tools import TUTOR_CHAT_TOOLS, astream_tool_loop, _msg_text
     from code_tutor_agent.config import get_llm
 
     llm = get_llm(purpose="api-chat")
@@ -574,63 +574,43 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
         msgs.extend(_history)
         msgs.append(HumanMessage(content=_round_text))
 
-        # ── 工具循环（非流式）：导师先决定是否跑代码验证 ──
-        # return_last_content=True：若 LLM 没调工具（纯讨论），直接拿到首轮文本，
-        # 下方复用它跳过 astream 二次调用，省一次 LLM 往返（方案 A）。
-        _called_tool = False
-        last_content = ""
-        try:
-            _loop_res = await run_tool_loop(llm, msgs, tools=TUTOR_CHAT_TOOLS, return_last_content=True)
-            if isinstance(_loop_res, tuple):
-                msgs, last_content = _loop_res
-            else:
-                msgs = _loop_res
-            _called_tool = any(getattr(m, "type", None) == "tool" for m in msgs)
-        except Exception as exc:
-            logger.warning("Tutor tool loop failed (non-fatal): %s", exc)
-
+        # ── 流式工具循环：正文 token 边生成边 yield，不再是「等整段生成完再切片」的伪流式 ──
+        # 旧实现先 run_tool_loop(.invoke 阻塞) 拿全文，再用 _chunk_text 切片，导致首 token 延迟
+        # = 整段生成延迟；现改为 astream 流式工具循环（tools.astream_tool_loop），首 token 即真实
+        # 首 token，且模型调 judge 工具前若「自言自语」也会实时吐出，体验更连贯。
         full = []
-        if last_content and not _called_tool:
-            # 纯讨论：复用首轮文本，按字符流式吐出（跳过 astream，省一次 LLM 调用）
-            for _piece in _chunk_text(last_content):
-                full.append(_piece)
-                yield _sse_payload(_piece)
-            reply = last_content
-        else:
-            # 调了工具 / 首轮为空：流式生成最终回复（msgs 已含工具结果）
+        try:
+            async for token in astream_tool_loop(llm, msgs, tools=TUTOR_CHAT_TOOLS):
+                full.append(token)
+                yield _sse_payload(token)
+        except Exception as exc:
+            logger.warning("Normal chat streaming failed (non-fatal): %s", exc)
+
+        reply = "".join(full)
+        if not reply.strip():
+            # 验证工具失败 / 模型空回复：强制基于知识补答一次，
+            # 避免把「沙箱挂了」误报成「无法回答」。
+            logger.warning("Tutor final reply empty — retry with knowledge-only instruction")
+            msgs.append(SystemMessage(content=(
+                "注意：代码验证工具未能返回有效结果（沙箱可能暂时不可用）。"
+                "请完全基于你的算法与数据结构知识直接回答用户的问题，"
+                "不要再调用任何 judge_* 工具；若用户问原理/推导，直接用文字和代码块讲解，"
+                "但仍须遵守【渐进式辅导纪律】——不要借机给出整题的完整解答代码。"
+            )))
+            full = []
             try:
                 async for chunk in llm.astream(msgs):
-                    token = chunk.content if hasattr(chunk, "content") else str(chunk)
+                    token = _msg_text(getattr(chunk, "content", ""))
                     if token:
                         full.append(token)
                         yield _sse_payload(token)
             except Exception as exc:
-                logger.warning("Normal chat LLM failed: %s", exc)
+                logger.warning("Normal chat LLM retry failed: %s", exc)
             reply = "".join(full)
-            if not reply.strip():
-                # 验证工具失败 / 模型空回复：强制基于知识补答一次，
-                # 避免把「沙箱挂了」误报成「无法回答」。
-                logger.warning("Tutor final reply empty — retry with knowledge-only instruction")
-                msgs.append(SystemMessage(content=(
-                    "注意：代码验证工具未能返回有效结果（沙箱可能暂时不可用）。"
-                    "请完全基于你的算法与数据结构知识直接回答用户的问题，"
-                    "不要再调用任何 judge_* 工具；若用户问原理/推导，直接用文字和代码块讲解，"
-                    "但仍须遵守【渐进式辅导纪律】——不要借机给出整题的完整解答代码。"
-                )))
-                full = []
-                try:
-                    async for chunk in llm.astream(msgs):
-                        token = chunk.content if hasattr(chunk, "content") else str(chunk)
-                        if token:
-                            full.append(token)
-                            yield _sse_payload(token)
-                except Exception as exc:
-                    logger.warning("Normal chat LLM retry failed: %s", exc)
-                reply = "".join(full)
-            if not reply.strip():
-                reply = "代码验证服务暂时不可用，但我可以基于算法原理直接为你解答，请稍后重试或换个问法。"
-            if not full:
-                yield _sse_payload(reply)
+        if not reply.strip():
+            reply = "代码验证服务暂时不可用，但我可以基于算法原理直接为你解答，请稍后重试或换个问法。"
+        if not full:
+            yield _sse_payload(reply)
 
         # 手动保存到 state（暂停安全写入：直接 update_state 会丢失
         # wait_for_submit 的挂起中断，见 deps.pause_safe_update）
@@ -655,4 +635,8 @@ def _handle_normal_chat_stream(sid, config, graph, values, message, code: str = 
             logger.exception("Failed to save chat: %s", exc)
         yield _sse_payload("__DONE__")
 
-    return StreamingResponse(normal_chat_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        normal_chat_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

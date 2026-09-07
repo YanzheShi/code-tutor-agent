@@ -298,6 +298,59 @@ async def run_tool_loop(
     return messages
 
 
+async def astream_tool_loop(llm, messages, tools=None, max_rounds: int = MAX_TOOL_ROUNDS):
+    """流式工具循环生成器：实时 yield 正文 token，遇工具调用则执行后继续流式。
+
+    与 run_tool_loop 的区别：run_tool_loop 用阻塞式 .invoke（非流式），首轮正文要等
+    整段生成完才能拿到；本函数用 .astream，正文 token 边生成边产出，因此导师对话的
+    首 token 延迟 = 真实首 token 延迟，消除「干等整段再打字」的伪流式观感。
+
+    Args:
+        llm: get_llm(...) 实例
+        messages: LangChain Message 列表（会被就地追加 AI / Tool 消息）
+        tools: 要绑定的工具列表；默认 JUDGE_TOOLS
+    Yields:
+        正文字符串片段（chunk.content 归一化后的文本）
+    """
+    if tools is None:
+        tools = JUDGE_TOOLS
+    if not tools:
+        async for chunk in llm.astream(messages):
+            tok = _msg_text(getattr(chunk, "content", ""))
+            if tok:
+                yield tok
+        return
+
+    allowed = {t.name for t in tools}
+    for _ in range(max_rounds):
+        accumulated = None
+        async for chunk in llm.bind_tools(tools).astream(messages):
+            tok = _msg_text(getattr(chunk, "content", ""))
+            if tok:
+                yield tok
+            # 累积 chunk 以在流结束时判定 tool_calls（LangChain 在末块聚合 tool_calls）
+            accumulated = chunk if accumulated is None else accumulated + chunk
+        if accumulated is None:
+            break
+        tcs = getattr(accumulated, "tool_calls", None) or []
+        if not tcs:
+            break
+        for tc in tcs:
+            name = tc.get("name")
+            if name not in allowed:
+                continue
+            fn = getattr(_self_module, name, None)
+            if fn is None or not callable(fn):
+                continue
+            try:
+                # 直接 await 原始 async 函数，绕过 StructuredTool.ainvoke 的协程坑
+                out = await fn(**tc.get("args", {}))
+            except Exception as e:  # 工具异常不崩，转成 error JSON
+                out = json.dumps({"error": f"工具执行失败: {e}"}, ensure_ascii=False)
+            messages.append(accumulated)
+            messages.append(ToolMessage(content=out, tool_call_id=tc["id"]))
+
+
 # ──────────────────────────────────────────────
 #  导师辅导环节工具集
 # ──────────────────────────────────────────────
