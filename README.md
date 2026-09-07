@@ -7,6 +7,8 @@
 ![LangGraph](https://img.shields.io/badge/LangGraph-1.x-orange)
 ![LangChain](https://img.shields.io/badge/LangChain-1.3-green)
 ![React](https://img.shields.io/badge/React-19-61dafb)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)
+![JWT](https://img.shields.io/badge/Auth-JWT%20%2B%20PBKDF2-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
 ---
@@ -23,6 +25,8 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 - **🔥 导师对话 Agent 工具循环 + 误解诊断**（唯一真正带工具循环的组件）：不是 "WA at #3"，而是结合**用户编辑器实时草稿**与运行/判题客观结果，定位卡点并给针对性建议。
 - **规划节点（选题器）长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
 - **护栏节点（Critic）负责换题路由与 episode 收尾**：在一题终结（真实提交 AC / 换题 abandon）时 flush `problem_history`、做挫败情绪检测并路由到下一题。⚠️ 这是**纯旁路的收尾节点，不做内容守门**——代码泄露过滤（R01）当前是未生效的死逻辑，挫败情绪检测（R04）只打日志无后续动作，详见[已知限制](#已知限制)。
+
+除核心教学闭环外，项目已具备一套**企业级运行基座**：多用户 JWT 认证（邮箱注册/登录、按用户隔离的画像/提交/成本数据）、PostgreSQL 统一持久化（业务库 + 会话状态）、Brevo 邮件通道（告警通知 + 忘记密码）、自研监控告警（指标采集 → 规则评估 → 邮件 + 公告横幅），详见[核心设计决策](#核心设计决策)。
 
 ---
 
@@ -86,13 +90,17 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | 语言 | Python 3.12+ | LG 1.x / LC 1.x 锁 3.11+ |
 | 包管理 | uv | 快，pyproject.toml 驱动 |
 | 流程编排 | LangGraph 1.x StateGraph（8 个编排节点）+ checkpointer + store | 状态机 / 会话状态持久化 / human-in-the-loop (`interrupt`) |
-| LLM 调用 | langchain-openai + base_url  | OpenAI 兼容口，DeepSeek / 通义 / 自建都能走 |
-| API 层 | FastAPI + uvicorn | /session /submit /chat /admin |
-| 前端 | React 19 + Vite 6 + TypeScript | SPA，Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
+| LLM 调用 | langchain-openai + base_url + 主备 failover | OpenAI 兼容口，DeepSeek / 通义 / 自建都能走 |
+| API 层 | FastAPI + uvicorn | /auth /session /submit /chat /admin /settings /monitoring |
+| 认证 | JWT（PyJWT HS256）+ PBKDF2-HMAC-SHA256 密码哈希 | 邮箱注册/登录、角色权限（user / admin），零重依赖 |
+| 前端 | React 19 + Vite 6 + TypeScript | SPA，登录/注册 + Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
 | 判题沙箱 | Judge0（Docker）/ 本地 subprocess 兜底 | 资源隔离 + 用例执行 |
-| 状态持久化 | langgraph-checkpoint-sqlite（会话级 checkpointer） | 单机会话恢复 |
-| 长期记忆 | LG `InMemoryStore`（当前）→ 规划迁移 RedisStore | 画像跨会话；⚠️ 当前为进程内存，**重启即丢**，见[已知限制](#已知限制) |
-| 可观测性 | LangSmith | 多节点链路追踪，便于调试排障 |
+| 数据库 | PostgreSQL 16（psycopg3 + 连接池） | 业务数据 + LangGraph 会话状态统一持久化，写锁/多副本友好 |
+| 状态持久化 | langgraph-checkpoint-postgres（PostgresSaver） | 会话恢复与 `interrupt()` 挂起依赖 |
+| 邮件 | Brevo API | 监控告警通知 + 忘记密码验证码；未配置自动降级 |
+| 监控告警 | 进程内指标注册表 + 规则评估 + 冷却通知 | 自研轻量层，`/admin/metrics` 预留 Prometheus 挂载点 |
+| 长期记忆 | LG `InMemoryStore`（当前）→ 规划迁移 PostgresStore | 画像跨会话；⚠️ 当前为进程内存，**重启即丢**，见[已知限制](#已知限制) |
+| 可观测性 | LangSmith（`observability.py` 非侵入式接线） | 多节点链路追踪，未配 key 自动关闭 |
 | 数据建模 | Pydantic v2 | LC/LG 原生 |
 
 ---
@@ -143,7 +151,7 @@ flowchart TB
 - 评审 **无任何主动调用**，仅在一题终结时被触发（flush 历史 + 情绪检测 + 路由）
 - **画像写入是三轨，不是单一入口**，务必分清：
   - **v2 per-tag 知识点画像**：判题 / 辅导想改画像只能挂 `state["profile_delta"]`，由 `update_profile_node`（`profile/node.py`）作为**唯一 writer** 写 `store`；
-  - **v1 DBProfile**（旧版整体熟练度）：判题节点直接调 `db.update_profile_on_result()` 写 SQLite；
+  - **v1 DBProfile**（旧版整体熟练度）：判题节点直接调 `db.update_profile_on_result()` 写 PostgreSQL；
   - **6 维错误模式画像**：由 `fire_and_forget_error_mode_analysis()` 后台线程异步写，不进主链路。
 
 > 详细设计文档见本地 `docs/` 目录（设计评审用，未纳入 git 追踪）。
@@ -160,7 +168,12 @@ flowchart TB
 | 用户画像 | per-tag 知识点画像（ELO / 稳定 / 遗忘）+ 6 维错误模式画像 + 智能选题 | ✅ 已实现 |
 | 出题防碰撞 | 随机二选一注入场景（F）/ 维度（G），维度数据覆盖 20 个知识点 | ✅ 已实现 |
 | 成本中心 | Token 用量 / 预算看板（按目的 / 模型 / 会话下钻） | ✅ 已实现 |
-| Docker 部署 | Judge0 沙箱（按需启用）+ nginx 反向代理 | ✅ 已实现 |
+| PostgreSQL 迁移 | 业务库 + LangGraph checkpointer 统一迁 PG（compose `app-db` 服务） | ✅ 已实现 |
+| 多用户与认证 | 邮箱注册/登录 + JWT + 角色权限 + 忘记密码邮件重置 + 按用户隔离数据 | ✅ 已实现 |
+| 用户级 LLM 设置 | 用户自定义 API key / base URL / model，按用户隔离、key 不回传明文 | ✅ 已实现 |
+| 邮件服务 | Brevo API：监控告警通知 + 忘记密码验证码，未配置自动降级 | ✅ 已实现 |
+| 监控告警 | 指标采集 + 13 条告警规则（rate/streak）+ 邮件通知 + 公告横幅 + 前端错误上报 | ✅ 已实现 |
+| Docker 部署 | app-db（PostgreSQL）+ Judge0 沙箱（按需启用）+ nginx 反向代理 | ✅ 已实现 |
 | V0.5 | Debug 剧场 / 面试模拟 / 同伴对比 / 跨语言迁移 | ⏳ 规划中 |
 | V1.0 | 全 PRD 功能 | ⏳ 规划中 |
 
@@ -168,7 +181,7 @@ flowchart TB
 
 ## 已知限制
 
-- **用户画像（v2）尚未持久化**：存画像的 `store` 当前是 `InMemoryStore`，**进程重启即丢**。`graph/graph.py::compile_graph()` 只给 `checkpointer` 配了 `SqliteSaver`（会话状态是落盘的）。换 `RedisStore` / SqliteStore 对业务代码零改动（LG 的 `store.list/put/get` 接口统一），但尚未实施。
+- **用户画像（v2）尚未持久化**：存画像的 `store` 当前是 `InMemoryStore`，**进程重启即丢**。`graph/graph.py::compile_graph()` 已给 `checkpointer` 配 `PostgresSaver`（2026-09-07 迁移后，会话状态随业务库统一落 PostgreSQL）。换 `PostgresStore` / RedisStore 对业务代码零改动（LG 的 `store.list/put/get` 接口统一），但尚未实施。
 
 - **导师输出无后置守门（Critic 的 R01/R04 是死逻辑）**：`nodes/critic.py` 里的代码泄露过滤（R01）**从未生效过**——它原地改写 pydantic state 不被 LangGraph 采纳、只检查最后一条消息、且 `hint_level` 全仓库从未递增恒为 0；挫败情绪检测（R04）只 `logger.info`，无后续动作。历史上的 `constitutional_guard` 节点已随 normal 模式一并删除。
   - **根因**：做题阶段的导师回复由 `api/routers/chat.py::_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，**全程不进 StateGraph**——因此图内根本不存在任何能看到这条回复的节点，在图里改连线永远修不好。
@@ -189,38 +202,34 @@ code-tutor-agent/
 ├── pyproject.toml
 ├── Makefile
 ├── .env.example
-├── data/                   # 运行时数据（SQLite / checkpoints）
+├── data/                   # 运行时数据（JWT secret 等；业务数据在 PostgreSQL）
 ├── docker/                 # Docker / docker-compose 配置
 │   ├── Dockerfile
 │   ├── Dockerfile.frontend
-│   ├── docker-compose.yml
+│   ├── docker-compose.yml          # 含 app-db（PostgreSQL 16）与 Judge0
 │   ├── docker-compose.prod.yml
 │   └── nginx-frontend.conf
-├── scripts/               # 启动脚本（start-all.bat/.sh 等）与工具脚本
+├── scripts/               # 启动脚本（start-all.bat/.sh）、SQLite→PG 迁移、轨迹清理等工具脚本
 ├── demo/                  # 系统功能截图（README 展示用）
 ├── src/
 │   └── code_tutor_agent/
-│       ├── api/           # FastAPI 入口（main.py + routers/）
-│       │   ├── main.py        # app 装配 + /health
-│       │   └── routers/       # session / chat / run / problems / admin / token
-│       ├── db/            # 数据库模块（用户画像 / 轨迹 / 题目落库）
-│       ├── graph/         # LangGraph StateGraph 定义
-│       ├── nodes/         # LangGraph 节点函数（编排步骤，7 个）
-│       │   ├── planner.py     # 规划（画像驱动选题，规则引擎非 LLM）
-│       │   ├── generator.py   # 出题（调用 generation 出题子系统）
-│       │   ├── agent_judge.py # 判题（Judge0 执行 + LLM 温暖反馈）
-│       │   ├── agent_tutor.py # 辅导路由（非 AC 循环等待重提交）
-│       │   ├── critic.py      # 评审（episode 收尾 flush + 换题路由；⚠ R01/R04 为死逻辑）
-│       │   ├── agent_dialog.py # 导师对话 Agent（唯一带工具循环的组件）
-│       │   └── wait_for_submit.py  # 全图唯一的 interrupt() 挂起点
-│       ├── agents/        # LLM 调用封装（dialog 为唯一带工具循环的 Agent；judge / problem 为结构化输出封装）
+│       ├── api/           # FastAPI 入口
+│       │   ├── main.py        # app 装配 + /health + lifespan（bootstrap admin / 监控 watch loop）
+│       │   ├── auth.py        # 注册/登录/JWT/忘记密码 + 依赖（get_current_user / require_admin）
+│       │   ├── email.py       # Brevo 邮件发送（告警 / 忘记密码验证码）
+│       │   ├── logging_config.py / deps.py / serializers.py / run.py
+│       │   └── routers/       # session / chat / run / problems / admin / token / settings / monitoring
+│       ├── db/            # 数据库层（PostgreSQL）
+│       │   ├── pg_compat.py   # 兼容外观：?→%s、Row 双索引、RETURNING 捕 lastrowid、psycopg_pool
+│       │   ├── database.py    # 表结构 + 业务 SQL
+│       │   └── models.py
+│       ├── monitoring/    # 监控告警：metrics 指标注册表 / rules 告警规则 / notifier 邮件+落库 / watcher 周期评估
+│       ├── graph/         # LangGraph StateGraph 装配（PostgresSaver checkpointer）
+│       ├── nodes/         # 8 个图节点（planner / generator / agent_judge / agent_tutor / critic / agent_dialog / wait_for_submit / update_profile）
+│       ├── agents/        # LLM 调用封装（dialog 唯一带工具循环；judge / problem 结构化输出）
 │       ├── generation/    # 出题子流程（原创 LLM → 双解+示例 → verify → 跑参考解）
-│       ├── profile/       # 用户画像（含第 8 个图节点 update_profile_node）
-│       │   ├── node.py        # update_profile_node —— v2 画像单 writer
-│       │   ├── schema.py      # 知识点画像（per-tag 5 字段）
-│       │   ├── weakness.py    # 6 维错误模式画像（枚举 + 聚合）
-│       │   ├── scoring.py     # ELO / 稳定 / 遗忘 打分纯函数
-│       │   └── edit_trace_analyzer.py  # 轨迹 → 6 维错误模式增量
+│       ├── guards/        # 设计类题目围栏（design_guard）
+│       ├── profile/       # 用户画像（per-tag / 6 维错误模式 / ELO 打分 / 轨迹→错误模式增量）
 │       ├── trace/         # 编辑轨迹采集 / 预处理 / 轨迹分析 / 复盘
 │       ├── token_usage/   # Token 成本统计 / 预算 / 看板
 │       ├── sandbox/       # 代码沙箱（runner / judge0_client / 结构转换）
@@ -231,12 +240,15 @@ code-tutor-agent/
 │       ├── prompts/       # Prompt 模板
 │       ├── models/        # 数据模型
 │       ├── tools/         # 工具函数
-│       ├── memory.py      # 记忆层
+│       ├── memory.py      # LLM 语义记忆层
+│       ├── observability.py    # LangSmith 可观测辅助（非侵入式，未配 key 自动关闭）
+│       ├── llm_failover.py     # LLM 主备通道 failover
+│       ├── runtime_settings.py # 用户级 LLM 配置覆盖（ContextVar）
 │       ├── context_manager.py  # 上下文管理
 │       ├── progress.py    # 进度流（SSE）
 │       ├── topics.py      # 知识点 / 标签（32 个 Tag）
 │       └── config.py
-├── frontend/              # React 19 + Vite 6 + TypeScript SPA
+├── frontend/              # React 19 + Vite 6 + TypeScript SPA（登录/注册 + 主应用）
 │   └── src/components/    # MainLayout / CodeEditor / 导师对话面板 / AdminPanel(六维雷达) / CostCenter / 轨迹分析
 ├── tests/
 └── docs/                  # 设计文档（本地评审用，未纳入 git 追踪）
@@ -272,6 +284,8 @@ LLM_API_KEY=«your-api-key»
 ```
 
 支持任何 OpenAI 兼容的 API 提供商（DeepSeek、通义千问、SenseNova、Ollama 等）。
+
+⚠️ 数据库：业务库与会话状态统一存 **PostgreSQL**，通过 `DATABASE_URL` 连接（默认 `postgresql://code_tutor:code_tutor@localhost:5432/code_tutor`）。Docker 部署时 compose 自动起 `app-db` 服务并注入连接串；本地裸跑需自备 PostgreSQL 实例。
 完整配置项见 [.env.example](.env.example)。
 
 ### 3. 启动服务
@@ -314,7 +328,21 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 4. API 端点
 
+除 `/health`、`/auth/*`、`GET /announcements`、`POST /client/errors` 外，所有端点都要求 `Authorization: Bearer <JWT>`；`/admin/*` 另要求管理员角色。
+
 ```
+# ── 认证（多用户）──
+POST   /auth/register                        → 邮箱注册（开放注册，角色 user）
+POST   /auth/login                           → 登录，返回 JWT（默认 7 天有效）
+GET    /auth/me                              → 当前用户信息
+GET    /auth/me/profile                      → 个人画像（v1 整体熟练度）
+GET    /auth/me/profile/v2                   → 个人画像（v2 per-tag 知识点）
+GET    /auth/me/submissions                  → 我的提交记录
+POST   /auth/me/password                     → 修改密码
+POST   /auth/forgot-password                 → 忘记密码（邮件验证码，需配置 Brevo）
+POST   /auth/reset-password                  → 凭验证码重置密码
+
+# ── 业务（需登录）──
 POST   /session                              → 新建 session，出题 + interrupt 返题面
 POST   /session/{sid}/submit                 → 提交代码，走判题→辅导→下一轮
 POST   /session/{sid}/next-problem           → 回导师对话；引导文案按上一题 verdict×提示深度建议换题方向（AC 且提示用得深→同类型巩固，WA 且提示深→换方向/降难度）
@@ -323,14 +351,26 @@ POST   /session/{sid}/chat/stream            → 导师对话（流式）
 POST   /session/{sid}/edit-trace             → 上报编辑轨迹（edit/idle/run/submit 四类事件）
 POST   /session/{sid}/analyze                → 触发轨迹分析
 GET    /session/{sid}/analysis               → 获取轨迹分析结果
-POST   /session/{sid}/analyze/summarize     → 生成会话复盘摘要
+POST   /session/{sid}/analyze/summarize      → 生成会话复盘摘要
 POST   /session/{sid}/run                    → 仅运行代码不判题
 GET    /problems                             → 题目列表
 GET    /problems/topics                      → 知识点 / 标签
-POST   /admin/login                          → 管理端登录
-GET    /admin/profile                        → 用户画像（旧版）
-GET    /admin/profile/v2                     → 用户画像（新版 per-tag）
+GET/PUT /settings/me                         → 用户自定义 LLM 接入（API key 打码回传，留空沿用旧 key）
+POST   /settings/me/test                     → 测试自定义 LLM 连通性
+
+# ── 公告 / 客户端上报 ──
+GET    /announcements                        → 生效中的公告横幅（登录即可读）
+POST   /client/errors                        → 前端错误上报（公开：出错时 token 可能已失效）
+
+# ── 管理（需 admin）──
+GET    /admin/profile                        → 用户画像（v1）
+GET    /admin/profile/v2                     → 用户画像（v2 per-tag）
 POST   /admin/token/overview                 → 成本中心看板数据
+GET    /admin/metrics                        → 进程内指标快照（将来接 Prometheus）
+GET    /admin/alerts                         → 告警历史
+POST   /admin/alerts/test                    → 发测试告警邮件验证链路
+GET/POST /admin/announcements                → 公告查询 / 发布
+POST   /admin/announcements/{id}/disable     → 下线公告
 GET    /health                               → 健康检查
 ```
 
@@ -344,13 +384,13 @@ GET    /health                               → 健康检查
 # 1. 复制环境变量模板，编辑只填大模型配置即可
 cp .env.example .env
 
-# 2. 一键启动（前后端 + Judge0 判题沙箱）
-#    Judge0、Redis、CORS 等变量已在 .env.example 提供默认值，无需手动配置
+# 2. 一键启动（前端 + 后端 + app-db PostgreSQL 主库；Judge0 判题沙箱按需启用）
+#    DATABASE_URL、Judge0、CORS 等变量已在 .env.example / compose 提供默认值，无需手动配置
 docker compose -f docker/docker-compose.yml up -d --build
 
 # 3. 验证
 curl http://localhost:8765/health
-# 前端访问 http://localhost:3000
+# 前端访问 http://localhost:3000（首次使用先注册账号；管理员由 ADMIN_EMAIL/ADMIN_PASSWORD 启动引导创建）
 ```
 
 ### 生产模式（nginx 反向代理）
@@ -367,6 +407,14 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 | `LLM_MODEL` | 是 | — | LLM 模型名（OpenAI 兼容） |
 | `LLM_BASE_URL` | 是 | — | LLM API 基础 URL |
 | `LLM_API_KEY` | 是 | — | LLM API 密钥 |
+| `DATABASE_URL` | 否 | `postgresql://code_tutor:code_tutor@localhost:5432/code_tutor` | PostgreSQL 连接串（compose 内自动指向 `app-db` 服务） |
+| `CTA_PG_PASSWORD` | 否 | `code_tutor` | app-db 数据库密码（compose 内同步注入 DATABASE_URL） |
+| `JWT_SECRET` | 否 | 首次生成后持久化到 `data/db/.jwt_secret` | JWT 签名密钥；**多副本部署必须统一配置**（或共享该文件） |
+| `JWT_EXPIRE_DAYS` | 否 | `7` | JWT 有效期天数 |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | — | 启动时引导创建管理员账号（`ensure_bootstrap_admin`） |
+| `BREVO_API_KEY` | 否 | — | Brevo 邮件服务（告警通知 + 忘记密码）；未配置则邮件通道自动降级 |
+| `BREVO_SENDER` | 否 | `ADMIN_EMAIL` | 发件人（须已在 Brevo 控制台验证） |
+| `CTA_ALERT_EMAIL_TO` | 否 | `ADMIN_EMAIL` | 告警收件人（逗号分隔多个） |
 | `JUDGE0_URL` | 否 | `http://localhost:2358` | Judge0 沙箱地址（设为 `http://judge0:2358` 由 compose 自动注入） |
 | `JUDGE_BACKEND` | 否 | `self` | 判题后端切换：`self`（本地 subprocess）/ `judge0` |
 | `SEARCH_MCP_URL` | 否 | `http://127.0.0.1:8080/mcp` | 搜索 MCP 端点（Streamable HTTP）；配置后导师获得联网搜索工具 |
@@ -378,7 +426,8 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 容器结构
 
-- **backend**：FastAPI + uvicorn，端口 8765，挂载 `src/`（开发模式热重载）和 `data/`（持久化）
+- **app-db**：PostgreSQL 16 主库（业务数据 + LangGraph checkpoint），数据卷 `app_postgres_data`，带 `pg_isready` 健康检查
+- **backend**：FastAPI + uvicorn，端口 8765，挂载 `src/`（开发模式热重载）和 `data/`，`depends_on` app-db 健康后启动
 - **frontend**：Nginx 静态服务，端口 3000，代理 `/session/`、`/problems`、`/admin/`、`/health` 到后端（SSE 路径关闭缓冲）
 - **judge0**：判题沙箱，含 PostgreSQL + Redis，需要 `privileged` 模式
 
@@ -420,9 +469,29 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### checkpointer vs store（LG 1.x 两件套别混）
 
-- **`checkpointer`（`SqliteSaver`，落盘）**：per-session，thread_id 绑，LG 原生恢复 State。这是**会话恢复与 `interrupt()` 挂起的依赖**——做题期间用户可能离开几十分钟，图靠它挂起和恢复，不占常驻资源。
-- **`store`（当前 `InMemoryStore`，不落盘）**：cross-session，存 v2 per-tag 用户画像。⚠️ **进程重启即丢**，画像目前不是持久化的。接口走 LG 统一的 `store.list/put/get`，后期换 `RedisStore` 对业务代码零改动。
-- 两者都在 `graph/graph.py::compile_graph()` 里装配：传了 `conn_string` 就用 `SqliteSaver`，否则退化 `InMemorySaver`（开发便利，生产请传）。
+- **`checkpointer`（`PostgresSaver`，落 PostgreSQL）**：per-session，thread_id 绑，LG 原生恢复 State。这是**会话恢复与 `interrupt()` 挂起的依赖**——做题期间用户可能离开几十分钟，图靠它挂起和恢复，不占常驻资源。与业务库共用同一 PostgreSQL 实例（`DATABASE_URL`，compose 的 `app-db` 服务）。
+- **`store`（当前 `InMemoryStore`，不落盘）**：cross-session，存 v2 per-tag 用户画像。⚠️ **进程重启即丢**，画像目前不是持久化的。接口走 LG 统一的 `store.list/put/get`，后期换 `PostgresStore` 对业务代码零改动。
+- 两者都在 `graph/graph.py::compile_graph()` 里装配：传了 `conn_string` 就用 `PostgresSaver`（autocommit + dict_row 连接），否则退化 `InMemorySaver`（开发便利，生产请传）。
+
+### 多用户：JWT 认证 + 按用户隔离
+
+- **注册/登录**：邮箱密码开放注册（角色一律 `user`），密码哈希 PBKDF2-HMAC-SHA256（390k 迭代，OWASP 推荐），JWT 用 PyJWT HS256（默认 7 天，`JWT_EXPIRE_DAYS` 可调），零新增重依赖。
+- **JWT secret**：优先 `JWT_SECRET` 环境变量；否则首次生成并持久化到 `data/db/.jwt_secret`，重启后 token 不失效。**多副本部署必须统一配置 `JWT_SECRET`**。
+- **权限即时生效**：`get_current_user` 每次请求回库查用户（role 变更/禁用即时生效，不只信 token claims）；`/admin/*` 由 `require_admin` 守门；管理员由启动引导 `ensure_bootstrap_admin`（`ADMIN_EMAIL` / `ADMIN_PASSWORD`）创建。
+- **隔离口径**：profiles / session_activity / submissions / token_usage / user_settings 均按 `user_id` 隔离；题库（problems）保持全局共享。
+- **用户级 LLM 设置**：用户可自带 API key / base URL / model（`/settings/me`），完整 key 永不回传前端（GET 只回打码形式），生效路径是请求中间件解出 user_id → ContextVar 覆盖 `config.get_llm()`，默认模式继续走服务器 `.env`。
+- **忘记密码**：邮件验证码重置（依赖 Brevo）；未配置邮件时降级为管理员重置。
+
+### 监控告警：指标 → 规则 → 邮件 + 公告横幅
+
+自研轻量监控层（`monitoring/` 四模块），设计原则是**监控层故障绝不影响业务**（内部全 try/except）：
+
+- **metrics**：进程内指标注册表（计数器 / 滑动窗口 / streak / gauge），业务代码只需 `get_registry().record("xxx")` 埋点。
+- **rules**：13 条告警规则，分 **rate 型**（滑动窗口比例，依赖流量基数）与 **streak 型**（连续失败 N 次，低流量也能触发）两类，覆盖 HTTP 5xx 错误率、LLM 连续失败/failover 频繁、判题与 LangGraph 连续失败、Token 日预算、磁盘/数据库体积、前端错误激增等；阈值全部支持环境变量覆盖。
+- **notifier**：冷却状态机防重复轰炸（critical 30min / warning 60min / info 24h）+ Brevo 邮件 + `alert_history` 落库，可配 `CTA_ALERT_EMAIL_TO` 多收件人。
+- **watcher**：lifespan 启动周期评估 + 系统自检；`user_visible` 规则（判题不稳定 / 辅导中断 / 数据库写压力）触发时同步**主页公告横幅**（`GET /announcements`），管理员也可手动发布公告。
+- **客户端错误上报**：`POST /client/errors` 公开端点（出错时 token 可能已失效），字段白名单 + 限长防滥用。
+- `/admin/metrics` 返回指标快照，是将来接 Prometheus 的 exposition 挂载点；`POST /admin/alerts/test` 可发测试邮件验证链路。
 
 
 ### 联网搜索：自建搜索 MCP（可选，厂商无关）
