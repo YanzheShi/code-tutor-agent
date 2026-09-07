@@ -159,18 +159,24 @@ def get_llm(purpose: str, alias: str | None = None, **kwargs):
     return init_chat_model(**config)
 
 
-# ── Checkpoint DB (LangGraph session persistence) ──
-def get_checkpoint_db_path() -> str:
-    """获取 LangGraph checkpointer 的 SQLite 数据库路径。
+# ── Database (PostgreSQL, 2026-09-07 迁移) ──
+def get_database_url() -> str:
+    """PG 连接串（业务库 + LangGraph checkpointer 共用同一实例不同表）。
 
-    从环境变量 CHECKPOINT_DB_PATH 读取，默认 data/checkpoints.db。
+    从环境变量 DATABASE_URL 读取；默认指向本机 docker compose 的 app-db 服务。
     """
-    default_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-        "data",
-        "checkpoints.db",
+    return os.getenv(
+        "DATABASE_URL",
+        "postgresql://code_tutor:code_tutor@localhost:5432/code_tutor",
     )
-    return os.getenv("CHECKPOINT_DB_PATH", default_path)
+
+
+def get_checkpoint_db_path() -> str:
+    """（兼容保留）原 SQLite checkpoint 库路径 → 现已收敛为 DATABASE_URL。
+
+    旧调用方（watcher 等）无需改动即切到 PG；新代码请直接用 get_database_url()。
+    """
+    return get_database_url()
 
 
 # ── Session TTL (auto-cleanup) ──

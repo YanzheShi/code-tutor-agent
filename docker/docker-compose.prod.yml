@@ -19,8 +19,10 @@ services:
       # 配合上方命名卷即可在重建容器后保持登录态稳定。如需显式指定可在 .env 设 JWT_SECRET。
       - JWT_SECRET=${JWT_SECRET:-}
     deploy:
-      # 🔴 固定为 1 副本：当前架构用 SQLite（单文件写锁）+ 内存态 _generation_progress + 每容器 JWT 密钥，
-      # 多副本会导致写锁争用、SSE 进度丢失、跨副本 token 互不相认。要水平扩展需先换 Postgres + 外部 KV。
+      # 🔴 固定为 1 副本：数据库已迁移 PostgreSQL（2026-09-07，写并发已根治），
+      # 但 _generation_progress（SSE 出题进度）仍是单容器内存态，且 JWT 密钥文件
+      # 挂载在 data 卷；多副本会导致进度丢失、跨副本 token 互不相认。
+      # 水平扩展前还需把进度态挪到 Redis 等外部 KV。
       replicas: 1
       resources:
         limits:

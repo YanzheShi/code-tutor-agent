@@ -159,7 +159,7 @@ class TestGetStaleSessions:
         # 手动插入 100 小时前的时间戳
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-100 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '100 hours')",
             ("old-session",),
         ))
 
@@ -180,12 +180,12 @@ class TestGetStaleSessions:
         # 旧的
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-200 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '200 hours')",
             ("stale-1",),
         ))
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-200 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '200 hours')",
             ("stale-2",),
         ))
 
@@ -238,17 +238,17 @@ class TestCleanupAPI:
         # 造 3 条过期数据
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-300 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '300 hours')",
             ("dry-stale-1",),
         ))
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-300 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '300 hours')",
             ("dry-stale-2",),
         ))
         _with_conn(lambda c: c.execute(
             "INSERT INTO session_activity (session_id, last_active_at) "
-            "VALUES (?, datetime('now', '-300 hours'))",
+            "VALUES (?, LOCALTIMESTAMP - INTERVAL '300 hours')",
             ("dry-stale-3",),
         ))
 

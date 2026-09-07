@@ -9,7 +9,7 @@ from typing import Any
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
-from code_tutor_agent.config import get_checkpoint_db_path
+from code_tutor_agent.config import get_database_url
 from code_tutor_agent.graph.graph import compile_graph
 from code_tutor_agent.progress import _generation_progress
 
@@ -41,7 +41,7 @@ def init_graph() -> CompiledStateGraph:
     """Compile the LangGraph and store the reference. Called once at startup."""
     global _graph
     logger.info("Compiling LangGraph ...")
-    conn_string = get_checkpoint_db_path()
+    conn_string = get_database_url()
     _graph = compile_graph(conn_string=conn_string)
     logger.info("LangGraph ready")
     return _graph

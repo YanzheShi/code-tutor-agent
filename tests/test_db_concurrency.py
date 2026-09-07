@@ -1,23 +1,26 @@
-"""SQLite 并发健壮性回归（2026-09-04 回归实测发现）。
+"""并发健壮性回归（PG 版，2026-09-07 随 SQLite→PG 迁移改写）。
 
-背景：判题主链路在压测中随机断裂，表现为
-    agent_judge_node → get_problem_by_id → _get_conn()
-    → `PRAGMA journal_mode=WAL` → OperationalError: database is locked
-    → 节点抛异常 → /submit 500 → 状态不落盘、会话失去挂起节点 → /run 一律 400
+SQLite 时代背景：判题主链路压测随机断裂
+    agent_judge_node → get_problem_by_id → `PRAGMA journal_mode=WAL`
+    → OperationalError: database is locked → /submit 500 → 会话永久死锁
 
-根因两条，本文件各锁一条：
-1. `_get_conn()` 把「数据库级持久属性」WAL 当成「每次连接都要设」的会话属性，
-   而该 pragma 需要短暂独占锁，后台线程持写事务时必炸。
-2. 判题节点对基础设施异常零容错，异常直接击穿，会话永久死锁（不可恢复→可恢复）。
+迁移到 PostgreSQL 后：
+- WAL / busy_timeout / 库级写锁排队等 3 条 SQLite 内部实现用例已删除——
+  PG 走 MVCC + 连接池，`database is locked` 这一失败模式架构性消失；
+- 保留 3 条仍然有效的行为契约：
+  1. 写-写并发不互相击穿（PG MVCC 下天然成立，作回归护栏）；
+  2. save_problem 撞 title UNIQUE 的竞态兜底（复用旧题而不是 500）；
+  3. judge 节点对基础设施异常零击穿（status=error 保活，会话不死锁）。
+
+表隔离：共享测试 schema + conftest 的 _pg_clean_tables 每测试后清表。
 """
 
 from __future__ import annotations
 
-import sqlite3
 import threading
-import time
 
 import pytest
+import psycopg
 
 from code_tutor_agent.db import database as db
 from code_tutor_agent.nodes.agent_judge import agent_judge_node
@@ -28,110 +31,44 @@ from code_tutor_agent.schemas.state import (
 )
 
 
-@pytest.fixture
-def tmp_db(monkeypatch, tmp_path):
-    """把 database 模块指向临时库，并重置 WAL 标志（每用例独立）。"""
-    path = tmp_path / "test_concurrency.db"
-    monkeypatch.setattr(db, "DB_PATH", str(path))
-    monkeypatch.setattr(db, "_WAL_READY", False)
-    return path
+def test_write_write_contention_succeeds():
+    """多线程同时写库应全部成功（PG MVCC：无库级写锁，无需排队等待）。
 
-
-def _init_schema(path) -> None:
-    conn = sqlite3.connect(str(path))
-    conn.execute("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY, v TEXT)")
-    conn.commit()
-    conn.close()
-
-
-def test_with_conn_waits_for_lock_instead_of_failing(tmp_db):
-    """写-写争用时要按 busy_timeout 排队等待，而不是立刻抛 locked。
-
-    注：不要写成「持锁时执行 PRAGMA journal_mode=WAL 必须抛错」——实测当库已是
-    WAL 时该 pragma 是 no-op，根本不会抛（2026-09-04 探针验证），那种断言永远绿。
-    真正决定行为的是 busy_timeout：持锁方释放后，等待方应能接着写成功。
+    这是 SQLite 时代 test_with_conn_waits_for_lock_instead_of_failing 的
+    PG 对应物：当年 worker 会被写锁阻塞 1 秒以上，如今 4 个并发写
+    理应立即完成、零失败。
     """
-    _init_schema(tmp_db)
+    db._with_conn(lambda c: c.execute("DROP TABLE IF EXISTS _ct_scratch"))
+    db._with_conn(lambda c: c.execute("CREATE TABLE _ct_scratch (id INT PRIMARY KEY, v TEXT)"))
 
-    holder = sqlite3.connect(str(tmp_db))
-    holder.execute("BEGIN IMMEDIATE")
-    holder.execute("INSERT INTO t (v) VALUES ('holding')")
+    results: list[tuple[str, object]] = []
 
-    result: dict = {}
-
-    def worker() -> None:
+    def worker(i: int) -> None:
         try:
-            db._with_conn(lambda cur: cur.execute("INSERT INTO t (v) VALUES ('worker')"))
-            result["ok"] = True
-        except sqlite3.OperationalError as exc:  # pragma: no cover
-            result["err"] = str(exc)
+            db._with_conn(
+                lambda c: c.execute(
+                    "INSERT INTO _ct_scratch (id, v) VALUES (%s, %s)", (i, f"w{i}")
+                )
+            )
+            results.append(("ok", i))
+        except Exception as exc:  # pragma: no cover
+            results.append(("err", str(exc)))
 
-    t = threading.Thread(target=worker)
-    t.start()
-    time.sleep(1.0)  # worker 此刻应正阻塞在锁上
-    holder.rollback()
-    holder.close()
-    t.join(timeout=20)
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=20)
 
-    assert not t.is_alive(), "worker 线程未退出"
-    assert result.get("ok") is True, f"等待方写入失败：{result.get('err')}"
-    left = db._with_conn(lambda cur: cur.execute("SELECT COUNT(*) FROM t").fetchone()[0])
-    assert left == 1, "持锁方回滚后只应保留 worker 写入的 1 行"
+    assert not any(t.is_alive() for t in threads), "存在未退出的 worker 线程"
+    errs = [r for r in results if r[0] == "err"]
+    assert not errs, f"并发写入出现失败：{errs}"
 
-
-def test_get_conn_sets_wal_only_once(tmp_db):
-    """WAL pragma 每进程只发一次：第二次起即使库被独占也不再触碰该 pragma。"""
-    _init_schema(tmp_db)
-
-    first = db._get_conn()
-    first.close()
-    assert db._WAL_READY is True
-    assert first is not None
-
-    # WAL 已就绪后，即便另一连接独占写锁，新建连接也不应抛错
-    holder = sqlite3.connect(str(tmp_db))
-    holder.execute("BEGIN IMMEDIATE")
-    holder.execute("INSERT INTO t (v) VALUES ('x')")
-    try:
-        conn = db._get_conn()
-        conn.close()
-    finally:
-        holder.rollback()
-        holder.close()
+    count = db._with_conn(lambda c: c.execute("SELECT COUNT(*) FROM _ct_scratch").fetchone()[0])
+    assert count == 4, "4 个并发写入应全部落库"
 
 
-def test_get_conn_sets_busy_timeout(tmp_db):
-    """连接必须带 busy_timeout，让写-写争用排队而不是立即失败。"""
-    _init_schema(tmp_db)
-    conn = db._get_conn()
-    try:
-        # PRAGMA busy_timeout 返回当前值（ms）
-        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == db._BUSY_TIMEOUT_MS
-    finally:
-        conn.close()
-
-
-def _make_state() -> SessionState:
-    return SessionState(
-        session_id="test-db-error",
-        mode="agent",
-        status="awaiting_submit",
-        problem=ProblemMeta(
-            problem_id=1,
-            title="测试题",
-            topic="数组",
-            difficulty="easy",
-            description="测试",
-            starter_code="class Solution:\n    def solve(self):\n        pass",
-        ),
-        submissions=[
-            Submission(index=1, code="class Solution:\n    def solve(self):\n        return 42",
-                       verdict="", timestamp="2026-09-04T12:00:00"),
-        ],
-    )
-
-
-def test_save_problem_race_falls_back_to_reuse(tmp_db):
+def test_save_problem_race_falls_back_to_reuse():
     """并发落库竞态兜底：先查后插撞 title UNIQUE 时复用旧题而不是 500。
 
     save_problem 是"先 SELECT 查重，再 INSERT"，两步之间不是原子的。
@@ -169,6 +106,26 @@ def test_save_problem_race_falls_back_to_reuse(tmp_db):
     assert count == 1
 
 
+def _make_state() -> SessionState:
+    return SessionState(
+        session_id="test-db-error",
+        mode="agent",
+        status="awaiting_submit",
+        problem=ProblemMeta(
+            problem_id=1,
+            title="测试题",
+            topic="数组",
+            difficulty="easy",
+            description="测试",
+            starter_code="class Solution:\n    def solve(self):\n        pass",
+        ),
+        submissions=[
+            Submission(index=1, code="class Solution:\n    def solve(self):\n        return 42",
+                       verdict="", timestamp="2026-09-04T12:00:00"),
+        ],
+    )
+
+
 def test_judge_node_survives_db_error(monkeypatch):
     """前置加载抛 DB 异常时返回 status=error 保活，而不是让异常击穿会话。
 
@@ -176,7 +133,7 @@ def test_judge_node_survives_db_error(monkeypatch):
     会话保持可继续（用户改代码再提交即可）；异常击穿则会话永久死锁。
     """
     def _boom(_state):
-        raise sqlite3.OperationalError("database is locked")
+        raise psycopg.OperationalError("connection refused")
 
     monkeypatch.setattr(
         "code_tutor_agent.nodes.agent_judge._resolve_inputs", _boom
@@ -185,4 +142,4 @@ def test_judge_node_survives_db_error(monkeypatch):
     result = agent_judge_node(_make_state())
 
     assert result["status"] == "error"
-    assert "database is locked" in result["error_message"]
+    assert "connection refused" in result["error_message"]

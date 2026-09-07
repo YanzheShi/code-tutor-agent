@@ -76,18 +76,17 @@ def _disk_usage_pct() -> float | None:
 
 
 def _db_size_mb() -> float | None:
-    """主库 + checkpoint 库 + WAL 的总体积（MB）。"""
+    """PG 业务库体积（MB）。PG 迁移后不再有文件路径可 stat，改查 pg_database_size。"""
     try:
-        from code_tutor_agent.config import get_checkpoint_db_path
-        from code_tutor_agent.db.database import DB_PATH
+        import psycopg
 
-        total = 0
-        for path in (DB_PATH, get_checkpoint_db_path()):
-            for suffix in ("", "-wal", "-shm"):
-                p = path + suffix
-                if os.path.isfile(p):
-                    total += os.path.getsize(p)
-        return round(total / (1024 * 1024), 1)
+        from code_tutor_agent.db.pg_compat import get_database_url
+
+        with psycopg.connect(get_database_url(), connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_database_size(current_database())")
+                size = cur.fetchone()[0]
+        return round(size / (1024 * 1024), 1)
     except Exception as exc:
         logger.debug("[watcher] db size failed (ignored): %s", exc)
         return None

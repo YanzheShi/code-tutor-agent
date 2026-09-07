@@ -70,7 +70,8 @@ def test_duplicate_email_raises_integrity(temp_db):
     dbmod.create_user("dup@test.com", "h1")
     with pytest.raises(Exception) as exc:
         dbmod.create_user("dup@test.com", "h2")
-    assert "UNIQUE" in str(exc.value)
+    # 断言约束名而非错误文案：PG 服务端 lc_messages 本地化后文案是中文（"重复键违反唯一约束"）
+    assert "users_email_key" in str(exc.value)
 
 
 def test_bootstrap_admin_idempotent(temp_db):

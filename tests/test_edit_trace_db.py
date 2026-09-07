@@ -187,7 +187,7 @@ class TestPurgeTraceData:
         db.save_edit_trace("sX", "default", [{"ts": 1, "type": "edit", "code": "a"}])
         # 把它改成 31 天前
         db._with_conn(lambda cur: cur.execute(
-            "UPDATE edit_traces SET updated_at = datetime('now','localtime','-31 days') "
+            "UPDATE edit_traces SET updated_at = LOCALTIMESTAMP - INTERVAL '31 days' "
             "WHERE session_id='sX'"
         ))
         assert len(db.get_edit_trace("sX")) == 1

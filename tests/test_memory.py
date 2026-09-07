@@ -129,7 +129,7 @@ class TestMemory:
         from code_tutor_agent.memory import load_memory
         conn = dbmod._get_conn()
         try:
-            conn.execute(
+            conn.cursor().execute(
                 "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?)",
                 (MEMORY_USER_ID, "{bad json"),
             )

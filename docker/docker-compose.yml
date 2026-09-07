@@ -98,6 +98,27 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── App 主库：PostgreSQL（2026-09-07 迁移：业务库 + LangGraph checkpoint 共用实例）──
+  # 密码用 CTA_PG_PASSWORD 覆盖（.env），默认仅本地开发用。
+  app-db:
+    image: postgres:16-alpine
+    container_name: cta-app-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: code_tutor
+      POSTGRES_PASSWORD: ${CTA_PG_PASSWORD:-code_tutor}
+      POSTGRES_DB: code_tutor
+      TZ: Asia/Shanghai
+    volumes:
+      - app_postgres_data:/var/lib/postgresql/data
+    networks:
+      - cta-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U code_tutor -d code_tutor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── 后端 API ──
   backend:
     build:
@@ -108,6 +129,9 @@ services:
     restart: unless-stopped
     ports:
       - "8765:8765"
+    depends_on:
+      app-db:
+        condition: service_healthy
     volumes:
       # 开发时挂载源码（配合 UVICORN_RELOAD 热重载后端进程）
       - ../src:/app/src
@@ -119,6 +143,8 @@ services:
     environment:
       - UVICORN_RELOAD=true
       - TZ=Asia/Shanghai
+      # 主库连接（compose 内部用服务名 app-db 通信；密码与 app-db 保持一致）
+      - DATABASE_URL=postgresql://code_tutor:${CTA_PG_PASSWORD:-code_tutor}@app-db:5432/code_tutor
       # Judge0连接配置（compose内部用服务名通信；仅 --profile judge0 时生效）
       - JUDGE0_URL=http://judge0:2358
       # 判题后端切换开关（从.env读取，默认用现有runner）
@@ -155,6 +181,8 @@ services:
 
 # 持久化卷（存储Judge0的数据库和缓存数据，重启不丢失；仅 --profile judge0 时使用）
 volumes:
+  app_postgres_data:
+    driver: local
   judge0_postgres_data:
     driver: local
   judge0_redis_data:

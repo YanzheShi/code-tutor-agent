@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import sqlite3
 import uuid
 from typing import Any, Optional
 
@@ -22,7 +21,6 @@ from code_tutor_agent.api.deps import (
 )
 from code_tutor_agent.api.serializers import empty_state, serialize_state
 from code_tutor_agent.api.services.generation import GENERATION_TIMEOUT, run_generation
-from code_tutor_agent.config import get_checkpoint_db_path
 from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
 from code_tutor_agent.db.database import (
     delete_session_activity,
@@ -64,13 +62,15 @@ router = APIRouter()
 # 提示等级 0–4，≥3 表示已给到 L3/L4 仍吃力，掌握度不牢。
 HINT_DEEP_THRESHOLD = 3
 
-# ── checkpointer 辅助 ──
-
-CHECKPOINT_DB = get_checkpoint_db_path()
+# ── checkpointer 辅助（PG 版：PostgresSaver，直查走其底层 psycopg 连接）──
 
 
-def _checkpointer_conn() -> sqlite3.Connection | None:
-    """获取 checkpointer 底层的 SQLite 连接，用于直查/直删。"""
+def _checkpointer_conn():
+    """获取 checkpointer 底层的 PostgreSQL 连接，用于直查。
+
+    PostgresSaver 与原 SqliteSaver 一样暴露 ``conn`` 属性（psycopg 连接，
+    autocommit + dict_row），原来的直查模式得以延续。
+    """
     try:
         graph = get_graph()
         cp = graph.checkpointer
@@ -82,16 +82,17 @@ def _checkpointer_conn() -> sqlite3.Connection | None:
 
 
 def _session_exists(thread_id: str) -> bool:
-    """检查 checkpoints.db 中是否存在该 thread_id。"""
+    """检查 checkpointer 库中是否存在该 thread_id。"""
     conn = _checkpointer_conn()
     if not conn:
         return False
     try:
-        cur = conn.execute(
-            "SELECT 1 FROM checkpoints WHERE thread_id = ? LIMIT 1",
-            (thread_id,),
-        )
-        return cur.fetchone() is not None
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM checkpoints WHERE thread_id = %s LIMIT 1",
+                (thread_id,),
+            )
+            return cur.fetchone() is not None
     except Exception:
         return False
 
@@ -166,42 +167,32 @@ async def list_sessions(
     """列出当前用户的持久化会话（按最近活跃倒序）。
 
     返回每个会话的 session_id、状态摘要和最后活跃时间。
-    依赖于 checkpoints.db 中的数据；按 session_activity.user_id 过滤归属。
+    依赖 checkpointer 中的数据；按 session_activity.user_id 过滤归属。
+    PG 版走 checkpointer.list() API（原裸查 checkpoints 表在 PostgresSaver 下
+    blob 是 msgpack 序列化，无法再按 JSON 文本解析）。
     """
-    conn = _checkpointer_conn()
-    if not conn:
-        return {"sessions": [], "total": 0}
+    graph = get_graph()
+    checkpointer = graph.checkpointer
 
     owned = get_session_ids_for_user(user_key(current))
     if not owned:
         return {"sessions": [], "total": 0}
 
     try:
-        # 每个 thread 取最新一条 checkpoint 的 metadata
-        rows = conn.execute(
-            """
-            SELECT
-                thread_id,
-                checkpoint,
-                metadata,
-                MAX(ROWID) AS _rowid
-            FROM checkpoints
-            GROUP BY thread_id
-            ORDER BY _rowid DESC
-            LIMIT ?
-            """,
-            (limit * 4,),
-        ).fetchall()
+        # 每个 thread 取最新一条 checkpoint（按 checkpoint.ts 倒序）
+        tuples = list(checkpointer.list(None, limit=limit * 4))
+        tuples.sort(
+            key=lambda t: str((t.checkpoint or {}).get("ts") or ""),
+            reverse=True,
+        )
 
         sessions: list[dict[str, Any]] = []
-        for row in rows:
-            thread_id = row[0]
-            if thread_id not in owned:
+        for t in tuples:
+            thread_id = str((t.config or {}).get("configurable", {}).get("thread_id", ""))
+            if not thread_id or thread_id not in owned:
                 continue  # 他人的会话不进列表
-            checkpoint_blob = row[1]
-            metadata_blob = row[2]
 
-            # 解析 checkpoint blob → 提取状态字段
+            # 从 channel_values 提取状态摘要字段
             info = {
                 "session_id": thread_id,
                 "status": "unknown",
@@ -211,23 +202,20 @@ async def list_sessions(
                 "problem_title": "",
                 "last_verdict": "",
             }
-
             try:
-                if checkpoint_blob:
-                    # LangGraph checkpoint 序列化格式
-                    cp = json.loads(checkpoint_blob)
-                    ch_values = cp.get("channel_values", {})
-                    # channel_values 的值通常是 BLOB（base64 编码的 pickled dict）
-                    # 尝试从 channel_values 中提取关键字段
-                    for key in ("status", "topic", "difficulty", "mode",
-                                "last_verdict", "session_id"):
-                        if key in ch_values:
-                            info[key] = str(ch_values[key])
+                ch_values = (t.checkpoint or {}).get("channel_values") or {}
+                for key in ("status", "topic", "difficulty", "mode",
+                            "last_verdict", "session_id"):
+                    if ch_values.get(key) is not None:
+                        info[key] = str(ch_values[key])
 
-                    # 尝试提取 problem title
-                    problem = ch_values.get("problem", "")
-                    if problem and isinstance(problem, str) and len(problem) > 5:
-                        info["problem_title"] = problem[:80]
+                # 提取 problem title（serde 还原后是 ProblemMeta 对象或 dict）
+                problem = ch_values.get("problem")
+                title = getattr(problem, "title", None)
+                if title is None and isinstance(problem, dict):
+                    title = problem.get("title")
+                if title and isinstance(title, str) and len(title) > 5:
+                    info["problem_title"] = title[:80]
             except Exception:
                 pass
 
@@ -450,7 +438,6 @@ async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get
                     pid, body.code, verdict, serialised, session_id=sid,
                     user_id=str(values.get("user_id") or uid),
                 )
-                logger.info("saved submission successfully lastrowid,  %s", last_row_id)
     except Exception as exc:
         logger.warning("Failed to persist submission: %s", exc)
 

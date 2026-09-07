@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 
+import psycopg
+from psycopg.rows import dict_row
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import StateGraph
 from langgraph.store.memory import InMemoryStore
@@ -119,11 +120,13 @@ def compile_graph(
     builder = _build_graph()
 
     if conn_string:
-        logger.info(f"compile_graph() — using SqliteSaver ({conn_string})")
-        os.makedirs(os.path.dirname(conn_string) or ".", exist_ok=True)
-        conn = sqlite3.connect(conn_string, check_same_thread=False)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        checkpointer = SqliteSaver(conn)
+        logger.info(f"compile_graph() — using PostgresSaver ({conn_string})")
+        # PostgresSaver 要求 autocommit 连接（官方约定）；dict_row 供 session.py
+        # 直查 checkpoints 表时按列名取值。setup() 幂等建表，启动跑一次即可。
+        conn = psycopg.connect(conn_string, autocommit=True, row_factory=dict_row,
+                               connect_timeout=int(os.getenv("CTA_PG_CONNECT_TIMEOUT", "5")))
+        checkpointer = PostgresSaver(conn)
+        checkpointer.setup()
     else:
         logger.warning("compile_graph() — no conn_string, falling back to InMemorySaver")
         checkpointer = InMemorySaver()

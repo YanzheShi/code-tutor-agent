@@ -181,36 +181,48 @@ class TestStubGateInAnalyze:
 
 
 @pytest.fixture
-def tmp_db(monkeypatch, tmp_path):
-    """把 database 模块指向临时库（每用例独立，镜像 test_db_concurrency 模式）。"""
-    path = tmp_path / "test_sub_user.db"
-    monkeypatch.setattr(db, "DB_PATH", str(path))
-    monkeypatch.setattr(db, "_WAL_READY", False)
+def tmp_db():
+    """初始化表结构（PG 版：不再 monkeypatch DB_PATH/_WAL_READY——SQLite 已下线，
+    隔离由 conftest 的 _pg_clean_tables 每测试后清表保证，镜像 test_db_concurrency 模式）。"""
     db.init_db()
-    return path
+
+
+def _mk_problem(suffix: str) -> int:
+    """PG 强制 submissions→problems 外键（SQLite 时代 FK 默认不生效），先建题再存提交。"""
+    pid, _ = db.save_problem({
+        "title": f"测试题{suffix}",
+        "topic": "数组",
+        "difficulty": "easy",
+        "description": "测试",
+        "test_cases": [],
+        "starter_code": f"class Solution:\n    def solve{suffix}(self):\n        pass",
+    })
+    return pid
 
 
 class TestSubmissionUserIsolation:
     def test_save_and_query_by_user(self, tmp_db):
         """落库带 user_id → 按用户过滤查询可见；他人查不到。"""
-        db.save_submission(1, "code", "AC", [], session_id="s1", user_id="7")
-        db.save_submission(1, "code", "WA", [], session_id="s2", user_id="8")
+        pid = _mk_problem("FkA")
+        db.save_submission(pid, "code", "AC", [], session_id="s1", user_id="7")
+        db.save_submission(pid, "code", "WA", [], session_id="s2", user_id="8")
 
-        mine = db.get_submissions_by_problem(1, user_id="7")
+        mine = db.get_submissions_by_problem(pid, user_id="7")
         assert len(mine) == 1
-        others = db.get_submissions_by_problem(1, user_id="8")
+        others = db.get_submissions_by_problem(pid, user_id="8")
         assert len(others) == 1
-        assert db.get_submissions_by_problem(1, user_id="9") == []
+        assert db.get_submissions_by_problem(pid, user_id="9") == []
 
         allsubs = db.get_all_submissions(user_id="7")
         assert len(allsubs) == 1
 
     def test_backfill_reowns_legacy_default_rows(self, tmp_db):
         """存量 'default' 行 + 会话归属已知 → 启动回填后按真实用户可见。"""
+        pid1, pid2 = _mk_problem("FkB"), _mk_problem("FkC")
         # 会话 s9 属于用户 7；s10 无归属记录
         db.touch_session("s9", "7")
-        db.save_submission(1, "legacy", "WA", [], session_id="s9", user_id="default")
-        db.save_submission(2, "orphan", "WA", [], session_id="s10", user_id="default")
+        db.save_submission(pid1, "legacy", "WA", [], session_id="s9", user_id="default")
+        db.save_submission(pid2, "orphan", "WA", [], session_id="s10", user_id="default")
 
         n = db.backfill_submissions_user_id()
         assert n == 1  # 只回填有归属的 1 行，无归属的不臆测
@@ -219,11 +231,12 @@ class TestSubmissionUserIsolation:
         assert len(mine) == 1
         # 无归属会话的提交保持 default，不丢不串
         assert db.get_all_submissions(user_id="default") is not None
-        assert len(db.get_submissions_by_problem(2, user_id="7")) == 0
+        assert len(db.get_submissions_by_problem(pid2, user_id="7")) == 0
 
     def test_backfill_idempotent(self, tmp_db):
+        pid = _mk_problem("FkD")
         db.touch_session("s1", "3")
-        db.save_submission(1, "c", "AC", [], session_id="s1", user_id="default")
+        db.save_submission(pid, "c", "AC", [], session_id="s1", user_id="default")
         assert db.backfill_submissions_user_id() == 1
         assert db.backfill_submissions_user_id() == 0  # 第二次无行可动
 
