@@ -56,11 +56,18 @@ class SearchToolInfo:
 
 
 def _token() -> str:
-    return (os.getenv("SEARCH_MCP_TOKEN") or "").strip()
+    """搜索通道 token：SEARCH_MCP_TOKEN 优先，未配置时回退 mcp-hub 的
+    MCP_HUB_TOKEN（2026-09-07 统一：一份 hub 配置同时驱动邮件与搜索）。"""
+    return (
+        os.getenv("SEARCH_MCP_TOKEN")
+        or os.getenv("MCP_HUB_TOKEN")
+        or ""
+    ).strip()
 
 
 def search_mcp_configured() -> bool:
-    """是否配置了搜索 MCP 的 token。未配置时 agent 侧不注册 search 工具。"""
+    """是否配置了搜索通道 token（SEARCH_MCP_TOKEN 或 MCP_HUB_TOKEN）。
+    未配置时 agent 侧不注册 search 工具。"""
     return bool(_token())
 
 
@@ -74,7 +81,12 @@ def search_tool_name() -> str:
 
 
 def _url() -> str:
-    return (os.getenv("SEARCH_MCP_URL") or DEFAULT_URL).strip()
+    """搜索端点：SEARCH_MCP_URL 优先，未配置时回退 MCP_HUB_URL（统一走 hub）。"""
+    return (
+        os.getenv("SEARCH_MCP_URL")
+        or os.getenv("MCP_HUB_URL")
+        or DEFAULT_URL
+    ).strip()
 
 
 def _timeout() -> float:
@@ -89,14 +101,14 @@ def _timeout() -> float:
 def _headers() -> dict[str, str]:
     token = _token()
     if not token:
-        raise SearchMCPUnavailable("未配置 SEARCH_MCP_TOKEN，搜索 MCP 不可用。")
+        raise SearchMCPUnavailable("未配置搜索通道 token（SEARCH_MCP_TOKEN / MCP_HUB_TOKEN），搜索不可用。")
     return {"Authorization": f"Bearer {token}"}
 
 
 def _endpoint_error(status_code: int) -> SearchMCPUnavailable:
     if status_code in (401, 403):
         return SearchMCPUnavailable(
-            f"搜索 MCP 鉴权失败(HTTP {status_code})，请检查 SEARCH_MCP_TOKEN 是否正确/未过期。"
+            f"搜索 MCP 鉴权失败(HTTP {status_code})，请检查搜索 token（SEARCH_MCP_TOKEN / MCP_HUB_TOKEN）是否正确/未过期。"
         )
     return SearchMCPUnavailable(f"搜索 MCP 返回 HTTP {status_code}。")
 

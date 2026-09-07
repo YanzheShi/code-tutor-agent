@@ -7,7 +7,7 @@
 4. 邮件 fire-and-forget（daemon 线程），超时/失败只记日志，绝不阻塞 watcher。
    发送总量控制（每日上限等）后续由 MCP 统一配额服务管理，本模块不做。
 
-降级：BREVO_API_KEY 未配置 → 只落库 + ERROR 日志（对齐 api/email.py 既有口径）。
+降级：mcp-hub 未配置（MCP_HUB_URL/MCP_HUB_TOKEN）→ 只落库 + ERROR 日志（唯一邮件通道）。
 """
 from __future__ import annotations
 
@@ -122,14 +122,13 @@ class Notifier:
                           title: str, detail: str, cooldown_sec: int) -> bool:
         """daemon 线程发信；返回 False 表示无可用通道（同步判定）。
 
-        通道：mcp-hub 优先（统一配额），失败/未配置回退 Brevo 直连——见 mail_client。
+        通道：mcp-hub（唯一通道，统一配额）——见 mail_client。
         """
         from code_tutor_agent.monitoring.mail_client import hub_configured
-        from code_tutor_agent.api.email import is_configured
 
-        if not hub_configured() and not is_configured():
+        if not hub_configured():
             logger.error(
-                "[alerts] mcp-hub 与 BREVO_API_KEY 均未配置，告警只落库不发信：%s %s",
+                "[alerts] mcp-hub 未配置（MCP_HUB_URL/MCP_HUB_TOKEN），告警只落库不发信：%s %s",
                 rule_id, title,
             )
             return False

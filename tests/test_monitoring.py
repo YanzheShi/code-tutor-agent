@@ -25,11 +25,11 @@ import pytest
 _TMPDIR = tempfile.mkdtemp(prefix="cta_monitoring_")
 os.environ.setdefault("CTA_DB_PATH", str(Path(_TMPDIR) / "test.db"))
 os.environ.setdefault("CTA_ALERTS_ENABLED", "1")
-# 防真发邮件（重要）：本机 .env 里的 MCP_HUB_TOKEN / BREVO_API_KEY 会被 config.load_dotenv
+# 防真发邮件（重要）：本机 .env 里的 MCP_HUB_TOKEN（邮件与搜索统一通道） 会被 config.load_dotenv
 # 读进测试进程（load_dotenv 不覆盖已有变量，这里先强制置空即可隔离两个通道）。
 # hub/直连通道行为由 mock 覆盖，绝不发真邮件。
 os.environ["MCP_HUB_TOKEN"] = ""
-os.environ["BREVO_API_KEY"] = ""
+
 
 from code_tutor_agent.monitoring.metrics import MetricsRegistry, Window, get_registry, record_graph_call
 from code_tutor_agent.monitoring.notifier import Notifier
@@ -137,8 +137,8 @@ def notifier(monkeypatch):
 
 class TestNotifier:
     def test_unconfigured_email_only_saves(self, notifier):
-        # BREVO_API_KEY 未设置 → notified=False，但告警已落库
-        os.environ.pop("BREVO_API_KEY", None)
+        # mcp-hub 未配置 → notified=False，但告警已落库
+        os.environ.pop("MCP_HUB_TOKEN", None)
         notifier.notify_firing("rule_x", "critical", "标题", "详情")
         from code_tutor_agent.db.database import get_recent_alerts
 
@@ -146,7 +146,7 @@ class TestNotifier:
         assert any(a["rule_id"] == "rule_x" and a["status"] == "firing" for a in alerts)
 
     def test_cooldown_silences_repeat(self, notifier, monkeypatch):
-        os.environ.pop("BREVO_API_KEY", None)
+        os.environ.pop("MCP_HUB_TOKEN", None)
         from code_tutor_agent.db.database import get_recent_alerts, save_alert
 
         # 直接造状态：firing 刚发过（notified=True）
@@ -159,7 +159,7 @@ class TestNotifier:
         assert after == before  # 冷却期内零落库零发信
 
     def test_cooldown_expiry_refires(self, notifier):
-        os.environ.pop("BREVO_API_KEY", None)
+        os.environ.pop("MCP_HUB_TOKEN", None)
         notifier._states["rule_z"] = {
             "fired_at": time.monotonic() - 7200, "notified": True, "firing": True, "cooldown": 3600,
         }
@@ -205,7 +205,7 @@ class TestNotifier:
 
     def test_resolve_then_refire_alerts_again(self, notifier):
         """恢复后再次触发：必须能重新告警（防横跳的冷却只作用于恢复侧）。"""
-        os.environ.pop("BREVO_API_KEY", None)
+        os.environ.pop("MCP_HUB_TOKEN", None)
         notifier._states["rule_u"] = {
             "fired_at": time.monotonic(), "notified": False, "firing": False, "cooldown": 3600,
         }
@@ -320,30 +320,24 @@ class TestMailClient:
         assert "initialize" in hub_calls and "tools/call" in hub_calls
         assert direct_calls == []  # hub 成功绝不回退直连
 
-    def test_hub_failure_falls_back_to_direct(self, monkeypatch):
+    def test_hub_http_error_fails_gracefully(self, monkeypatch):
+        """hub HTTP 错误：返回 (False, hub: ...)，绝不抛异常（无兜底通道可回退）。"""
         import code_tutor_agent.monitoring.mail_client as mc
 
         self._setup_env(monkeypatch)
-        direct_calls = []
 
         def fake_rpc(payload, token, session_id=None):
             raise urllib.error.HTTPError("u", 401, "Unauthorized", None, None)  # type: ignore[arg-type]
 
         monkeypatch.setattr(mc, "_rpc", fake_rpc)
-        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
-        monkeypatch.setattr(
-            "code_tutor_agent.api.email.send_email",
-            lambda *a, **k: direct_calls.append(a) or True,
-        )
         ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
-        assert ok and detail.startswith("direct:")
-        assert len(direct_calls) == 1
+        assert not ok and detail == "hub: hub HTTP 401"
 
-    def test_hub_is_error_falls_back(self, monkeypatch):
+    def test_hub_is_error_fails(self, monkeypatch):
+        """hub 工具 isError：视为发送失败，detail 带工具错误文本。"""
         import code_tutor_agent.monitoring.mail_client as mc
 
         self._setup_env(monkeypatch)
-        direct_calls = []
 
         def fake_rpc(payload, token, session_id=None):
             if payload.get("method") == "initialize":
@@ -354,24 +348,24 @@ class TestMailClient:
             }, "sid-1"
 
         monkeypatch.setattr(mc, "_rpc", fake_rpc)
-        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
-        monkeypatch.setattr(
-            "code_tutor_agent.api.email.send_email",
-            lambda *a, **k: direct_calls.append(a) or True,
-        )
         ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
-        assert ok and detail.startswith("direct:")
+        assert not ok and "quota exhausted" in detail
 
-    def test_no_hub_goes_direct(self, monkeypatch):
+    def test_no_hub_short_circuit(self, monkeypatch):
+        """hub 未配置：短路返回，连一次 HTTP 都不发。"""
         import code_tutor_agent.monitoring.mail_client as mc
 
         self._setup_env(monkeypatch, hub_token="")
-        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
-        monkeypatch.setattr(
-            "code_tutor_agent.api.email.send_email", lambda *a, **k: True,
-        )
+        calls: list = []
+
+        def fake_rpc(*a, **k):
+            calls.append(a)
+            return None, None
+
+        monkeypatch.setattr(mc, "_rpc", fake_rpc)
         ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
-        assert ok and detail.startswith("direct:")
+        assert not ok and detail == "hub: MCP_HUB_TOKEN not configured"
+        assert calls == []  # 未配置时绝不发起请求
 
     def test_both_channels_down(self, monkeypatch):
         import code_tutor_agent.monitoring.mail_client as mc
@@ -386,4 +380,4 @@ class TestMailClient:
     def test_no_recipients_short_circuit(self, monkeypatch):
         import code_tutor_agent.monitoring.mail_client as mc
 
-        assert mc.send_alert_email([], "subj", "body") == (False, "direct: no recipients")
+        assert mc.send_alert_email([], "subj", "body") == (False, "hub: no recipients")

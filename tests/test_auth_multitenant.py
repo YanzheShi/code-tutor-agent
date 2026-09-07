@@ -356,15 +356,16 @@ def test_change_password_flow(temp_db):
     assert not a.verify_password("oldpassword1", user["password_hash"])
 
 
-def test_forgot_reset_no_brevo(temp_db, monkeypatch):
-    """未配置 Brevo：forgot 返回引导信息（不发码），reset 任何码都 400。"""
+def test_forgot_reset_no_hub(temp_db, monkeypatch):
+    """未配置 mcp-hub：forgot 返回引导信息（不发码），reset 任何码都 400。"""
     import anyio
     from fastapi import HTTPException
 
     from code_tutor_agent.api import auth as a
 
-    # 显式清空 key，隔离本地 .env（2026-09-06 起真 key 已配置，隐式依赖会假红）
-    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    # 显式清空 hub 配置，隔离本地 .env（隐式依赖会假红）
+    monkeypatch.delenv("MCP_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("SEARCH_MCP_TOKEN", raising=False)
 
     dbmod.create_user("nr@test.com", a.hash_password("whatever123"))
 
@@ -379,15 +380,15 @@ def test_forgot_reset_no_brevo(temp_db, monkeypatch):
     anyio.run(_do)
 
 
-def test_forgot_reset_with_brevo(temp_db, monkeypatch):
-    """配置 Brevo（mock 发信）：验证码送达 → 重置成功 → 旧密码失效 → 码一次性。"""
+def test_forgot_reset_with_hub(temp_db, monkeypatch):
+    """配置 mcp-hub（mock 发信）：验证码送达 → 重置成功 → 旧密码失效 → 码一次性。"""
     import anyio
 
     from code_tutor_agent.api import auth as a
     from code_tutor_agent.api import email as email_svc
 
     uid = dbmod.create_user("br@test.com", a.hash_password("oldpassword1"))
-    monkeypatch.setenv("BREVO_API_KEY", "test-key")
+    monkeypatch.setenv("MCP_HUB_TOKEN", "test-key")
     monkeypatch.setattr(email_svc, "send_email", lambda *a2, **k: True)
     # 固定验证码为 222222（choice 恒返 '2'）
     monkeypatch.setattr(a.secrets, "choice", lambda s: "2")

@@ -377,7 +377,7 @@ async def change_my_password(body: ChangePasswordRequest, current: dict = Depend
 
 @router.post("/forgot-password")
 async def forgot_password(body: ForgotPasswordRequest, request: Request):
-    """忘记密码：配置 BREVO_API_KEY 时发 6 位验证码邮件；未配置返回引导信息。
+    """忘记密码：配置 mcp-hub（MCP_HUB_TOKEN）时发 6 位验证码邮件；未配置返回引导信息。
 
     无论邮箱是否存在一律 200 + 统一措辞（防账号枚举探测）。
     """

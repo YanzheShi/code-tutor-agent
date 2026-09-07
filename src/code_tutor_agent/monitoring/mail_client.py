@@ -1,15 +1,13 @@
-"""告警邮件统一发送客户端：mcp-hub 优先，Brevo 直连兜底（2026-09-07 接入）。
+"""告警邮件统一发送客户端：唯一通道 mcp-hub（2026-09-07 起，Brevo 直连兜底已移除）。
 
-通道优先级：
-1. **mcp-hub**（MCP Streamable HTTP，`send_email` 工具）——统一配额/记账由 hub 管理，
-   环境变量 ``MCP_HUB_URL`` + ``MCP_HUB_TOKEN`` 配置即启用；
-2. **Brevo 直连**（api/email.py）——hub 未配置或调用失败时回退，老链路原样保留。
+通道：**mcp-hub**（MCP Streamable HTTP，`send_email` 工具）——统一配额/记账由 hub
+管理，环境变量 ``MCP_HUB_URL`` + ``MCP_HUB_TOKEN`` 配置即启用。
 
 设计口径（对齐 monitoring 包既有原则）：
 - 纯标准库 urllib，零新依赖；MCP 握手三步（initialize → initialized → tools/call）
   每次独立会话，告警低频不心疼开销；
 - 任何失败只返回 (False, 原因)，绝不抛异常——调用方（notifier/心跳脚本）只记日志；
-- hub 返回 isError=true 时视为失败并**回退直连**（宁可多发一封，不可漏发告警）。
+- hub 返回 isError=true 时视为失败（不再有兜底通道，宁可落库 + ERROR 日志）。
 
 协议细节（mcp-hub README §裸 HTTP 调试）：
 - 响应为 SSE ``data: {...}`` 帧，取最后一帧为 JSON-RPC 响应；
@@ -127,28 +125,16 @@ def send_via_hub(to_emails: list[str], subject: str, text: str) -> tuple[bool, s
 
 
 def send_alert_email(to_emails: list[str], subject: str, body: str) -> tuple[bool, str]:
-    """告警邮件统一入口：hub 优先，失败回退 Brevo 直连。
+    """告警邮件统一入口：唯一通道 mcp-hub。
 
-    返回 (ok, detail)，detail 标注实际使用的通道（"hub:..." / "direct:..."）。
-    hub 未配置时不尝试（连一次 HTTP 都不浪费）； Brevo 未配置且 hub 失败 → 整体失败。
+    返回 (ok, detail)，detail 标注实际通道（"hub:..."）。
+    hub 未配置时不尝试（连一次 HTTP 都不浪费），只返回失败原因由调用方落库。
     """
     if not to_emails:
-        return False, "direct: no recipients"
+        return False, "hub: no recipients"
 
-    if hub_configured():
-        ok, detail = send_via_hub(to_emails, subject, body)
-        if ok:
-            return True, f"hub: {detail}"
-        logger.warning("[mail] hub 通道失败，回退 Brevo 直连: %s", detail)
-    else:
-        logger.debug("[mail] mcp-hub 未配置，走 Brevo 直连")
+    if not hub_configured():
+        return False, "hub: MCP_HUB_TOKEN not configured"
 
-    try:
-        from code_tutor_agent.api.email import is_configured, send_email
-
-        if not is_configured():
-            return False, "direct: BREVO_API_KEY not configured"
-        sent = any(send_email(to, subject, body) for to in to_emails)
-        return sent, "direct: sent" if sent else "direct: send failed"
-    except Exception as exc:
-        return False, f"direct: {type(exc).__name__}: {exc}"[:160]
+    ok, detail = send_via_hub(to_emails, subject, body)
+    return (True, f"hub: {detail}") if ok else (False, f"hub: {detail}")

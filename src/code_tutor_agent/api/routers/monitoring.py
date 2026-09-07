@@ -46,7 +46,7 @@ async def admin_alert_test(current: dict = Depends(require_admin)):
     from code_tutor_agent.monitoring.notifier import _recipients
 
     if not is_configured():
-        raise HTTPException(503, "BREVO_API_KEY 未配置，邮件通道不可用")
+        raise HTTPException(503, "mcp-hub 未配置（MCP_HUB_URL/MCP_HUB_TOKEN），邮件通道不可用")
     recipients = _recipients()
     if not recipients:
         raise HTTPException(503, "无收件人：请配置 CTA_ALERT_EMAIL_TO 或 CTA_ADMIN_EMAIL")

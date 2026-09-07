@@ -97,7 +97,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | 判题沙箱 | Judge0（Docker）/ 本地 subprocess 兜底 | 资源隔离 + 用例执行 |
 | 数据库 | PostgreSQL 16（psycopg3 + 连接池） | 业务数据 + LangGraph 会话状态统一持久化，写锁/多副本友好 |
 | 状态持久化 | langgraph-checkpoint-postgres（PostgresSaver） | 会话恢复与 `interrupt()` 挂起依赖 |
-| 邮件 | Brevo API | 监控告警通知 + 忘记密码验证码；未配置自动降级 |
+| 邮件 | mcp-hub 统一配额（优先）+ Brevo API 兜底 | 监控告警通知 + 忘记密码验证码；未配置自动降级 |
 | 监控告警 | 进程内指标注册表 + 规则评估 + 冷却通知 | 自研轻量层，`/admin/metrics` 预留 Prometheus 挂载点 |
 | 长期记忆 | LG `InMemoryStore`（当前）→ 规划迁移 PostgresStore | 画像跨会话；⚠️ 当前为进程内存，**重启即丢**，见[已知限制](#已知限制) |
 | 可观测性 | LangSmith（`observability.py` 非侵入式接线） | 多节点链路追踪，未配 key 自动关闭 |
@@ -412,15 +412,14 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 | `JWT_SECRET` | 否 | 首次生成后持久化到 `data/db/.jwt_secret` | JWT 签名密钥；**多副本部署必须统一配置**（或共享该文件） |
 | `JWT_EXPIRE_DAYS` | 否 | `7` | JWT 有效期天数 |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | — | 启动时引导创建管理员账号（`ensure_bootstrap_admin`） |
-| `BREVO_API_KEY` | 否 | — | Brevo 邮件服务（告警通知 + 忘记密码）；未配置则邮件通道自动降级 |
-| `BREVO_SENDER` | 否 | `ADMIN_EMAIL` | 发件人（须已在 Brevo 控制台验证） |
+| `MCP_HUB_URL` | 否 | `http://127.0.0.1:8080/mcp` | mcp-hub 端点（邮件统一通道 + 联网搜索默认端点） |
+| `MCP_HUB_TOKEN` | 否 | — | mcp-hub 的 Bearer token；未配置则邮件通道自动降级、导师无联网搜索 |
+| `SEARCH_MCP_URL` / `SEARCH_MCP_TOKEN` | 否 | 复用 `MCP_HUB_*` | 搜索独立覆盖（搜索 MCP 与 hub 分开部署时才需要） |
+| `SEARCH_MCP_TOOL_NAME` | 否 | `web_search` | 要调用的搜索工具名（对接非默认命名的搜索 MCP 时改这里） |
+| `SEARCH_MCP_TIMEOUT_SECONDS` | 否 | `20` | 搜索单次调用超时秒数 |
 | `CTA_ALERT_EMAIL_TO` | 否 | `ADMIN_EMAIL` | 告警收件人（逗号分隔多个） |
 | `JUDGE0_URL` | 否 | `http://localhost:2358` | Judge0 沙箱地址（设为 `http://judge0:2358` 由 compose 自动注入） |
 | `JUDGE_BACKEND` | 否 | `self` | 判题后端切换：`self`（本地 subprocess）/ `judge0` |
-| `SEARCH_MCP_URL` | 否 | `http://127.0.0.1:8080/mcp` | 搜索 MCP 端点（Streamable HTTP）；配置后导师获得联网搜索工具 |
-| `SEARCH_MCP_TOKEN` | 否 | — | 搜索 MCP 的 Bearer token；未设置则不暴露 `web_search` 工具 |
-| `SEARCH_MCP_TOOL_NAME` | 否 | `web_search` | 要调用的搜索工具名（对接非默认命名的搜索 MCP 时改这里） |
-| `SEARCH_MCP_TIMEOUT_SECONDS` | 否 | `20` | 搜索单次调用超时秒数 |
 | `CORS_ORIGINS` | 否 | `http://localhost:3000,...` | 前端跨域来源 |
 | `VITE_API_BASE` | 否 | `http://localhost:8765` | 前端 API 基础 URL（构建时注入；生产模式设为 `/` 走同源代理） |
 
@@ -488,7 +487,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 - **metrics**：进程内指标注册表（计数器 / 滑动窗口 / streak / gauge），业务代码只需 `get_registry().record("xxx")` 埋点。
 - **rules**：13 条告警规则，分 **rate 型**（滑动窗口比例，依赖流量基数）与 **streak 型**（连续失败 N 次，低流量也能触发）两类，覆盖 HTTP 5xx 错误率、LLM 连续失败/failover 频繁、判题与 LangGraph 连续失败、Token 日预算、磁盘/数据库体积、前端错误激增等；阈值全部支持环境变量覆盖。
-- **notifier**：冷却状态机防重复轰炸（critical 30min / warning 60min / info 24h）+ Brevo 邮件 + `alert_history` 落库，可配 `CTA_ALERT_EMAIL_TO` 多收件人。
+- **notifier**：冷却状态机防重复轰炸（critical 30min / warning 60min / info 24h，恢复邮件只在此前真发过告警时才发）+ 邮件通道（mcp-hub 统一配额优先，失败/未配置回退 Brevo 直连）+ `alert_history` 落库，可配 `CTA_ALERT_EMAIL_TO` 多收件人。
 - **watcher**：lifespan 启动周期评估 + 系统自检；`user_visible` 规则（判题不稳定 / 辅导中断 / 数据库写压力）触发时同步**主页公告横幅**（`GET /announcements`），管理员也可手动发布公告。
 - **客户端错误上报**：`POST /client/errors` 公开端点（出错时 token 可能已失效），字段白名单 + 限长防滥用。
 - `/admin/metrics` 返回指标快照，是将来接 Prometheus 的 exposition 挂载点；`POST /admin/alerts/test` 可发测试邮件验证链路。
@@ -566,6 +565,12 @@ schtasks /Create /TN "CodeTutor-CleanupTraces" /SC DAILY /ST 03:00 /F /TR "D:\Co
 
 > 简历向一句话标题：
 > **CodeTutor: A Self-Verifying, Long-Term Adaptive Coding Mentor with Closed-Loop Tutoring and Edit-Trace Observability**
+
+---
+
+## 贡献
+
+欢迎参与贡献！提交 Issue / PR 前请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)（开发环境、代码规范、测试要求、Commit 与 PR 规范）。
 
 ---
 
