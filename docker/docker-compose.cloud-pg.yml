@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────────────────
+#  Code Tutor Agent — 云服务器部署 override（宿主机原生 PostgreSQL）
+#
+#  背景：云服务器（Oracle ARM）已自装 PostgreSQL 16.15（127.0.0.1:5432，
+#  scram-sha-256，与 mcp_hub 等服务共用实例），应用直连它而不启动
+#  compose 内置的 app-db 容器。
+#
+#  用法（项目根目录，docker compose v2）：
+#     docker compose -f docker/docker-compose.yml \
+#                    -f docker/docker-compose.prod.yml \
+#                    -f docker/docker-compose.cloud-pg.yml up -d --build
+#
+#  宿主机 PG 一次性前置（root）：
+#     1. sudo -u postgres psql -c "ALTER USER postgres PASSWORD '<密码>';"
+#        并把密码写入项目根 .env：CTA_HOST_PG_PASSWORD=<密码>
+#     2. postgresql.conf：listen_addresses = '*'
+#        （Oracle 安全组未放行 5432 外网入口，实际仅 docker 网桥可达）
+#     3. pg_hba.conf 追加：host  all  all  172.16.0.0/12  scram-sha-256
+#     4. sudo systemctl restart postgresql
+#
+#  网络说明：backend 容器经 host-gateway（cta-network 网关 172.19.0.1）
+#  访问宿主机 5432；网络名固定复用既有 cta-network——judge0-arm 栈已以
+#  别名 judge0 接入该网络，若让 compose 另建带项目前缀的新网络，
+#  JUDGE0_URL=http://judge0:2358 会解析失败。
+# ──────────────────────────────────────────────────────────
+
+services:
+  backend:
+    # 容器内经 host-gateway 访问宿主机原生 PG
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DATABASE_URL=postgresql://postgres:${CTA_HOST_PG_PASSWORD:?CTA_HOST_PG_PASSWORD 未配置（见文件头前置说明）}@host.docker.internal:5432/postgres
+    # 不使用 compose 内置 app-db 容器：去掉对它的健康检查依赖
+    depends_on: !override []
+
+# 固定复用既有 cta-network（不带 compose 项目前缀），保住 judge0 别名
+networks:
+  cta-network:
+    name: cta-network
