@@ -171,14 +171,20 @@ def profile_v2_key(current: dict) -> str:
 def ensure_bootstrap_admin() -> None:
     """服务器启动时幂等分配管理员账号（工业化落地：管理员不靠前端注册产生）。
 
-    - 账号来自 CTA_ADMIN_EMAIL / CTA_ADMIN_PASSWORD 环境变量，未配置时用内置默认值。
+    - 凭据来自 CTA_ADMIN_EMAIL / CTA_ADMIN_PASSWORD 环境变量，**必须配置，无源码默认值**。
       ⚠️ 刻意不用 ADMIN_PASSWORD——那是旧 admin 明文密码流程的变量名，.env 里还留着，
       撞名会把引导密码读错（2026-09-06 实测踩坑）。
+    - 缺失（未配置）时只打错误日志、不创建任何用户，避免落空邮箱/空密码 admin。
     - 目标邮箱已存在 → 什么都不做（幂等，重启不覆盖密码）；
     - 创建成功只打一行日志。
     """
-    email = os.getenv("CTA_ADMIN_EMAIL", "534629255@qq.com").strip().lower()
-    password = os.getenv("CTA_ADMIN_PASSWORD", "test123456")
+    email = (os.getenv("CTA_ADMIN_EMAIL") or "").strip().lower()
+    password = os.getenv("CTA_ADMIN_PASSWORD") or ""
+    if not email or not password:
+        logger.error(
+            "引导管理员未创建：请在 .env 配置 CTA_ADMIN_EMAIL / CTA_ADMIN_PASSWORD"
+        )
+        return
     if get_user_by_email(email):
         return
     try:

@@ -81,6 +81,10 @@ def _pg_clean_tables(_pg_test_db):
     SQLite 时代每条测试用独立临时库天然隔离；迁到共享 schema 后必须显式清，
     否则前一条测试的 session_activity/problems 等行会泄漏进后续断言
     （实测 count == 3 变 5）。PG 不可达时静默跳过，由守卫负责报错。
+
+    清库会连带 users（集成测试的缓存 JWT 因此 401 过，2026-09-07 实测）——
+    admin 保活不在本层做（避免污染单元测试的「开局无 admin」前提），
+    由 tests/integration/conftest.py 清 token 缓存 + _agent_helpers 自愈登录解决。
     """
     schema = os.environ.get("CTA_PG_SCHEMA")
     if not schema:
@@ -98,10 +102,15 @@ def _pg_clean_tables(_pg_test_db):
             ).fetchall()
             targets = [r[0] for r in rows if r[0] not in _KEEP_TABLES]
             if targets:
+                # RESTART IDENTITY：重置 identity 序列，保证各测试的 id 分配确定性。
+                # 注意：这里刻意不重建 bootstrap admin——单元测试（如
+                # test_bootstrap_admin_idempotent）断言「开局无 admin」，全局注入
+                # 用户会破坏该前提；集成测试的 admin 保活由 tests/integration/
+                # conftest + _agent_helpers 的自愈登录负责，不在此层掺和。
                 conn.execute(
                     "SET lock_timeout = '3s'; TRUNCATE TABLE "
                     + ", ".join(f'"{schema}"."{t}"' for t in targets)
-                    + " CASCADE"
+                    + " RESTART IDENTITY CASCADE"
                 )
     except Exception:
         pass

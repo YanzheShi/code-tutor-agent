@@ -26,7 +26,11 @@ _token_cache: dict[int, str] = {}
 
 
 def get_auth_token(client) -> str:
-    """登录引导管理员账号，返回 JWT；同一 client 实例内缓存复用。"""
+    """登录引导管理员账号，返回 JWT；同一 client 实例内缓存复用。
+
+    自愈：全局 conftest 每条测试后清库（含 users），admin 可能不存在——
+    登录失败时 ensure_bootstrap_admin 重建后重试一次（幂等，已存在则 no-op）。
+    """
     cache_key = id(client)
     cached = _token_cache.get(cache_key)
     if cached:
@@ -35,6 +39,14 @@ def get_auth_token(client) -> str:
         "/auth/login",
         json={"email": _AUTH_EMAIL, "password": _AUTH_PASSWORD},
     )
+    if resp.status_code != 200:
+        from code_tutor_agent.api.auth import ensure_bootstrap_admin
+
+        ensure_bootstrap_admin()
+        resp = client.post(
+            "/auth/login",
+            json={"email": _AUTH_EMAIL, "password": _AUTH_PASSWORD},
+        )
     assert resp.status_code == 200, f"login failed: {resp.text}"
     token = resp.json()["token"]
     _token_cache[cache_key] = token

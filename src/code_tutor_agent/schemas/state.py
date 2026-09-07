@@ -19,7 +19,6 @@ Agent 模式：
 
 from __future__ import annotations
 
-import operator
 from enum import Enum
 from typing import Annotated, Literal, Optional
 
@@ -36,6 +35,27 @@ def last_phase(current: "SessionPhase | None", update: "SessionPhase | list") ->
     if isinstance(update, list):
         return update[-1]
     return update
+
+
+def merge_submissions(current: list, update: list) -> list:
+    """submissions 通道的 merge reducer：按 index 去重替换，空列表 = 显式清空。
+
+    为什么不用 operator.add：判题节点需要把 judge_results 回写到最近一条提交上，
+    PostgresSaver 不持久化对通道对象的 in-place 修改（get_state 从 checkpoint
+    反序列化重建，2026-09-07 实测 judge_results 全丢），必须显式返回变更后的
+    submission；operator.add 会把同一条提交追加成两条。按 index 替换后，
+    wait_for_submit 的 [new_sub]（index=len+1）天然追加、agent_judge 的
+    [last]（index 已存在）变成原位更新。
+
+    空列表语义：generator 换新题时返回 [] 表示清空提交记录——在 operator.add
+    下这是 no-op（旧提交泄漏进新题的隐藏 bug），merge reducer 里给它明确语义。
+    """
+    if not update:
+        return []
+    by_index = {s.index: s for s in current}
+    for s in update:
+        by_index[s.index] = s
+    return [by_index[i] for i in sorted(by_index)]
 
 
 def last_wins_list(current: list, update: list) -> list:
@@ -243,7 +263,7 @@ class SessionState(BaseModel):
     )
 
     # ── Submissions ──
-    submissions: Annotated[list[Submission], operator.add] = Field(
+    submissions: Annotated[list[Submission], merge_submissions] = Field(
         default_factory=list,
         description="All submissions, in chronological order",
     )

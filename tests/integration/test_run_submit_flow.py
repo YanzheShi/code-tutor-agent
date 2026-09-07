@@ -64,9 +64,14 @@ def client():
         yield c
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def problem_id(client):
-    """种子一道题（module 级共享，库是 conftest 环境的临时库）。"""
+    """种子一道题（每条测试独立种题）。
+
+    PG 共享 schema 隔离方案下，全局 conftest 每条测试后 TRUNCATE 全部表，
+    module 级缓存的 pid 在第二条测试起必然 404（2026-09-07 实测踩坑）。
+    save_problem 纯 DB 插入秒级完成，降为 function 级零成本。
+    """
     pid, _created = db.save_problem({
         "title": f"E2E 两数之和(判题链路)",
         "topic": "数组",

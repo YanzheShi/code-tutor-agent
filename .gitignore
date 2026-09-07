@@ -95,3 +95,8 @@ docs/
 *.srctrlbm
 *.srctrldb
 *.srctrlprj
+
+# === 含明文凭据 / 公网地址的脚本与输出（不进 git）===
+scripts/test_multiuser_cloud_stress.py
+scripts/test_multiuser_cloud.py
+out/e2e_open2.txt

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,3 +25,41 @@ def pytest_collection_modifyitems(config, items):
             continue
         if _HERE in Path(str(path)).resolve().parents:
             item.add_marker(pytest.mark.integration)
+
+
+sys.path.insert(0, str(_HERE))
+
+import os  # noqa: E402
+
+import _agent_helpers  # noqa: E402
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _inject_admin_env(monkeypatch):
+    """集成测试显式注入引导管理员凭据，使 ensure_bootstrap_admin 可创建 admin。
+
+    auth.py 已改为 env-only（无源码默认值），故测试环境必须提供
+    CTA_ADMIN_EMAIL / CTA_ADMIN_PASSWORD；值与 _agent_helpers 的登录账号保持一致。
+    """
+    monkeypatch.setenv(
+        "CTA_ADMIN_EMAIL",
+        os.getenv("CTA_TEST_EMAIL", "test-admin@example.com"),
+    )
+    monkeypatch.setenv(
+        "CTA_ADMIN_PASSWORD",
+        os.getenv("CTA_TEST_PASSWORD", "test123456"),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _reset_auth_token_cache():
+    """每条测试后清 _agent_helpers 的 token 缓存。
+
+    全局 conftest 每条测试后 TRUNCATE 全部表（含 users）：模块级 client 缓存的
+    JWT sub 指向已被清掉的用户，下一条测试若继续用缓存 token 会 401
+    「用户不存在或已删除」（2026-09-07 实测的级联）。admin 保活交给
+    get_auth_token 的自愈登录（缺失时 ensure_bootstrap_admin + 重试），
+    不在全局层注入用户——单元测试要断言「开局无 admin」。
+    """
+    yield
+    _agent_helpers._token_cache.clear()

@@ -372,10 +372,13 @@ def agent_judge_node(state: SessionState) -> dict:
     # 仅真实「提交」(is_run=False) 才写 judge_results；运行(is_run=True) 只更新
     # last_run_results（下方 _apply_side_effects）。否则运行结果会被 chat 误读成「提交判题 AC」，
     # 导致用户只点了运行、未提交，却收到「恭喜你 AC」的误导（2026-08-13 实测）。
-    # 注意：submissions 通道是 operator.add reducer——绝不能把完整列表放进 update 返回，
-    # 只能原地 append（checkpointer 在步末按通道当前值落库），否则提交数翻倍。
+    # 注意：submissions 通道是 merge_submissions reducer（按 index 替换）——变更
+    # 提交后必须显式返回，PostgresSaver 不持久化对通道对象的 in-place 修改
+    # （get_state 从 checkpoint 重建，2026-09-07 实测 judge_results 全丢）。
+    submissions_update: list = []
     if state.submissions and not is_run:
         state.submissions[-1].judge_results.append(_build_base_result(raw_results, test_cases))
+        submissions_update = [state.submissions[-1]]
 
     # ── 判题分析（sample 跳过 LLM / full 走 LLM）──
     analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
@@ -388,8 +391,8 @@ def agent_judge_node(state: SessionState) -> dict:
         feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
 
     # ── Update state ──
-    # 注意：不返回 "submissions" —— 该通道是 operator.add reducer，返回完整列表
-    # 会把整个列表再追加一遍导致提交数翻倍；judge_results 已在上方原地 append。
+    # submissions 用 merge_submissions reducer（按 index 替换）：只返回变更的那一条，
+    # 未变更时不带该 key（不要返回全量列表以外的写法，index 重复会被覆盖）。
     update: dict[str, Any] = {
         "last_verdict": analysis.verdict,
         "warm_feedback": analysis.warm_feedback,
@@ -398,6 +401,8 @@ def agent_judge_node(state: SessionState) -> dict:
         "tutor_messages": state.tutor_messages
         + [{"role": "tutor", "content": feedback_msg}],
     }
+    if submissions_update:
+        update["submissions"] = submissions_update
 
     _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update, code=code)
     return update
