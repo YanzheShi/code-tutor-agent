@@ -233,6 +233,7 @@ _RATE_LIMITS = {
     "reg": ("REGISTER_RATE_LIMIT", 5, 3600),    # 次/小时/IP，默认 5
     "login": ("LOGIN_RATE_LIMIT", 10, 600),     # 次/10分钟/IP，默认 10
     "forgot": ("FORGOT_RATE_LIMIT", 3, 3600),   # 次/小时/IP，默认 3
+    "forgot_email": ("FORGOT_EMAIL_RATE_LIMIT", 3, 3600),  # 次/小时/邮箱，默认 3（堵「换 IP 针对同一邮箱轰炸」的 IP 限流缺口）
     "reset": ("RESET_RATE_LIMIT", 5, 3600),     # 次/小时/IP，默认 5
 }
 
@@ -389,6 +390,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     """
     _limited("forgot", _client_ip(request))
     email = body.email.strip().lower()
+    _limited("forgot_email", email)  # 按目标邮箱限流：堵「换 IP 针对同一邮箱邮件轰炸」的 IP 限流缺口
     generic = {"delivered": None, "message": "如果该邮箱已注册，验证码将在几分钟内送达；请查收（含垃圾箱）。"}
 
     from code_tutor_agent.api import email as email_svc

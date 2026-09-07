@@ -414,6 +414,43 @@ def test_forgot_reset_with_hub(temp_db, monkeypatch):
     assert r2["delivered"] is None and "几分钟内送达" in r2["message"]
 
 
+def test_forgot_per_email_rate_limit(temp_db, monkeypatch):
+    """per-email 限流：攻击者不断换 IP 针对同一邮箱请求，第 4 次须 429（堵邮件轰炸）。
+
+    原限流只按 IP（forgot:<IP>），换 IP 即可绕开；本测试验证新增的
+    forgot_email:<邮箱> 维度——同一目标邮箱每小时封顶 3 封，与来源 IP 无关。
+    IP 维度限流保持默认（不关闭），仅靠「每请求换 IP」让 IP 桶无法累积，
+    从而隔离证明是第 4 次被 per-email 维度拦截。
+    """
+    import anyio
+
+    from code_tutor_agent.api import auth as a
+
+    # 隔离本地 .env 的 hub 配置：确保 forgot 走「未配置」分支（不查 DB、不发信），
+    # 把测试焦点完全收束到 per-email 限流本身（限流计数在 is_configured 判断之前已累积）。
+    monkeypatch.delenv("MCP_HUB_TOKEN", raising=False)
+    monkeypatch.delenv("SEARCH_MCP_TOKEN", raising=False)
+
+    # 模拟攻击者每次请求换一个 IP（XFF 不同），使 IP 维度限流各计 1、永不触发
+    ips = (f"203.0.113.{i}" for i in range(50))
+    monkeypatch.setattr(a, "_client_ip", lambda req: next(ips))
+
+    email = "bomb-victim@example.com"
+
+    async def _attack():
+        for _ in range(3):  # 前 3 次：不同 IP + 同一邮箱，均不应被限
+            await a.forgot_password(a.ForgotPasswordRequest(email=email), None)
+        with pytest.raises(HTTPException) as exc:  # 第 4 次：同一邮箱超限 → 429
+            await a.forgot_password(a.ForgotPasswordRequest(email=email), None)
+        assert exc.value.status_code == 429
+
+    anyio.run(_attack)
+
+    async def _other():  # 换邮箱不受影响：per-email 按目标邮箱隔离，不误伤其他用户
+        await a.forgot_password(a.ForgotPasswordRequest(email="another-user@example.com"), None)
+    anyio.run(_other)
+
+
 def test_admin_users_and_invites_api(temp_db):
     """admin 用户列表 / 重置密码 / 邀请码生成-停用（TestClient 全链路）。"""
     import os as _os
