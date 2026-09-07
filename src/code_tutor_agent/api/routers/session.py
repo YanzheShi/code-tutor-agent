@@ -281,6 +281,7 @@ async def delete_session(sid: str, current: dict = Depends(get_current_user)):
 async def cleanup_sessions(
     max_age_hours: int = Query(default=168, ge=1, description="清理多少小时前的会话（默认 7 天）"),
     dry_run: bool = Query(default=True, description="仅预览，不实际删除"),
+    current: dict = Depends(require_admin),  # admin 专属：可跨用户删除全库过期会话
 ):
     """清理过期会话的 checkpoint 数据。
 
@@ -475,13 +476,16 @@ class EditTraceRequest(BaseModel):
 
 
 @router.post("/{sid}/edit-trace")
-async def save_edit_trace_endpoint(sid: str, body: EditTraceRequest):
+async def save_edit_trace_endpoint(
+    sid: str, body: EditTraceRequest, current: dict = Depends(get_current_user),
+):
     """接收前端实时采集的编辑轨迹事件（UPSERT 累加），供轨迹分析按题隔离读取。
 
     仅落库，不在此触发 LLM 分析。每个事件内部写入 problem_id（events_json 聚合存储，
     不另加表列）：前端逐事件携带则保留，缺失用请求体 problem_id 兜底（回退 "default"），
     避免换题瞬间串题。
     """
+    _require_owner(sid, current)
     if not body.events:
         return {"ok": True, "session_id": sid, "events": 0}
     try:
@@ -547,11 +551,14 @@ async def analyze_trace_endpoint(
 
 
 @router.get("/{sid}/analysis")
-async def get_trace_analysis_endpoint(sid: str, problem_id: str = "default"):
+async def get_trace_analysis_endpoint(
+    sid: str, problem_id: str = "default", current: dict = Depends(get_current_user),
+):
     """读取某题已缓存的轨迹分析首轮结论 + 多轮追问线程（无则 analysis=null）。
 
     前端刷新后据此恢复「轨迹分析」Tab（首轮结论 + 追问历史）。
     """
+    _require_owner(sid, current)
     data = (
         get_analysis_result(sid, problem_id)
         if problem_id and problem_id != "default"
@@ -719,8 +726,9 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
 
 
 @router.get("/{sid}/reference")
-async def get_reference_code(sid: str):
+async def get_reference_code(sid: str, current: dict = Depends(get_current_user)):
     """Get the reference solution (only after AC)."""
+    _require_owner(sid, current)
     graph = get_graph()
     config = build_run_config(sid, run_name="get_reference_code")
     try:
