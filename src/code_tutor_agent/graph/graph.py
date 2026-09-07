@@ -6,6 +6,7 @@ import os
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from dotenv import load_dotenv
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -121,11 +122,23 @@ def compile_graph(
 
     if conn_string:
         logger.info(f"compile_graph() — using PostgresSaver ({conn_string})")
-        # PostgresSaver 要求 autocommit 连接（官方约定）；dict_row 供 session.py
-        # 直查 checkpoints 表时按列名取值。setup() 幂等建表，启动跑一次即可。
-        conn = psycopg.connect(conn_string, autocommit=True, row_factory=dict_row,
-                               connect_timeout=int(os.getenv("CTA_PG_CONNECT_TIMEOUT", "5")))
-        checkpointer = PostgresSaver(conn)
+        # PostgresSaver 官方支持 ConnectionPool（比单连接多一档并发安全）：
+        # 单条 psycopg 连接被多个请求线程共享时，并发 invoke 会在协议层互相踩踏
+        # （实测：三个用户同时建会话 → "failed to enter pipeline mode" →
+        #   checkpoint 没落库 → 后续全部 Session not found 404）。
+        # autocommit + dict_row 语义不变；setup() 幂等建表，启动跑一次即可。
+        pool = ConnectionPool(
+            conn_string,
+            min_size=int(os.getenv("CTA_CKPT_POOL_MIN", "2")),
+            max_size=int(os.getenv("CTA_CKPT_POOL_MAX", "8")),
+            open=True,
+            kwargs={
+                "autocommit": True,
+                "row_factory": dict_row,
+                "connect_timeout": int(os.getenv("CTA_PG_CONNECT_TIMEOUT", "5")),
+            },
+        )
+        checkpointer = PostgresSaver(pool)
         checkpointer.setup()
     else:
         logger.warning("compile_graph() — no conn_string, falling back to InMemorySaver")

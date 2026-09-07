@@ -62,14 +62,15 @@ router = APIRouter()
 # 提示等级 0–4，≥3 表示已给到 L3/L4 仍吃力，掌握度不牢。
 HINT_DEEP_THRESHOLD = 3
 
-# ── checkpointer 辅助（PG 版：PostgresSaver，直查走其底层 psycopg 连接）──
+# ── checkpointer 辅助（PG 版：PostgresSaver + ConnectionPool，直查借池化连接）──
 
 
 def _checkpointer_conn():
-    """获取 checkpointer 底层的 PostgreSQL 连接，用于直查。
+    """获取 checkpointer 底层的 PostgreSQL 连接/连接池，用于直查。
 
-    PostgresSaver 与原 SqliteSaver 一样暴露 ``conn`` 属性（psycopg 连接，
-    autocommit + dict_row），原来的直查模式得以延续。
+    PostgresSaver 暴露 ``conn`` 属性；2026-09-07 起改为 ConnectionPool
+    （单连接并发 invoke 会踩踏，见 graph.compile_graph 注释），
+    调用方（_session_exists）需按 pool / 单连接两种形态取 cursor。
     """
     try:
         graph = get_graph()
@@ -83,10 +84,21 @@ def _checkpointer_conn():
 
 def _session_exists(thread_id: str) -> bool:
     """检查 checkpointer 库中是否存在该 thread_id。"""
+    from psycopg_pool import ConnectionPool
+
     conn = _checkpointer_conn()
     if not conn:
         return False
     try:
+        if isinstance(conn, ConnectionPool):
+            # 连接池形态：借一条连接直查
+            with conn.connection() as real:
+                with real.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM checkpoints WHERE thread_id = %s LIMIT 1",
+                        (thread_id,),
+                    )
+                    return cur.fetchone() is not None
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT 1 FROM checkpoints WHERE thread_id = %s LIMIT 1",
