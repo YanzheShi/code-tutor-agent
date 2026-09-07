@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import time
+import urllib.error
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,11 @@ import pytest
 _TMPDIR = tempfile.mkdtemp(prefix="cta_monitoring_")
 os.environ.setdefault("CTA_DB_PATH", str(Path(_TMPDIR) / "test.db"))
 os.environ.setdefault("CTA_ALERTS_ENABLED", "1")
+# 防真发邮件（重要）：本机 .env 里的 MCP_HUB_TOKEN / BREVO_API_KEY 会被 config.load_dotenv
+# 读进测试进程（load_dotenv 不覆盖已有变量，这里先强制置空即可隔离两个通道）。
+# hub/直连通道行为由 mock 覆盖，绝不发真邮件。
+os.environ["MCP_HUB_TOKEN"] = ""
+os.environ["BREVO_API_KEY"] = ""
 
 from code_tutor_agent.monitoring.metrics import MetricsRegistry, Window, get_registry, record_graph_call
 from code_tutor_agent.monitoring.notifier import Notifier
@@ -273,3 +279,111 @@ class TestRules:
         for rule in RULES:
             if rule.user_visible:
                 assert rule.banner and rule.banner[0] and rule.banner[1], rule.rule_id
+
+
+# ── mail_client：hub 优先 + 直连兜底 ────────────────────────
+
+class TestMailClient:
+    """通道选择逻辑。_rpc 全 mock，任何用例都不发真邮件。"""
+
+    def _setup_env(self, monkeypatch, hub_token="tok"):
+        monkeypatch.setenv("MCP_HUB_URL", "http://127.0.0.1:9999/mcp")
+        if hub_token:
+            monkeypatch.setenv("MCP_HUB_TOKEN", hub_token)
+        else:
+            monkeypatch.delenv("MCP_HUB_TOKEN", raising=False)
+
+    def test_hub_success_no_fallback(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        self._setup_env(monkeypatch)
+        hub_calls = []
+        direct_calls = []
+
+        def fake_rpc(payload, token, session_id=None):
+            hub_calls.append(payload.get("method"))
+            if payload.get("method") == "initialize":
+                return {"jsonrpc": "2.0", "id": 1, "result": {}}, "sid-1"
+            return {
+                "jsonrpc": "2.0", "id": 2,
+                "result": {"content": [{"type": "text", "text": '{"messageId":"m-1"}'}]},
+            }, "sid-1"
+
+        monkeypatch.setattr(mc, "_rpc", fake_rpc)
+        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
+        monkeypatch.setattr(
+            "code_tutor_agent.api.email.send_email",
+            lambda *a, **k: direct_calls.append(a) or True,
+        )
+        ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
+        assert ok and detail.startswith("hub:")
+        assert "initialize" in hub_calls and "tools/call" in hub_calls
+        assert direct_calls == []  # hub 成功绝不回退直连
+
+    def test_hub_failure_falls_back_to_direct(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        self._setup_env(monkeypatch)
+        direct_calls = []
+
+        def fake_rpc(payload, token, session_id=None):
+            raise urllib.error.HTTPError("u", 401, "Unauthorized", None, None)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(mc, "_rpc", fake_rpc)
+        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
+        monkeypatch.setattr(
+            "code_tutor_agent.api.email.send_email",
+            lambda *a, **k: direct_calls.append(a) or True,
+        )
+        ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
+        assert ok and detail.startswith("direct:")
+        assert len(direct_calls) == 1
+
+    def test_hub_is_error_falls_back(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        self._setup_env(monkeypatch)
+        direct_calls = []
+
+        def fake_rpc(payload, token, session_id=None):
+            if payload.get("method") == "initialize":
+                return {"jsonrpc": "2.0", "id": 1, "result": {}}, "sid-1"
+            return {
+                "jsonrpc": "2.0", "id": 2,
+                "result": {"isError": True, "content": [{"type": "text", "text": "quota exhausted"}]},
+            }, "sid-1"
+
+        monkeypatch.setattr(mc, "_rpc", fake_rpc)
+        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
+        monkeypatch.setattr(
+            "code_tutor_agent.api.email.send_email",
+            lambda *a, **k: direct_calls.append(a) or True,
+        )
+        ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
+        assert ok and detail.startswith("direct:")
+
+    def test_no_hub_goes_direct(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        self._setup_env(monkeypatch, hub_token="")
+        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: True)
+        monkeypatch.setattr(
+            "code_tutor_agent.api.email.send_email", lambda *a, **k: True,
+        )
+        ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
+        assert ok and detail.startswith("direct:")
+
+    def test_both_channels_down(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        self._setup_env(monkeypatch)
+        monkeypatch.setattr(mc, "_rpc", lambda *a, **k: (_ for _ in ()).throw(
+            urllib.error.HTTPError("u", 401, "Unauthorized", None, None)))
+        monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: False)
+        ok, detail = mc.send_alert_email(["a@b.c"], "subj", "body")
+        assert not ok
+
+    def test_no_recipients_short_circuit(self, monkeypatch):
+        import code_tutor_agent.monitoring.mail_client as mc
+
+        assert mc.send_alert_email([], "subj", "body") == (False, "direct: no recipients")

@@ -82,20 +82,19 @@ def _probe() -> tuple[bool, str]:
 
 
 def _send_alert(subject: str, body: str) -> bool:
-    """直接走 Brevo 发信（复用 api/email.py，不依赖后端进程）。"""
+    """经统一邮件入口发送（mcp-hub 优先，Brevo 直连兜底）——与后端 notifier 同一链路。"""
     try:
         sys.path.insert(0, str(REPO_ROOT / "src"))
-        from code_tutor_agent.api.email import is_configured, send_email
+        from code_tutor_agent.monitoring.mail_client import send_alert_email
 
-        if not is_configured():
-            print("[heartbeat] ERROR BREVO_API_KEY not configured; cannot alert", file=sys.stderr)
-            return False
         raw = os.getenv("CTA_ALERT_EMAIL_TO", "") or os.getenv("CTA_ADMIN_EMAIL", "")
         recipients = [e.strip() for e in raw.split(",") if e.strip()]
         if not recipients:
             print("[heartbeat] ERROR no recipients; cannot alert", file=sys.stderr)
             return False
-        ok = any(send_email(to, subject, body) for to in recipients)
+        ok, detail = send_alert_email(recipients, subject, body)
+        if not ok:
+            print(f"[heartbeat] ERROR send failed: {detail}", file=sys.stderr)
         return ok
     except Exception as exc:
         print(f"[heartbeat] ERROR send failed: {exc}", file=sys.stderr)

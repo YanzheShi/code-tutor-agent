@@ -120,12 +120,17 @@ class Notifier:
 
     def _send_email_async(self, rule_id: str, status: str, severity: str,
                           title: str, detail: str, cooldown_sec: int) -> bool:
-        """daemon 线程发信；返回 False 表示未配置（同步判定）。"""
+        """daemon 线程发信；返回 False 表示无可用通道（同步判定）。
+
+        通道：mcp-hub 优先（统一配额），失败/未配置回退 Brevo 直连——见 mail_client。
+        """
+        from code_tutor_agent.monitoring.mail_client import hub_configured
         from code_tutor_agent.api.email import is_configured
 
-        if not is_configured():
+        if not hub_configured() and not is_configured():
             logger.error(
-                "[alerts] BREVO_API_KEY 未配置，告警只落库不发信：%s %s", rule_id, title
+                "[alerts] mcp-hub 与 BREVO_API_KEY 均未配置，告警只落库不发信：%s %s",
+                rule_id, title,
             )
             return False
 
@@ -148,14 +153,13 @@ class Notifier:
 
         def _send() -> None:
             try:
-                from code_tutor_agent.api.email import send_email
+                from code_tutor_agent.monitoring.mail_client import send_alert_email
 
-                ok = False
-                for to in recipients:
-                    if send_email(to, subject, body):
-                        ok = True
-                if not ok:
-                    logger.warning("[alerts] 告警邮件全部发送失败: %s", rule_id)
+                ok, detail = send_alert_email(recipients, subject, body)
+                if ok:
+                    logger.info("[alerts] 告警邮件已发 (%s): %s", detail, rule_id)
+                else:
+                    logger.warning("[alerts] 告警邮件发送失败 (%s): %s", detail, rule_id)
             except Exception:
                 logger.warning("[alerts] 告警邮件线程异常 (ignored): %s", rule_id, exc_info=True)
 

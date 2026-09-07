@@ -16,6 +16,13 @@ from __future__ import annotations
 import os
 import uuid
 
+# 加载 .env：get_database_url 直接读 os.getenv("DATABASE_URL")，pytest 进程不经过
+# config.py 的 load_dotenv——不补这一步，conftest 探测永远连默认 5432（本机库已迁
+# 原生 PG 17 的 5433，2026-09-07）。load_dotenv 不覆盖已有环境变量，CI 显式注入仍优先。
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import pytest
 
 
