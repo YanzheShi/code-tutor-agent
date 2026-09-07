@@ -9,8 +9,10 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    # 🔴 必须挂载命名卷持久化数据：数据库 / JWT 密钥文件(.jwt_secret) / checkpoint 都在 /app/data 下。
-    # 不挂的话，容器重建会丢失全部用户、会话与登录态（JWT 密钥重新随机 → 旧 token 全失效）。
+    # 🔴 必须挂载命名卷持久化 data/：JWT 密钥文件(.jwt_secret)、编辑轨迹等都在这里。
+    # 不挂的话，容器重建会丢失登录态（JWT 密钥重新随机 → 旧 token 全失效）。
+    # 业务数据 + LangGraph checkpoint 已迁 PostgreSQL（2026-09-07）：
+    # 在 app-db 容器的 app_postgres_data 卷里，备份请用 pg_dump 而非复制本卷。
     volumes:
       - cta_data:/app/data
     environment:
@@ -42,7 +44,8 @@ services:
           memory: 128M
           cpus: "0.25"
 
-# 持久化卷（数据库 / JWT 密钥 / checkpoint，重建容器不丢失）
+# 持久化卷（cta_data = JWT 密钥 / 编辑轨迹等 data 文件；业务数据 + checkpoint
+# 在主 compose 的 app_postgres_data 卷，由 app-db 容器承载，重建容器不丢失）
 volumes:
   cta_data:
     driver: local
