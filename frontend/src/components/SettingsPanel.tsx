@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { fetchLlmSettings, saveLlmSettings, testLlmSettings, type LlmSettings } from '../api/settings';
+import { changePassword, getStoredAuth } from '../api/auth';
 import { useTheme } from '../hooks/useTheme';
 
-/** 设置页 — 外观（明暗主题）+ 模型服务（自定义 API key / Base URL / 模型）。
+/** 设置页 — 外观（明暗主题）+ 模型服务（自定义 API key / Base URL / 模型）+ 账号（改密，低频折叠）。
  *
  * 视觉风格与 WelcomeScreen/AdminPanel 一致：ct-* CSS 变量 + 圆角卡片。
  * 主题即时生效（useTheme 直接切换）；模型设置保存后才生效（下一请求起用）。
@@ -29,6 +30,29 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { theme, setTheme } = useTheme();
+  const email = getStoredAuth()?.user.email;
+
+  // ── 修改密码表单状态（2026-09-08 从 WelcomeScreen 画像 tab 迁入；低频操作，折叠收起置底）──
+  const [pwOpen, setPwOpen] = useState(false);
+  const [oldPw, setOldPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwMsg, setPwMsg] = useState('');
+  const [pwErr, setPwErr] = useState('');
+
+  const handleChangePassword = async () => {
+    if (newPw.length < 8 || pwBusy) return;
+    setPwBusy(true); setPwMsg(''); setPwErr('');
+    try {
+      await changePassword(oldPw, newPw);
+      setPwMsg('密码已更新');
+      setOldPw(''); setNewPw('');
+    } catch (e) {
+      setPwErr(e instanceof Error ? e.message : '修改失败');
+    } finally {
+      setPwBusy(false);
+    }
+  };
 
   // ── 模型服务表单状态 ──
   const [loading, setLoading] = useState(true);
@@ -231,6 +255,57 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   </p>
                 )}
               </>
+            )}
+          </section>
+
+          {/* ── 账号（低频操作：置底 + 默认折叠）── */}
+          <section>
+            <h2 className="mb-1 text-sm font-semibold text-ct-text">账号</h2>
+            <p className="text-xs text-ct-muted">
+              {email ? `当前登录：${email}` : '登录账号相关设置'}
+            </p>
+
+            {!pwOpen ? (
+              <button
+                type="button"
+                onClick={() => setPwOpen(true)}
+                className="mt-3 rounded-lg border border-ct-border px-4 py-2 text-sm text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+              >
+                🔑 修改密码
+              </button>
+            ) : (
+              <div className="mt-3 space-y-4">
+                <Field label="当前密码">
+                  <input type="password" className={FIELD_CLS} value={oldPw}
+                    onChange={e => setOldPw(e.target.value)}
+                    placeholder="当前密码" autoComplete="current-password" />
+                </Field>
+                <Field label="新密码" hint="至少 8 位">
+                  <input type="password" className={FIELD_CLS} value={newPw}
+                    onChange={e => setNewPw(e.target.value)}
+                    placeholder="新密码（至少 8 位）" autoComplete="new-password" />
+                </Field>
+                <div className="flex items-center gap-3">
+                  <button type="button" onClick={handleChangePassword}
+                    disabled={oldPw.length < 1 || newPw.length < 8 || pwBusy}
+                    className="rounded-lg bg-ct-accent px-5 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
+                    {pwBusy ? '提交中…' : '确认修改'}
+                  </button>
+                  <button type="button" onClick={() => { setPwOpen(false); setPwMsg(''); setPwErr(''); }}
+                    className="rounded-lg border border-ct-border px-4 py-2 text-sm text-ct-muted transition hover:text-ct-text">
+                    收起
+                  </button>
+                  {pwMsg && (
+                    <span className="rounded-lg bg-ct-success-bg px-3 py-2 text-xs text-ct-success">{pwMsg}</span>
+                  )}
+                  {pwErr && (
+                    <span className="rounded-lg bg-ct-error-bg px-3 py-2 text-xs break-all text-ct-error">{pwErr}</span>
+                  )}
+                </div>
+                <p className="text-xs text-ct-muted">
+                  忘记当前密码？退出登录后走登录页「忘记密码」流程（或联系管理员重置）。
+                </p>
+              </div>
             )}
           </section>
         </div>

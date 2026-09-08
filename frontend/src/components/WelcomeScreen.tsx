@@ -1,4 +1,4 @@
-import { changePassword, isAdmin } from '../api/auth';
+import { isAdmin } from '../api/auth';
 import { apiFetch } from '../api/client';
 import { useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
@@ -344,9 +344,9 @@ export default function WelcomeScreen({
   ];
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ct-bg p-4">
+    <div className="flex w-full items-center justify-center bg-ct-bg p-4">
       {/* 固定高度卡片：标题+标签栏+内容整体打包，所有 tab 共享同一卡片高度 → 切换零跳动 */}
-      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-ct-border bg-ct-surface px-6 py-6 shadow-sm max-h-[calc(100vh-2rem)] min-h-[520px] h-[760px]">
+      <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-ct-border bg-ct-surface px-6 py-6 shadow-sm max-h-[calc(100vh-6rem)] min-h-[520px] h-[760px]">
         {/* 标题（钉在卡片顶部，不随内容移动） */}
         <div className="relative shrink-0 text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
@@ -451,7 +451,6 @@ export default function WelcomeScreen({
 
           {/* ── 我的画像 ── */}
           {tab === 'profile' && <ProfileView />}
-          {tab === 'profile' && <ChangePasswordCard />}
 
           {/* ── 我的提交 ── */}
           {tab === 'subs' && <MySubmissionsView />}
@@ -462,56 +461,4 @@ export default function WelcomeScreen({
 }
 
 
-/* ── 自助改密卡片（防滥用改造，2026-09-06）── */
-
-function ChangePasswordCard() {
-  const [open, setOpen] = useState(false);
-  const [oldPw, setOldPw] = useState('');
-  const [newPw, setNewPw] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState('');
-  const [err, setErr] = useState('');
-
-  const submit = async () => {
-    if (newPw.length < 8 || busy) return;
-    setBusy(true); setMsg(''); setErr('');
-    try {
-      await changePassword(oldPw, newPw);
-      setMsg('密码已更新');
-      setOldPw(''); setNewPw('');
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : '修改失败');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="mt-6 rounded-xl border border-ct-border bg-ct-panel p-4">
-      <button
-        type="button"
-        onClick={() => { setOpen(!open); setMsg(''); setErr(''); }}
-        className="text-sm font-medium text-ct-muted hover:text-ct-text">
-        🔑 修改密码 {open ? '▲' : '▼'}
-      </button>
-      {open && (
-        <div className="mt-3 space-y-2">
-          <input type="password" value={oldPw} onChange={e => setOldPw(e.target.value)}
-            placeholder="当前密码" autoComplete="current-password"
-            className="w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-sm text-ct-text outline-none focus:border-ct-accent" />
-          <input type="password" value={newPw} onChange={e => setNewPw(e.target.value)}
-            placeholder="新密码（至少 8 位）" autoComplete="new-password"
-            className="w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-sm text-ct-text outline-none focus:border-ct-accent" />
-          <button type="button" onClick={submit}
-            disabled={oldPw.length < 1 || newPw.length < 8 || busy}
-            className="rounded-lg bg-ct-accent px-4 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">
-            {busy ? '提交中…' : '确认修改'}
-          </button>
-          {msg && <p className="text-xs text-ct-success">{msg}</p>}
-          {err && <p className="text-xs text-red-500">{err}</p>}
-          <p className="text-[11px] text-ct-muted">忘记当前密码？请走登录页「忘记密码」流程（或联系管理员重置）。</p>
-        </div>
-      )}
-    </div>
-  );
-}
+/* ── 自助改密卡片已迁入 SettingsPanel「账号」区块（2026-09-08，入口可发现性优化）── */

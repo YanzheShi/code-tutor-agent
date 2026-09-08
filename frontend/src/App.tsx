@@ -49,8 +49,13 @@ export default function App() {
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;
   if (screen === 'settings') return <SettingsPanel onClose={() => s.setScreen('welcome')} />;
   if (screen === 'welcome') return (
-    <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
-      onOpenAdmin={s.onOpenAdmin} onOpenSettings={s.onOpenSettings} onLogout={logout} user={user} />
+    <div className="flex min-h-screen flex-col bg-ct-bg">
+      <AnnouncementsBanner />
+      <div className="flex flex-1 items-center justify-center p-4">
+        <WelcomeScreen onStart={s.onStart} onStartExisting={s.onStartExisting}
+          onOpenAdmin={s.onOpenAdmin} onOpenSettings={s.onOpenSettings} onLogout={logout} user={user} />
+      </div>
+    </div>
   );
   if (screen === 'loading') return <LoadingScreen progressMsgs={progressMsgs} onRetry={s.onBackToWelcome} />;
   if (screen === 'admin') {
