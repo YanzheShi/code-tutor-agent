@@ -10,6 +10,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -21,6 +22,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
   const canSubmit =
     email.includes('@') &&
     password.length >= (mode === 'register' ? 8 : 1) &&
+    (mode !== 'register' || (confirmPassword.length >= 8 && confirmPassword === password)) &&
     (mode !== 'register' || inviteCode.trim().length >= 4) &&
     !busy;
 
@@ -72,7 +74,11 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
       if (mode === 'login') {
         await login(email.trim(), password);
       } else {
-        await register(email.trim(), password, inviteCode);
+        if (confirmPassword !== password) {
+          setError('两次输入的密码不一致');
+          return;
+        }
+        await register(email.trim(), password, confirmPassword, inviteCode);
       }
       onLoggedIn();
     } catch (err) {
@@ -139,6 +145,20 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               />
             </div>
+            {mode === 'register' && (
+              <div>
+                <label className="mb-1 block text-sm text-ct-muted">确认密码</label>
+                <input
+                  type="password"
+                  required
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="再次输入密码"
+                  className={`${inputCls} ${confirmPassword && confirmPassword !== password ? 'border-red-300' : ''}`}
+                  autoComplete="new-password"
+                />
+              </div>
+            )}
 
             {error && (
               <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-600">

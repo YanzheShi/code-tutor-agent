@@ -72,11 +72,21 @@ export async function login(email: string, password: string): Promise<AuthUser> 
   return data.user;
 }
 
-export async function register(email: string, password: string, inviteCode: string): Promise<AuthUser> {
+export async function register(
+  email: string,
+  password: string,
+  confirmPassword: string,
+  inviteCode: string,
+): Promise<AuthUser> {
   const r = await authFetch(`${API_BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, invite_code: inviteCode.trim().toUpperCase() }),
+    body: JSON.stringify({
+      email,
+      password,
+      confirm_password: confirmPassword,
+      invite_code: inviteCode.trim().toUpperCase(),
+    }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data?.detail || '注册失败');

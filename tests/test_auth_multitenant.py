@@ -112,10 +112,12 @@ def test_register_never_creates_admin(temp_db, monkeypatch):
     async def _do():
         with pytest.raises(HTTPException) as exc:
             await a.register(a.RegisterRequest(
-                email="reserve@corp.com", password="password123", invite_code="TESTCODE1"))
+                email="reserve@corp.com", password="password123",
+                confirm_password="password123", invite_code="TESTCODE1"))
         assert exc.value.status_code == 409
         return await a.register(a.RegisterRequest(
-            email="normal@corp.com", password="password123", invite_code="TESTCODE1"))
+            email="normal@corp.com", password="password123",
+            confirm_password="password123", invite_code="TESTCODE1"))
 
     resp_user = anyio.run(_do)
     assert resp_user["user"]["role"] == "user"  # register 直接返回 dict（无 response_model 序列化时）
@@ -269,7 +271,28 @@ def test_register_requires_invite_code(temp_db):
     async def _do():
         with pytest.raises(HTTPException) as exc:
             await a.register(a.RegisterRequest(
-                email="nocode@test.com", password="password123", invite_code="BADCODE9"))
+                email="nocode@test.com", password="password123",
+                confirm_password="password123", invite_code="BADCODE9"))
+        return exc.value.status_code
+
+    assert anyio.run(_do) == 400
+
+
+def test_register_confirm_password_mismatch(temp_db):
+    """两次密码不一致 → 400（后端硬校验，防前端绕过）。"""
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    a._RATE_BUCKETS.clear()
+    dbmod.create_invite_code("MISMATCH", 10, None)
+
+    async def _do():
+        with pytest.raises(HTTPException) as exc:
+            await a.register(a.RegisterRequest(
+                email="mismatch@test.com", password="password123",
+                confirm_password="password124", invite_code="MISMATCH"))
         return exc.value.status_code
 
     assert anyio.run(_do) == 400
@@ -315,7 +338,8 @@ def test_register_rate_limit(temp_db, monkeypatch):
         for i in range(6):
             try:
                 await a.register(a.RegisterRequest(
-                    email=f"rl{i}@test.com", password="password123", invite_code="RATELIM1"))
+                    email=f"rl{i}@test.com", password="password123",
+                    confirm_password="password123", invite_code="RATELIM1"))
                 codes.append(200)
             except HTTPException as exc:
                 codes.append(exc.status_code)
@@ -481,10 +505,12 @@ def test_admin_users_and_invites_api(temp_db):
                      json={"max_uses": 1, "expires_days": 1, "note": "t"}).json()
         assert inv["ok"] and len(inv["code"]) == 8
         r = c.post("/auth/register", json={
-            "email": "invited@test.com", "password": "password123", "invite_code": inv["code"]})
+            "email": "invited@test.com", "password": "password123",
+            "confirm_password": "password123", "invite_code": inv["code"]})
         assert r.status_code == 200
         assert c.post("/auth/register", json={
-            "email": "invited2@test.com", "password": "password123", "invite_code": inv["code"]}).status_code == 400
+            "email": "invited2@test.com", "password": "password123",
+            "confirm_password": "password123", "invite_code": inv["code"]}).status_code == 400
 
         # admin 重置 victim 密码 → 临时密码可登录
         reset = c.post(f"/admin/users/{victim_uid}/reset-password", headers=ah).json()
@@ -498,6 +524,7 @@ def test_admin_users_and_invites_api(temp_db):
         inv2 = c.post("/admin/invites", headers=ah, json={"max_uses": 5, "expires_days": 0}).json()
         assert c.post(f"/admin/invites/{inv2['code']}/disable", headers=ah).status_code == 200
         assert c.post("/auth/register", json={
-            "email": "after@test.com", "password": "password123", "invite_code": inv2["code"]}).status_code == 400
+            "email": "after@test.com", "password": "password123",
+            "confirm_password": "password123", "invite_code": inv2["code"]}).status_code == 400
         # 清理临时目录引用（保持 temp_db fixture 语义）
         del _os

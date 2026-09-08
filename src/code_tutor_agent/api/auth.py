@@ -276,6 +276,7 @@ def _client_ip(request: Request | None) -> str:
 class RegisterRequest(BaseModel):
     email: str = Field(description="邮箱（登录账号）")
     password: str = Field(min_length=8, description="密码（至少 8 位）")
+    confirm_password: str = Field(min_length=8, description="确认密码（须与密码一致）")
     invite_code: str = Field(description="邀请码（admin 面板生成，额度内有效）")
 
 
@@ -359,6 +360,8 @@ async def register(body: RegisterRequest, request: Request = None):
         raise HTTPException(400, "邮箱格式不正确")
     if len(body.password) < 8:
         raise HTTPException(400, "密码至少 8 位")
+    if body.password != body.confirm_password:
+        raise HTTPException(400, "两次输入的密码不一致")
 
     if get_user_by_email(email):
         raise HTTPException(409, "该邮箱已注册")
