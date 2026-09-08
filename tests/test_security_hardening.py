@@ -132,6 +132,96 @@ def test_quota_disabled_by_default_in_tests(quota_on, monkeypatch):
         quota_mod.check_chat_ask(req, "42", 1)
 
 
+# ── F-04 补充：判题限频（submit/run，不豁免自带 key 用户）─────────
+
+
+def test_judge_quota_blocks_after_limit(quota_on, monkeypatch):
+    monkeypatch.setenv("CTA_QUOTA_SUBMIT_USER", "30")
+    req = _FakeReq()
+    for _ in range(30):
+        quota_mod.check_judge(req, "42")  # 不抛
+    with pytest.raises(HTTPException) as ei:
+        quota_mod.check_judge(req, "42")
+    assert "提交/运行太频繁" in ei.value.detail
+
+
+def test_judge_quota_rolling_window_recovers(quota_on, monkeypatch):
+    """滑动窗口：时间推过后恢复。"""
+    from collections import deque
+
+    monkeypatch.setenv("CTA_QUOTA_SUBMIT_USER", "30")
+    req = _FakeReq()
+    for _ in range(30):
+        quota_mod.check_judge(req, "42")
+    with quota_mod._lock:
+        quota_mod._windows["ju:42"] = deque(t - 7200 for t in quota_mod._windows["ju:42"])
+    quota_mod.check_judge(req, "42")  # 不抛 = 已恢复
+
+
+def test_judge_quota_not_exempt_for_custom_llm(quota_on):
+    """自带 API key 用户**不豁免**判题限频（判题 CPU 是服务器资源）。"""
+    from code_tutor_agent import runtime_settings
+
+    token = runtime_settings.set_llm_override({"model": "m", "base_url": "https://x", "api_key": "k"})
+    try:
+        req = _FakeReq()
+        for _ in range(10):
+            quota_mod.check_judge(req, "42")
+        with pytest.raises(HTTPException):
+            quota_mod.check_judge(req, "42")
+    finally:
+        runtime_settings.llm_override_ctx.reset(token)
+
+
+def test_judge_quota_disabled(quota_on, monkeypatch):
+    monkeypatch.setenv("CTA_QUOTA_SUBMIT_USER", "0")
+    req = _FakeReq()
+    for _ in range(35):
+        quota_mod.check_judge(req, "42")  # 不抛
+
+
+# ── F-04 补充：并发护栏排队上限 ─────────────────────────────────
+
+
+def test_concurrency_queue_cap(monkeypatch):
+    """排队+执行总数达到 _MAX_CONCURRENCY + MAX_CONCURRENCY_QUEUE 时 429。"""
+    import asyncio
+    import threading
+
+    from code_tutor_agent.api import deps
+
+    monkeypatch.setattr(deps, "_MAX_CONCURRENCY", 1)
+    monkeypatch.setenv("MAX_CONCURRENCY_QUEUE", "1")
+    deps._active_count = 0
+
+    release = threading.Event()
+
+    def holder():
+        # 同步阻塞（to_thread 线程内），真实占住信号量槽位
+        release.wait(timeout=5)
+
+    async def scenario():
+        t1 = asyncio.create_task(deps.run_with_concurrency_limit(holder))  # 占槽
+        t2 = asyncio.create_task(deps.run_with_concurrency_limit(holder))  # 排队
+        # 等 t1/t2 都进入护栏（_active_count == 2）
+        for _ in range(200):
+            if deps._active_count >= 2:
+                break
+            await asyncio.sleep(0.01)
+        assert deps._active_count >= 2
+        with pytest.raises(HTTPException) as ei:
+            await deps.run_with_concurrency_limit(holder)  # 第三个 → 429
+        assert "判题繁忙" in ei.value.detail
+        release.set()
+        await asyncio.gather(t1, t2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        deps._active_count = 0
+
+
 # ── F-01/P0：沙箱 fail-closed ───────────────────────────────────
 
 

@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any
 
+from fastapi import HTTPException
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
@@ -25,6 +26,22 @@ _MAX_CONCURRENCY = max(1, int(os.getenv("MAX_CONCURRENCY", "10")))
 _concurrency_sem = asyncio.Semaphore(_MAX_CONCURRENCY)
 
 
+def _queue_limit() -> int:
+    """排队上限（F-04 补充，2026-09-08）：排队+执行总数达到
+    _MAX_CONCURRENCY + 本值时直接 429「判题繁忙」，防单账号高频提交占满
+    全部槽位饿死他人。默认 20，≤0 关闭。惰性读 env 便于测试调整。"""
+    raw = os.getenv("MAX_CONCURRENCY_QUEUE", "20").strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return 20
+
+
+# 已进入护栏（排队中 + 执行中）的请求数。仅在事件循环协程内读写
+# （检查与自增之间无 await），单线程语义下无竞态。
+_active_count = 0
+
+
 async def run_with_concurrency_limit(fn, *args, **kwargs):
     """在全局并发护栏内执行 fn（通常配合 asyncio.to_thread 使用方）。
 
@@ -32,9 +49,20 @@ async def run_with_concurrency_limit(fn, *args, **kwargs):
     to_thread 需要立即调度；正确用法是把「阻塞调用」包成 lambda 交给本函数在线程池跑：
     ``await run_with_concurrency_limit(_blocking_call, *args)``。
     本函数内部自行用 asyncio.to_thread 执行，调用方不再包 to_thread。
+
+    排队上限（F-04 补充）：护栏内总数（排队+执行中）达 _MAX_CONCURRENCY +
+    MAX_CONCURRENCY_QUEUE 时抛 429，超出部分不排队直接拒绝。
     """
-    async with _concurrency_sem:
-        return await asyncio.to_thread(fn, *args, **kwargs)
+    global _active_count
+    _qlimit = _queue_limit()
+    if _qlimit > 0 and _active_count >= _MAX_CONCURRENCY + _qlimit:
+        raise HTTPException(429, "当前判题繁忙，请稍后再试")
+    _active_count += 1
+    try:
+        async with _concurrency_sem:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+    finally:
+        _active_count -= 1
 
 
 def init_graph() -> CompiledStateGraph:

@@ -327,10 +327,17 @@ async def cleanup_sessions(
 
 
 @router.post("/{sid}/submit", response_model=SubmitResponse)
-async def submit_code(sid: str, body: SubmitRequest, current: dict = Depends(get_current_user)):
+async def submit_code(
+    sid: str, body: SubmitRequest, current: dict = Depends(get_current_user),
+    request: Request = None,
+):
     """Resume a paused session with user-submitted code."""
     _require_owner(sid, current)
     uid = user_key(current)
+    # 判题限频（F-04 补充）：按用户滑动窗口，不豁免自带 key 用户（判题 CPU 是服务器资源）
+    from code_tutor_agent.api.quota import check_judge
+
+    check_judge(request, uid)
     graph = get_graph()
     config = build_run_config(sid, run_name="submit_code", user_id=uid)
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from langgraph.types import Command
 
 from code_tutor_agent.api.auth import get_current_user, user_key
@@ -30,12 +30,17 @@ router = APIRouter()
 @router.post("/{sid}/run", response_model=RunCodeResponse)
 async def run_code(
     sid: str, body: RunCodeRequest, current: dict = Depends(get_current_user),
+    request: Request = None,
 ):
     """Run the user's code against visible (sample) test cases via the graph."""
     # 越权校验：归属存在且不匹配 → 404
     _owner = get_session_owner(sid)
     if _owner is not None and _owner != user_key(current):
         raise HTTPException(404, f"Session {sid} not found")
+    # 判题限频（F-04 补充）：与 submit 同口径（不豁免自带 key 用户）
+    from code_tutor_agent.api.quota import check_judge
+
+    check_judge(request, user_key(current))
     graph = get_graph()
     config = build_run_config(sid, run_name="run_code", user_id=user_key(current))
 

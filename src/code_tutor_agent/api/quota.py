@@ -7,6 +7,8 @@
 - 做题配额：滚动 1h / 滚动 24h 双窗口各 5 道新题（用户维度 + IP 维度分别计量）
 - 每题提问：每道题最多 20 次导师提问（仅 chat/stream 计数；submit/run 不计数）
 - 轨迹追问：每题最多 20 次追问（仅 analyze 系列带 message 的调用计数，首轮不计）
+- 判题限频：submit/run 每用户滚动窗口 10 次/20 分钟（不豁免自带 key 用户——判题
+  CPU 是服务器自身资源，见 check_judge）
 
 扣减点设计（每道新题恰好计 1，防双计/防绕过）：
 - create_session：后台 run_generation 立即绑题 → 计 1
@@ -26,6 +28,8 @@
 - CTA_QUOTA_PROBLEM_WINDOW_H / _D   两窗口秒数，默认 3600 / 86400
 - CTA_QUOTA_CHAT_USER / _IP      每题提问上限，默认 20
 - CTA_QUOTA_TRACE_USER / _IP     每题追问上限，默认 20
+- CTA_QUOTA_SUBMIT_USER          判题限频（次/窗口），默认 10
+- CTA_QUOTA_SUBMIT_WINDOW        判题限频窗口秒数，默认 1200（20 分钟）
 """
 from __future__ import annotations
 
@@ -84,6 +88,10 @@ MSG_TRACE_LIMIT = (
     "本题的轨迹追问次数已达上限（{limit} 次）。"
     "建议结合分析要点先自己动手验证，或换一题继续练习～"
 )
+MSG_JUDGE_LIMIT = (
+    "提交/运行太频繁了（每小时最多 {limit} 次）。"
+    "先消化一下刚才的判题反馈，改完代码再试～"
+)
 
 
 class _Window:
@@ -122,14 +130,15 @@ def _prune_locked(now: float) -> None:
             _counters.pop(k, None)
 
 
-def _take_window(key: str, limit: int, window: float, now: float) -> None:
+def _take_window(key: str, limit: int, window: float, now: float,
+                 msg: str | None = None) -> None:
     """检查并扣减一个滑动窗口槽位；超限抛 429（调用方需持有 _lock）。"""
     bucket = _windows.setdefault(key, deque())
     cutoff = now - window
     while bucket and bucket[0] < cutoff:
         bucket.popleft()
     if len(bucket) >= limit:
-        raise HTTPException(429, MSG_PROBLEM_LIMIT.format(limit=limit))
+        raise HTTPException(429, (msg or MSG_PROBLEM_LIMIT).format(limit=limit))
     bucket.append(now)
 
 
@@ -140,6 +149,25 @@ def _take_counter(key: str, limit: int, msg: str) -> None:
         raise HTTPException(429, msg.format(limit=limit))
     entry[0] += 1
     entry[1] = time.monotonic()
+
+
+def check_judge(request: Request | None, uid: str) -> None:
+    """提交/运行判题限频：按用户滑动窗口（默认 10 次/20 分钟）。
+
+    ⚠️ 与其他配额的豁免规则**刻意不同**：判题 CPU 是服务器自身资源（与
+    LLM 成本不同源），本配额**不豁免**自带 API key 的用户（2026-09-08 确认）。
+    扣减点：/session/{sid}/submit 与 /session/{sid}/run 入口。
+    """
+    if not _enabled():
+        return
+    limit = _env_int("CTA_QUOTA_SUBMIT_USER", 10)
+    if limit <= 0:
+        return
+    window = _env_int("CTA_QUOTA_SUBMIT_WINDOW", 1200)
+    now = time.monotonic()
+    with _lock:
+        _prune_locked(now)
+        _take_window(f"ju:{uid}", limit, window, now, MSG_JUDGE_LIMIT)
 
 
 def reset_all() -> None:
