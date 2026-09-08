@@ -29,6 +29,9 @@ from .pg_compat import (
 # 旧名兼容：_with_conn 及部分调用点仍用 _get_conn（现由 pg_compat 连接池提供）
 _get_conn = get_conn
 
+# 用户自定义 LLM API key 加密落库（见 security/secret_crypto.py）
+from ..security.secret_crypto import decrypt_secret, encrypt_secret
+
 logger = logging.getLogger(__name__)
 
 # 「未传参」哨兵：区别于 None（显式清空），用于按需 UPDATE（如 update_announcement）
@@ -2708,12 +2711,13 @@ def get_user_settings(user_id: int) -> dict | None:
     r = rows[0]
     return {
         "user_id": r[0], "llm_mode": r[1], "llm_model": r[2],
-        "llm_base_url": r[3], "llm_api_key": r[4], "updated_at": r[5],
+        "llm_base_url": r[3], "llm_api_key": decrypt_secret(r[4]), "updated_at": r[5],
     }
 
 
 def save_user_settings(user_id: int, mode: str, model: str, base_url: str, api_key: str) -> None:
     """UPSERT 用户设置（llm_mode='custom' 时由调用方保证三项非空）。"""
+    api_key = encrypt_secret(api_key)
     _with_conn(
         lambda c: c.execute(
             """
