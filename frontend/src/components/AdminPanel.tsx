@@ -1,9 +1,11 @@
 import { apiFetch } from '../api/client';
 /** Admin panel — password-protected management.
  *
- * Three sections:
+ * Four sections:
  *   题库管理 — CRUD problems
  *   成本中心 — token 用量 / 成本 / 缓存命中统计（只含内置 key 消耗）
+ *   用户与邀请码 — 用户管理 / 邀请码生成停用
+ *   公告横幅 — 主页横幅公告 CRUD（展示由 AnnouncementsBanner 负责）
  */
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
@@ -32,7 +34,7 @@ interface AdminTestCase {
   explanation?: string; is_hidden?: boolean;
 }
 
-type AdminSection = 'questions' | 'cost' | 'users';
+type AdminSection = 'questions' | 'cost' | 'users' | 'announcements';
 type AdminTab = 'list' | 'view' | 'edit';
 
 const diffColorMap: Record<string, string> = {
@@ -111,6 +113,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     { id: 'questions', label: '题库管理', icon: '📚' },
     { id: 'cost', label: '成本中心', icon: '💸' },
     { id: 'users', label: '用户与邀请码', icon: '👥' },
+    { id: 'announcements', label: '公告横幅', icon: '📢' },
   ];
 
   // ── Questions view (non-list) ──
@@ -266,6 +269,9 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
 
       {/* 用户与邀请码管理 */}
       {section === 'users' && <AdminUsersView />}
+
+      {/* 公告横幅管理 */}
+      {section === 'announcements' && <AdminAnnouncementsView />}
     </div>
   );
 }
@@ -442,6 +448,308 @@ function AdminUsersView() {
           <button onClick={() => setTempPw(null)} className="ml-2 text-xs underline">知道了</button>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── 公告横幅管理（2026-09-08）──
+ * 数据源 GET/POST/PUT/DELETE /admin/announcements*；
+ * 主页横幅展示由 AnnouncementsBanner 轮询 GET /announcements 完成，本组件只管 CRUD。
+ */
+
+interface AdminAnnouncement {
+  id: number;
+  level: 'info' | 'warning' | 'critical';
+  title: string;
+  content: string;
+  source: string;
+  rule_id: string | null;
+  active: number;
+  starts_at: string | null;
+  ends_at: string | null;
+  created_at: string;
+}
+
+interface AnnForm {
+  level: 'info' | 'warning' | 'critical';
+  title: string;
+  content: string;
+  starts_at: string; // datetime-local 值，'' = 不限
+  ends_at: string;
+  active: boolean;
+}
+
+const EMPTY_ANN_FORM: AnnForm = { level: 'info', title: '', content: '', starts_at: '', ends_at: '', active: true };
+
+// DB 存 'YYYY-MM-DD HH:MM:SS'；datetime-local 用 'YYYY-MM-DDTHH:mm'
+const toLocalInput = (s: string | null | undefined) => (s ? s.slice(0, 16).replace(' ', 'T') : '');
+const fromLocalInput = (s: string) => (s ? `${s.replace('T', ' ')}:00` : '');
+
+// 状态：下线 > 未开始 > 已结束 > 生效中
+function annStatus(a: AdminAnnouncement): { label: string; cls: string } {
+  if (!a.active) return { label: '已下线', cls: 'bg-ct-hover text-ct-muted' };
+  const now = new Date();
+  const start = a.starts_at ? new Date(a.starts_at.replace(' ', 'T')) : null;
+  const end = a.ends_at ? new Date(a.ends_at.replace(' ', 'T')) : null;
+  if (start && start > now) return { label: '未开始', cls: 'bg-ct-info-bg text-ct-info' };
+  if (end && end < now) return { label: '已过期', cls: 'bg-ct-hover text-ct-muted' };
+  return { label: '生效中', cls: 'bg-ct-success-bg text-ct-success' };
+}
+
+const ANN_LEVEL_STYLE: Record<string, string> = {
+  critical: 'bg-ct-error-bg text-ct-error',
+  warning: 'bg-ct-warn-bg text-ct-warn',
+  info: 'bg-ct-info-bg text-ct-info',
+};
+const ANN_LEVEL_LABEL: Record<string, string> = { critical: '紧急', warning: '注意', info: '通知' };
+
+function AdminAnnouncementsView() {
+  const [items, setItems] = useState<AdminAnnouncement[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [editingId, setEditingId] = useState<number | 'new' | null>(null);
+  const [form, setForm] = useState<AnnForm>(EMPTY_ANN_FORM);
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await apiFetch(API_BASE + '/admin/announcements');
+      if (r.ok) setItems((await r.json()).announcements ?? []);
+    } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const openCreate = () => { setForm(EMPTY_ANN_FORM); setEditingId('new'); setMsg(''); };
+  const openEdit = (a: AdminAnnouncement) => {
+    setForm({
+      level: a.level, title: a.title, content: a.content,
+      starts_at: toLocalInput(a.starts_at), ends_at: toLocalInput(a.ends_at),
+      active: a.active === 1,
+    });
+    setEditingId(a.id); setMsg('');
+  };
+
+  const handleSave = async () => {
+    if (!form.title.trim()) { setMsg('标题不能为空'); return; }
+    if (form.starts_at && form.ends_at && fromLocalInput(form.starts_at) > fromLocalInput(form.ends_at)) {
+      setMsg('开始时间不能晚于结束时间');
+      return;
+    }
+    setSaving(true); setMsg('');
+    try {
+      const payload = {
+        level: form.level, title: form.title.trim(), content: form.content,
+        starts_at: fromLocalInput(form.starts_at) || null,
+        ends_at: fromLocalInput(form.ends_at) || null,
+        active: form.active,
+      };
+      const r = await apiFetch(
+        editingId === 'new' ? API_BASE + '/admin/announcements' : `${API_BASE}/admin/announcements/${editingId}`,
+        {
+          method: editingId === 'new' ? 'POST' : 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      );
+      const data = await r.json().catch(() => ({}));
+      if (r.ok) {
+        setMsg(editingId === 'new' ? '发布成功 ✓' : '保存成功 ✓');
+        setEditingId(null);
+        load();
+      } else {
+        setMsg(data?.detail || '保存失败');
+      }
+    } catch { setMsg('网络错误'); }
+    finally { setSaving(false); }
+  };
+
+  const toggleActive = async (a: AdminAnnouncement) => {
+    setMsg('');
+    try {
+      const r = await apiFetch(`${API_BASE}/admin/announcements/${a.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          level: a.level, title: a.title, content: a.content,
+          starts_at: a.starts_at, ends_at: a.ends_at, active: a.active !== 1,
+        }),
+      });
+      if (r.ok) load(); else setMsg('操作失败');
+    } catch { setMsg('网络错误'); }
+  };
+
+  const handleDelete = async (id: number) => {
+    setMsg('');
+    try {
+      const r = await apiFetch(`${API_BASE}/admin/announcements/${id}`, { method: 'DELETE' });
+      if (r.ok) { setItems(prev => prev.filter(x => x.id !== id)); setMsg('已删除'); }
+      else setMsg('删除失败');
+    } catch { setMsg('网络错误'); }
+  };
+
+  const th = 'px-2 py-1 text-left text-xs font-medium text-ct-muted';
+  const td = 'px-2 py-1 text-xs text-ct-text';
+  const inputCls = 'rounded border border-ct-border bg-ct-input px-2 py-1 text-xs text-ct-text outline-none focus:border-ct-accent';
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+      {/* 新建 / 编辑表单 */}
+      <section>
+        <div className="mb-2 flex items-center justify-between">
+          <h3 className="text-sm font-medium text-ct-text">
+            {editingId === 'new' ? '发布新公告' : editingId != null ? `编辑公告 #${editingId}` : '公告管理'}
+          </h3>
+          {editingId == null && (
+            <button onClick={openCreate}
+              className="rounded bg-ct-accent px-3 py-1 text-xs font-medium text-white hover:opacity-90">
+              + 发布公告
+            </button>
+          )}
+        </div>
+
+        {editingId != null && (
+          <div className="space-y-2 rounded-lg border border-ct-border bg-ct-bg p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="text-xs text-ct-muted">级别
+                <select value={form.level} onChange={e => setForm(f => ({ ...f, level: e.target.value as AnnForm['level'] }))}
+                  className={`ml-1 ${inputCls}`}>
+                  <option value="info">通知</option>
+                  <option value="warning">注意</option>
+                  <option value="critical">紧急</option>
+                </select>
+              </label>
+              <label className="flex-1 text-xs text-ct-muted">标题
+                <input type="text" value={form.title} maxLength={120}
+                  onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="横幅标题（必填，≤120 字）"
+                  className={`ml-1 w-full min-w-48 ${inputCls}`} />
+              </label>
+            </div>
+            <div>
+              <label className="text-xs text-ct-muted">内容
+                <textarea value={form.content} maxLength={2000} rows={3}
+                  onChange={e => setForm(f => ({ ...f, content: e.target.value }))}
+                  placeholder="横幅正文（可选，≤2000 字）"
+                  className={`mt-1 w-full ${inputCls}`} />
+              </label>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="text-xs text-ct-muted">开始时间
+                <input type="datetime-local" value={form.starts_at}
+                  onChange={e => setForm(f => ({ ...f, starts_at: e.target.value }))}
+                  className={`ml-1 ${inputCls}`} />
+              </label>
+              <label className="text-xs text-ct-muted">结束时间
+                <input type="datetime-local" value={form.ends_at}
+                  onChange={e => setForm(f => ({ ...f, ends_at: e.target.value }))}
+                  className={`ml-1 ${inputCls}`} />
+              </label>
+              <span className="text-[10px] text-ct-muted">留空 = 立即生效 / 长期有效</span>
+              {editingId !== 'new' && (
+                <label className="text-xs text-ct-muted">
+                  <input type="checkbox" checked={form.active}
+                    onChange={e => setForm(f => ({ ...f, active: e.target.checked }))}
+                    className="mr-1 align-middle" />
+                  启用
+                </label>
+              )}
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <button onClick={handleSave} disabled={saving}
+                className="rounded bg-ct-accent px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50">
+                {saving ? '保存中…' : editingId === 'new' ? '发布' : '保存修改'}
+              </button>
+              <button onClick={() => { setEditingId(null); setMsg(''); }}
+                className="rounded border border-ct-border px-4 py-1.5 text-xs text-ct-muted hover:text-ct-text">
+                取消
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* 公告列表 */}
+      <section>
+        <h3 className="mb-2 text-sm font-medium text-ct-text">公告列表（{items.length}）</h3>
+        {loading ? (
+          <p className="text-xs text-ct-muted">加载中…</p>
+        ) : items.length === 0 ? (
+          <p className="text-xs text-ct-muted">还没有公告，点上方「发布公告」创建一条</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-ct-border">
+            <table className="w-full">
+              <thead className="bg-ct-bg">
+                <tr>
+                  <th className={th}>ID</th><th className={th}>级别</th><th className={th}>标题</th>
+                  <th className={th}>来源</th><th className={th}>状态</th>
+                  <th className={th}>生效窗口</th><th className={th}>创建时间</th><th className={th}>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(a => {
+                  const st = annStatus(a);
+                  return (
+                    <tr key={a.id} className="border-t border-ct-border">
+                      <td className={td}>{a.id}</td>
+                      <td className={td}>
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] ${ANN_LEVEL_STYLE[a.level] ?? ''}`}>
+                          {ANN_LEVEL_LABEL[a.level] ?? a.level}
+                        </span>
+                      </td>
+                      <td className={`${td} max-w-48 truncate`} title={a.title}>
+                        {a.title}
+                        {a.content && <span className="ml-1 text-ct-muted" title={a.content}>…</span>}
+                      </td>
+                      <td className={td}>{a.source === 'monitor' ? '自动' : '手动'}</td>
+                      <td className={td}><span className={`rounded px-1.5 py-0.5 text-[10px] ${st.cls}`}>{st.label}</span></td>
+                      <td className={`${td} whitespace-nowrap text-ct-muted`}>
+                        {a.starts_at ? a.starts_at.slice(0, 16) : '—'} ~ {a.ends_at ? a.ends_at.slice(0, 16) : '—'}
+                      </td>
+                      <td className={`${td} whitespace-nowrap text-ct-muted`}>{(a.created_at || '').slice(0, 16)}</td>
+                      <td className={td}>
+                        <div className="flex gap-1">
+                          <button onClick={() => openEdit(a)}
+                            className="rounded border border-ct-border px-2 py-0.5 text-[10px] text-ct-muted hover:border-ct-accent hover:text-ct-accent">
+                            编辑
+                          </button>
+                          <button onClick={() => toggleActive(a)}
+                            className="rounded border border-ct-border px-2 py-0.5 text-[10px] text-ct-muted hover:text-ct-text">
+                            {a.active ? '下线' : '启用'}
+                          </button>
+                          <button onClick={() => setDeleteConfirm(a.id)}
+                            className="rounded border border-ct-border px-2 py-0.5 text-[10px] text-ct-muted hover:border-ct-error hover:text-ct-error">
+                            删除
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {deleteConfirm != null && (
+          <div className="mt-2 flex items-center gap-2 rounded border border-ct-error/40 bg-ct-error-bg p-2">
+            <span className="text-xs text-ct-error">
+              确认物理删除公告 #{deleteConfirm}？记录不可恢复（只想暂时隐藏请用「下线」）。
+            </span>
+            <button onClick={() => { handleDelete(deleteConfirm); setDeleteConfirm(null); }}
+              className="rounded bg-ct-error px-2 py-0.5 text-[10px] text-white hover:bg-ct-error/80">
+              确认删除
+            </button>
+            <button onClick={() => setDeleteConfirm(null)}
+              className="rounded border border-ct-border px-2 py-0.5 text-[10px] text-ct-muted hover:text-ct-text">
+              取消
+            </button>
+          </div>
+        )}
+      </section>
+
+      {msg && <div className="rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-sm text-ct-text">{msg}</div>}
     </div>
   );
 }

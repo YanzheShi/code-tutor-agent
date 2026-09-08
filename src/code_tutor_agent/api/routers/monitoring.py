@@ -76,10 +76,10 @@ class AnnouncementCreateRequest(BaseModel):
 
 @admin_router.get("/announcements")
 async def admin_list_announcements():
-    """当前生效中的公告（管理端复用用户侧口径；历史管理后续接入 admin 面板时扩展）。"""
-    from code_tutor_agent.db.database import get_active_announcements
+    """全量公告（含未开始/已过期/已下线），管理端列表用；用户侧生效口径见 GET /announcements。"""
+    from code_tutor_agent.db.database import list_all_announcements
 
-    return {"announcements": get_active_announcements()}
+    return {"announcements": list_all_announcements()}
 
 
 @admin_router.post("/announcements")
@@ -104,6 +104,48 @@ async def admin_disable_announcement(announcement_id: int):
     if not deactivate_announcement(announcement_id):
         raise HTTPException(404, f"公告 {announcement_id} 不存在")
     return {"disabled": True}
+
+
+class AnnouncementUpdateRequest(BaseModel):
+    """全量更新（管理端编辑表单每次提交完整字段）；空串时间窗 = 清空。"""
+
+    level: str = Field(default="info", pattern="^(info|warning|critical)$")
+    title: str = Field(min_length=1, max_length=120)
+    content: str = Field(default="", max_length=2000)
+    starts_at: str | None = None
+    ends_at: str | None = None
+    active: bool = True
+
+
+@admin_router.put("/announcements/{announcement_id}")
+async def admin_update_announcement(announcement_id: int, body: AnnouncementUpdateRequest):
+    """修改公告（内容 / 级别 / 生效时间窗 / 启停）。"""
+    from code_tutor_agent.db.database import update_announcement
+
+    ok = update_announcement(
+        announcement_id,
+        level=body.level,
+        title=body.title,
+        content=body.content,
+        starts_at=body.starts_at or "",
+        ends_at=body.ends_at or "",
+        active=body.active,
+    )
+    if not ok:
+        raise HTTPException(404, f"公告 {announcement_id} 不存在")
+    logger.info("announcement updated id=%d level=%s title=%s", announcement_id, body.level, body.title)
+    return {"updated": True}
+
+
+@admin_router.delete("/announcements/{announcement_id}")
+async def admin_delete_announcement(announcement_id: int):
+    """物理删除公告记录（不可恢复；只想暂时隐藏请用下线）。"""
+    from code_tutor_agent.db.database import delete_announcement
+
+    if not delete_announcement(announcement_id):
+        raise HTTPException(404, f"公告 {announcement_id} 不存在")
+    logger.info("announcement deleted id=%d", announcement_id)
+    return {"deleted": True}
 
 
 # ── 公告（用户侧） ──────────────────────────────────────────

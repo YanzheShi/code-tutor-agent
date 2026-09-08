@@ -31,6 +31,9 @@ _get_conn = get_conn
 
 logger = logging.getLogger(__name__)
 
+# 「未传参」哨兵：区别于 None（显式清空），用于按需 UPDATE（如 update_announcement）
+_UNSET = object()
+
 
 # 旧 SQLite 库文件路径（保留：作为存量数据 ETL 的默认源路径；运行时不再读写）。
 DB_PATH = os.environ.get(
@@ -1690,6 +1693,78 @@ def get_active_announcements(now: str | None = None) -> list[dict]:
     except Exception as exc:
         logger.warning("get_active_announcements failed (non-fatal): %s", exc)
         return []
+
+
+def list_all_announcements(limit: int = 100) -> list[dict]:
+    """管理端全量公告（含未开始/已过期/已下线），按 id 倒序。失败返回 []。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "SELECT id, level, title, content, source, rule_id, active, "
+                "starts_at, ends_at, created_at "
+                "FROM announcements ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.warning("list_all_announcements failed (non-fatal): %s", exc)
+        return []
+
+
+def update_announcement(
+    announcement_id: int,
+    level: str | None = None,
+    title: str | None = None,
+    content: str | None = None,
+    starts_at: str | None | object = _UNSET,
+    ends_at: str | None | object = _UNSET,
+    active: bool | None = None,
+) -> bool:
+    """管理员修改公告。字段按需更新（None 显式清空时间窗，缺省 _UNSET 不动）。
+
+    返回是否命中行。
+    """
+    sets: list[str] = []
+    params: list[object] = []
+    if level is not None:
+        sets.append("level = ?"); params.append(level)
+    if title is not None:
+        sets.append("title = ?"); params.append(title)
+    if content is not None:
+        sets.append("content = ?"); params.append(content)
+    if starts_at is not _UNSET:
+        sets.append("starts_at = ?"); params.append(starts_at or None)
+    if ends_at is not _UNSET:
+        sets.append("ends_at = ?"); params.append(ends_at or None)
+    if active is not None:
+        sets.append("active = ?"); params.append(1 if active else 0)
+    if not sets:
+        return True
+    params.append(int(announcement_id))
+    try:
+        def _do(cursor):
+            cursor.execute(
+                f"UPDATE announcements SET {', '.join(sets)} WHERE id = ?",
+                tuple(params),
+            )
+            return cursor.rowcount > 0
+        return bool(_with_conn(_do))
+    except Exception as exc:
+        logger.warning("update_announcement(%s) failed (non-fatal): %s", announcement_id, exc)
+        return False
+
+
+def delete_announcement(announcement_id: int) -> bool:
+    """物理删除公告记录。返回是否命中。"""
+    try:
+        def _do(cursor):
+            cursor.execute("DELETE FROM announcements WHERE id = ?", (int(announcement_id),))
+            return cursor.rowcount > 0
+        return bool(_with_conn(_do))
+    except Exception as exc:
+        logger.warning("delete_announcement(%s) failed (non-fatal): %s", announcement_id, exc)
+        return False
 
 
 def save_trace_thread(session_id: str, problem_id: str, messages: list[dict]) -> None:
