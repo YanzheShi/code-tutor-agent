@@ -4,6 +4,7 @@ __pycache__/
 *.so
 *.egg-info/
 dist/
+dist_old_*/
 build/
 *.egg
 

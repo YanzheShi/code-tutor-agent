@@ -33,7 +33,8 @@ describe('网络异常兜底（Failed to fetch → 友好中文）', () => {
 
   async function registerWrapper() {
     const { register } = await import('../src/api/auth');
-    return register('a@b.com', 'password1', 'CODE1234');
+    // 签名：(email, password, confirmPassword, inviteCode)——旧三参调用会在 inviteCode.trim() 上炸
+    return register('a@b.com', 'password1', 'password1', 'CODE1234');
   }
 
   it('HTTP 401 业务错误文案不受影响（仍是后端 detail）', async () => {

@@ -350,7 +350,7 @@ export default function WelcomeScreen({
         {/* 标题（钉在卡片顶部，不随内容移动） */}
         <div className="relative shrink-0 text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
-          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 对抗判题 · 渐进辅导</p>
+          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 多维判题 · 轨迹分析 · 渐进辅导 · </p>
           {(onOpenSettings || onLogout) && (
             <div className="absolute right-0 top-0 flex gap-2">
               {onOpenSettings && (
@@ -436,9 +436,10 @@ export default function WelcomeScreen({
                 <p className="mt-2 text-sm text-ct-muted">与 AI 导师直接对话，告诉 TA 你想练什么类型、难度、具体方向的题目。</p>
                 <ul className="mt-3 space-y-1 text-left text-xs text-ct-muted">
                   <li>💬 自然对话，告诉 AI 你想练什么</li>
-                  <li>🎯 AI 会追问细节，确保题目贴合你的需求</li>
+                  <li>🎯 AI 会追问细节，确保题目贴合你的需求。支持直接解析LeetCode题目</li>
                   <li>🧠 提交后 AI 判题，给出温暖反馈和修复建议</li>
-                  <li>🔄 未通过可以多次修改，AI 持续辅导直到 AC</li>
+                  <li>💡 未通过可以多次修改，AI 持续辅导直到 AC</li>
+                  <li>🔄 AC后可以分析做题轨迹，发现卡点和复盘</li>
                 </ul>
               </div>
               <button onClick={() => onStart('', '', 'agent')}
@@ -508,7 +509,7 @@ function ChangePasswordCard() {
           </button>
           {msg && <p className="text-xs text-ct-success">{msg}</p>}
           {err && <p className="text-xs text-red-500">{err}</p>}
-          <p className="text-[11px] text-ct-muted">忘记当前密码？请联系管理员重置（或走登录页「忘记密码」流程）。</p>
+          <p className="text-[11px] text-ct-muted">忘记当前密码？请走登录页「忘记密码」流程（或联系管理员重置）。</p>
         </div>
       )}
     </div>

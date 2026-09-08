@@ -1,19 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { forgotPassword, login, register, resetPassword } from '../api/auth';
 
 /** 注册条款全文（「服务条款」弹窗内容；用户要求默认勾选同意）。 */
 const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以 Beta 提供，开源于 https://github.com/YanzheShi/code-tutor-agent 。
 
-当前为测试阶段，功能可能不稳定；域名可能变更、服务可能下线；使用系统 API 有对话/提交配额，自定义 API Key 无系统配额但受模型方限制；因网络、节点、数据库问题可能导致数据丢失，重要数据请自行导出。
+欢迎使用！ 当前为测试阶段，功能可能不稳定，有可能在做题过程中重启；域名可能变更、服务可能下线；使用系统 API 有对话/提交配额，自定义 API Key（加密保存） 无系统配额但受模型方限制，如果有泄露安全担忧，可以自部署；因网络、节点、数据库问题可能导致数据丢失，重要数据请自行导出。
 
-继续注册即同意《使用条款》与《隐私政策》。`;
+继续注册即同意《服务条款》。`;
 
-/** 登录/注册/忘记密码页（多用户改造 P4 + 防滥用改造）。
+/** 登录/注册/忘记密码弹窗（访客主页改造：从 LoginScreen 抽取的表单逻辑 + 弹窗壳）。
  *
+ * - 访客在主页点「开始使用 / 登录」时弹出，不整页跳转
  * - 注册需要邀请码（admin 面板生成，额度内有效）
  * - 忘记密码三步流：填邮箱 → 收验证码（Brevo 未配置时提示找管理员）→ 验证码 + 新密码重置
+ * - 遮罩点击 / Esc / 右上角 × 均可关闭；登录或注册成功回调 onLoggedIn（由调用方决定后续，如整页刷新）
  */
-export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
+export default function AuthModal({ open, onClose, onLoggedIn }: {
+  open: boolean;
+  onClose: () => void;
+  onLoggedIn: () => void;
+}) {
   const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -28,6 +34,14 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
   // 忘记密码流程状态
   const [codeSent, setCodeSent] = useState(false);
   const [resetCode, setResetCode] = useState('');
+
+  // Esc 关闭（条款弹窗打开时不响应，避免误关两层）
+  useEffect(() => {
+    if (!open || showTerms) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, showTerms, onClose]);
 
   const canSubmit =
     email.includes('@') &&
@@ -99,15 +113,32 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
     }
   };
 
+  if (!open) return null;
+
   const inputCls =
     'w-full rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-ct-text outline-none focus:border-ct-accent';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ct-bg px-4">
-      <div className="w-full max-w-sm rounded-2xl border border-ct-border bg-ct-panel p-8 shadow-sm">
-        <h1 className="text-center text-xl font-medium text-ct-text">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-h-[90vh] w-full max-w-sm overflow-y-auto rounded-2xl border border-ct-border bg-ct-panel p-8 shadow-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="关闭"
+          className="absolute right-4 top-3 text-xl leading-none text-ct-muted hover:text-ct-text"
+        >
+          ×
+        </button>
+
+        <h2 className="text-center text-xl font-medium text-ct-text">
           {mode === 'login' ? '登录 Code Tutor' : mode === 'register' ? '注册 Code Tutor' : '找回密码'}
-        </h1>
+        </h2>
         <p className="mt-2 text-center text-sm text-ct-muted">
           {mode === 'login' && '用邮箱继续你的算法练习'}
           {mode === 'register' && '注册需要邀请码，可向管理员获取'}
@@ -298,11 +329,11 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
           )}
         </div>
 
-        {/* 服务条款弹窗 */}
+        {/* 服务条款弹窗（嵌套，z 更高；点击遮罩只关条款不关登录弹窗） */}
         {showTerms && (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-            onClick={() => setShowTerms(false)}
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
+            onClick={(e) => { e.stopPropagation(); setShowTerms(false); }}
           >
             <div
               className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-ct-border bg-ct-panel p-6 shadow-lg"

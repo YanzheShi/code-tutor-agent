@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import LoadingScreen from './components/LoadingScreen';
-import LoginScreen from './components/LoginScreen';
+import GuestWelcome from './components/GuestWelcome';
 import WelcomeScreen from './components/WelcomeScreen';
 import AdminPanel from './components/AdminPanel';
 import SettingsPanel from './components/SettingsPanel';
@@ -41,15 +41,9 @@ export default function App() {
 
   if (!user) {
     if (!authChecked) return null; // 校验中，闪一下即过
-    return (
-      <LoginScreen
-        onLoggedIn={() => {
-          setUser(getStoredAuth()?.user ?? null);
-          // 登录后整页重载，确保 useSession 以新用户身份初始化 localStorage 草稿/会话
-          window.location.reload();
-        }}
-      />
-    );
+    // 访客主页（方案 B）：先看产品介绍，点「开始使用 / 登录」弹 AuthModal；
+    // 登录/注册成功后整页刷新，确保 useSession 以新用户身份初始化 localStorage 草稿/会话
+    return <GuestWelcome onLoggedIn={() => window.location.reload()} />;
   }
 
   if (screen === 'error') return <LoadingScreen progressMsgs={[]} errorMsg={errorMsg} onRetry={s.onBackToWelcome} />;

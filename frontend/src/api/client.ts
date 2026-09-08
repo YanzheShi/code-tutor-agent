@@ -31,7 +31,7 @@ export async function apiFetch(input: string, init?: RequestInit): Promise<Respo
     throw new Error(NETWORK_ERROR_MSG);
   }
   if (r.status === 401 && !isCredentialPath) {
-    // token 过期/无效：清凭证回登录页（App 检测不到 auth 则渲染 LoginScreen）
+    // token 过期/无效：清凭证回访客主页（App 检测不到 auth 则渲染 GuestWelcome）
     clearAuth();
     if (!window.location.pathname.includes('_login')) {
       window.location.reload();
