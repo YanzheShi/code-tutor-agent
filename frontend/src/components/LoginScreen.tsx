@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import { forgotPassword, login, register, resetPassword } from '../api/auth';
 
+/** 注册条款全文（「服务条款」弹窗内容；用户要求默认勾选同意）。 */
+const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以 Beta 提供，开源于 https://github.com/YanzheShi/code-tutor-agent 。
+
+当前为测试阶段，功能可能不稳定；域名可能变更、服务可能下线；使用系统 API 有对话/提交配额，自定义 API Key 无系统配额但受模型方限制；因网络、节点、数据库问题可能导致数据丢失，重要数据请自行导出。
+
+继续注册即同意《使用条款》与《隐私政策》。`;
+
 /** 登录/注册/忘记密码页（多用户改造 P4 + 防滥用改造）。
  *
  * - 注册需要邀请码（admin 面板生成，额度内有效）
@@ -15,6 +22,9 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // 注册条款：默认勾选同意；「服务条款」点开可查看全文
+  const [agreed, setAgreed] = useState(true);
+  const [showTerms, setShowTerms] = useState(false);
   // 忘记密码流程状态
   const [codeSent, setCodeSent] = useState(false);
   const [resetCode, setResetCode] = useState('');
@@ -24,6 +34,7 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
     password.length >= (mode === 'register' ? 8 : 1) &&
     (mode !== 'register' || (confirmPassword.length >= 8 && confirmPassword === password)) &&
     (mode !== 'register' || inviteCode.trim().length >= 4) &&
+    (mode !== 'register' || agreed) &&
     !busy;
 
   const switchMode = (m: typeof mode) => {
@@ -159,6 +170,27 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
                 />
               </div>
             )}
+            {mode === 'register' && (
+              <label className="flex items-start gap-2 text-xs leading-relaxed text-ct-muted">
+                <input
+                  type="checkbox"
+                  checked={agreed}
+                  onChange={(e) => setAgreed(e.target.checked)}
+                  className="mt-0.5 shrink-0"
+                />
+                <span>
+                  我已阅读并同意
+                  <button
+                    type="button"
+                    onClick={() => setShowTerms(true)}
+                    className="mx-0.5 text-ct-accent underline underline-offset-2 hover:opacity-80"
+                  >
+                    服务条款
+                  </button>
+                  ，点击查看
+                </span>
+              </label>
+            )}
 
             {error && (
               <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-600">
@@ -265,6 +297,29 @@ export default function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) 
             </button>
           )}
         </div>
+
+        {/* 服务条款弹窗 */}
+        {showTerms && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+            onClick={() => setShowTerms(false)}
+          >
+            <div
+              className="max-h-[80vh] w-full max-w-md overflow-y-auto rounded-2xl border border-ct-border bg-ct-panel p-6 shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h2 className="mb-3 text-base font-medium text-ct-text">服务条款</h2>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed text-ct-muted">{TERMS_TEXT}</p>
+              <button
+                type="button"
+                onClick={() => setShowTerms(false)}
+                className="mt-4 w-full rounded-lg bg-ct-accent px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+              >
+                我知道了
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
