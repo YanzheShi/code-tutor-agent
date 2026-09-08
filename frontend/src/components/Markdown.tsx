@@ -15,9 +15,11 @@ import { useTheme } from '../hooks/useTheme';
  */
 
 // mermaid 全局只初始化一次；theme 在组件内按需覆盖。
+// securityLevel 'strict'（安全审计 F-06）：禁止 mermaid 标签内 HTML / click 回调，
+// 防 LLM 内容中夹带恶意 mermaid 块注入 DOM（XSS）。默认转义，图表照常渲染。
 mermaid.initialize({
   startOnLoad: false,
-  securityLevel: 'loose',
+  securityLevel: 'strict',
   fontFamily: 'inherit',
 });
 
@@ -45,7 +47,7 @@ const MermaidBlock = memo(function MermaidBlock({ code, theme }: { code: string;
         // 每次渲染前按当前主题重设 theme，保证切换主题后图同步更新。
         mermaid.initialize({
           startOnLoad: false,
-          securityLevel: 'loose',
+          securityLevel: 'strict',
           fontFamily: 'inherit',
           theme: mermaidThemeFor(theme),
         });

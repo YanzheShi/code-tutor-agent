@@ -8,8 +8,12 @@
 """
 from __future__ import annotations
 
+import ipaddress
 import logging
+import os
+import socket
 import threading
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -71,6 +75,85 @@ def _mask(key: str) -> str:
     return key[:4] + "****" + key[-4:]
 
 
+# ── SSRF 校验（审计 F-02，2026-09-08）─────────────────────────────
+# 用户自定义 base_url 会被服务端直接请求（get_llm / test 端点），不校验即
+# SSRF：可打云 metadata（169.254.169.254）、探内网（app-db:5432 等）。
+# 两档策略：
+#   默认档（本地开发）：仅拦 metadata / 链路本地段 —— 兼容本机 Ollama 等
+#     http://localhost:11434 这类合法本地网关；
+#   生产档（CTA_ENV=production 或 CTA_SSRF_BLOCK_PRIVATE=1）：私网/环回/
+#     链路本地全部禁止，并对域名做 DNS 解析二次校验（解析到私网 IP 也拒）。
+
+_METADATA_HOSTS = {"metadata.google.internal", "metadata.goog", "metadata"}
+
+
+def _ip_is_dangerous(ip: ipaddress._BaseAddress) -> bool:
+    return (
+        ip.is_private or ip.is_loopback or ip.is_link_local
+        or ip.is_reserved or ip.is_unspecified or ip.is_multicast
+    )
+
+
+def _host_literal_dangerous(hostname: str) -> bool:
+    """字面量判定（不做 DNS）：metadata 域名 + IP 字面量。"""
+    h = (hostname or "").strip().lower().rstrip(".")
+    if not h:
+        return True
+    if h in _METADATA_HOSTS or h.endswith(".internal") or h.endswith(".localhost"):
+        return True
+    try:
+        return _ip_is_dangerous(ipaddress.ip_address(h))
+    except ValueError:
+        return h == "localhost"
+
+
+def _host_resolves_dangerous(hostname: str) -> bool:
+    """DNS 解析二次校验：任一解析结果落在保留/私网段即拒绝。"""
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except OSError:
+        return True  # 解析失败按不信任处理
+    for info in infos:
+        try:
+            if _ip_is_dangerous(ipaddress.ip_address(info[4][0])):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _ssrf_strict() -> bool:
+    if (os.getenv("CTA_ENV", "").strip().lower() == "production"):
+        return True
+    return os.getenv("CTA_SSRF_BLOCK_PRIVATE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _validate_base_url(base_url: str) -> None:
+    """校验用户自定义 LLM base_url；不合法抛 400（含 SSRF 拦截）。"""
+    parsed = urlparse(base_url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(400, "Base URL 必须以 http:// 或 https:// 开头")
+    hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+    if not hostname:
+        raise HTTPException(400, "Base URL 缺少主机名")
+
+    if _ssrf_strict():
+        # 生产档：私网/环回/metadata 全禁 + DNS 解析二次校验
+        if _host_literal_dangerous(hostname) or _host_resolves_dangerous(hostname):
+            raise HTTPException(400, "Base URL 不允许指向内网/本地/metadata 地址")
+        return
+
+    # 开发档：放行本机网关（如 http://localhost:11434 的 Ollama），
+    # 但 metadata 域名与链路本地段（169.254.0.0/16 云 metadata）仍然拦截
+    if hostname in _METADATA_HOSTS or hostname.endswith(".internal") or hostname.endswith(".localhost"):
+        raise HTTPException(400, "Base URL 不允许指向 metadata 地址")
+    try:
+        if ipaddress.ip_address(hostname).is_link_local:
+            raise HTTPException(400, "Base URL 不允许指向链路本地地址")
+    except ValueError:
+        return  # 公网域名，放行
+
+
 def _payload(row: dict | None) -> dict:
     if not row or row.get("llm_mode") != "custom":
         return {"mode": "default", "model": "", "base_url": "",
@@ -94,6 +177,7 @@ def _resolve_custom_cfg(body: LlmSettingsBody, user_id: int) -> dict[str, str]:
     base_url = body.base_url.strip().rstrip("/")
     if not model or not base_url or not api_key.strip():
         raise HTTPException(400, "自定义模式下 模型名称 / Base URL / API key 均必填")
+    _validate_base_url(base_url)  # SSRF 校验（F-02）：PUT 与 test 端点共用此入口
     return {"model": model, "base_url": base_url, "api_key": api_key.strip()}
 
 
@@ -132,6 +216,11 @@ async def test_settings(body: LlmSettingsBody, current: dict = Depends(get_curre
 
     custom 模式 key 留空时沿用已保存的 key，方便只改模型名时直接测试。
     """
+    # 频控（F-02 配套）：test 端点会让服务端向用户给定 URL 发请求，
+    # 不限频即可被用来高频探测内网。每用户每小时 10 次。
+    from code_tutor_agent.api.auth import rate_limit
+
+    rate_limit(f"llmtest:{current['id']}", 10, 3600)
     if body.mode == "custom":
         cfg = _resolve_custom_cfg(body, current["id"])
     else:

@@ -20,6 +20,14 @@ services:
       # JWT 密钥：留空（默认）时应用首次启动生成随机密钥并持久化到挂载卷 data/db/.jwt_secret，
       # 配合上方命名卷即可在重建容器后保持登录态稳定。如需显式指定可在 .env 设 JWT_SECRET。
       - JWT_SECRET=${JWT_SECRET:-}
+      # 🔴 沙箱 fail-closed（安全审计 F-01/P0）：生产环境 Judge0 不可达时返回 Judge Error，
+      # 绝不降级本地 subprocess 执行不可信用户代码（本地 subprocess 与 API 服务同权限）。
+      - CTA_SANDBOX_ALLOW_LOCAL_FALLBACK=0
+      # 🔴 限流可信化（F-03）：生产经 nginx 反代，信任其覆写的 X-Forwarded-For 第一跳；
+      # 应用端口不对公网直接暴露（compose 端口映射见主 compose 文件，公网部署务必收紧）。
+      - CTA_TRUST_PROXY_HEADERS=1
+      # 🔴 SSRF 防护生产档（F-02）：禁用用户自定义 LLM 指向私网/环回地址。
+      - CTA_ENV=production
     deploy:
       # 🔴 固定为 1 副本：数据库已迁移 PostgreSQL（2026-09-07，写并发已根治），
       # 但 _generation_progress（SSE 出题进度）仍是单容器内存态，且 JWT 密钥文件

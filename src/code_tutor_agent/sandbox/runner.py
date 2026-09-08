@@ -55,6 +55,19 @@ def _build_subprocess_env() -> dict:
     return env
 
 
+def _allow_local_fallback() -> bool:
+    """环境感知的本地降级开关（F-01/P0 加固，2026-09-08）。
+
+    - 默认开启：本地开发（未配 Judge0 或 Judge0 暂时不可达）保留本地 subprocess
+      降级，行为与历史版本一致；
+    - 生产部署必须显式置 0（docker-compose.prod.yml 已配置）：Judge0 不可达时
+      返回 Judge Error（fail-closed），绝不把不可信用户代码放进服务器进程执行
+      —— 本地 subprocess 与 API 服务同权限，可读 .jwt_secret/.env、任意外连。
+    """
+    raw = os.getenv("CTA_SANDBOX_ALLOW_LOCAL_FALLBACK", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
+
+
 class RunnerResult:
     """Result of running one solution against one test case."""
 
@@ -161,6 +174,17 @@ def run_solution(
             logger.warning("Judge0 routing failed (%s), falling back to local", exc)
 
     # ── Fallback: local subprocess ──
+    if not _allow_local_fallback():
+        # fail-closed：生产环境 Judge0 不可达时不降级本地执行（不可信代码不进服务器进程）
+        logger.warning(
+            "Judge0 unavailable and local fallback disabled "
+            "(CTA_SANDBOX_ALLOW_LOCAL_FALLBACK=0) — returning Judge Error"
+        )
+        n = len(test_cases) or 1
+        return [
+            RunnerResult(i, "Judge Error", "Judge0 unavailable (local fallback disabled)")
+            for i in range(n)
+        ]
     logger.info("  router → local subprocess")
     harness = _build_harness(code, test_cases, function_signature)
 

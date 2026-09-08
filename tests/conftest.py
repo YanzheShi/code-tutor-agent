@@ -25,14 +25,21 @@ load_dotenv()
 
 import pytest
 
+# 业务配额总闸默认关闭（F-04 配套）：TestClient 集成测试会反复建会话/发消息，
+# 配额开着会把整包回归顶到 429。配额行为本身由 test_quota.py 专项覆盖。
+os.environ.setdefault("CTA_QUOTA_ENABLED", "0")
+
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limit_buckets():
     from code_tutor_agent.api import auth as auth_mod
+    from code_tutor_agent.api import quota as quota_mod
 
     auth_mod._RATE_BUCKETS.clear()
+    quota_mod.reset_all()
     yield
     auth_mod._RATE_BUCKETS.clear()
+    quota_mod.reset_all()
 
 
 @pytest.fixture(scope="session", autouse=True)

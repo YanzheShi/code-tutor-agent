@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -247,13 +248,28 @@ def _limited(key_prefix: str, ip: str) -> None:
     rate_limit(f"{key_prefix}:{ip}", limit, window)
 
 
+def _trust_proxy_headers() -> bool:
+    """是否信任反代注入的 X-Forwarded-For（审计 F-03 修复，2026-09-08）。
+
+    XFF 可被客户端任意伪造：应用端口直连公网时若无条件信任，注册/登录/
+    找回的 IP 限流全部失效（每请求换个 XFF 即新"IP"）。因此默认关闭，
+    仅当部署在可信反代之后（nginx 覆写 X-Forwarded-For 为 $remote_addr，
+    且应用端口不对公网暴露）时，经 CTA_TRUST_PROXY_HEADERS=1 显式开启。
+    """
+    raw = os.getenv("CTA_TRUST_PROXY_HEADERS", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _client_ip(request: Request | None) -> str:
-    """取客户端 IP（X-Forwarded-For 由 nginx 设置时取第一跳）；单测直调无 Request → "direct"。"""
+    """取客户端 IP：默认只信 TCP 对端；可信反代模式下取 XFF 第一跳。
+
+    单测直调无 Request → "direct"。"""
     if request is None:
         return "direct"
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",")[0].strip()
+    if _trust_proxy_headers():
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -276,6 +292,44 @@ class ResetPasswordRequest(BaseModel):
     email: str = Field(description="注册邮箱")
     code: str = Field(description="邮箱收到的验证码")
     new_password: str = Field(min_length=8, description="新密码（至少 8 位）")
+
+
+# ── 重置验证码防爆破（审计 F-09，2026-09-08）──
+# 6 位数字码共 10^6 空间、15 分钟有效：仅靠 IP 限流（且可被反代绕过）不够。
+# 同一邮箱验证码错误达上限（默认 5 次）即作废当前验证码——即便后续猜对也无效，
+# 必须重新走 forgot-password 申请新码（该端点另有 3 次/小时/IP 限流）。
+_RESET_ATTEMPTS: dict[str, list] = {}  # email -> [fail_count, last_fail_monotonic]
+_RESET_ATTEMPT_LOCK = threading.Lock()
+
+
+def _reset_max_attempts() -> int:
+    try:
+        return max(1, int(os.getenv("CTA_RESET_MAX_ATTEMPTS", "5")))
+    except ValueError:
+        return 5
+
+
+def _record_reset_fail(email: str) -> None:
+    """累计同一邮箱验证码错误次数；达上限作废当前验证码。"""
+    from code_tutor_agent.db.database import invalidate_password_reset_code
+
+    with _RESET_ATTEMPT_LOCK:
+        entry = _RESET_ATTEMPTS.setdefault(email, [0, 0.0])
+        entry[0] += 1
+        entry[1] = time.monotonic()
+        fails = entry[0]
+    if fails >= _reset_max_attempts():
+        invalidate_password_reset_code(email)
+        logger.warning(
+            "password reset code invalidated after %d failed attempts (email=%s)",
+            fails, email,
+        )
+
+
+def _clear_reset_fail(email: str) -> None:
+    """签发新码 / 验证成功后清零错误计数。"""
+    with _RESET_ATTEMPT_LOCK:
+        _RESET_ATTEMPTS.pop(email, None)
 
 
 class LoginRequest(BaseModel):
@@ -406,6 +460,7 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     from datetime import datetime as _dt
     expires = (_dt.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
     save_password_reset_code(email, code_hash, expires)
+    _clear_reset_fail(email)  # 新码签发，错误计数清零（F-09）
     sent = email_svc.send_email(
         email,
         "Code Tutor 密码重置验证码",
@@ -422,7 +477,11 @@ async def reset_password(body: ResetPasswordRequest, request: Request):
     code_hash = hashlib.sha256((body.code.strip() + _get_jwt_secret()).encode("utf-8")).hexdigest()
     user = get_user_by_email(email)
     if not user or not verify_password_reset_code(email, code_hash):
+        # F-09：错误计数 + 达上限作废当前验证码（仅对已注册邮箱计数，防内存污染）
+        if user is not None:
+            _record_reset_fail(email)
         raise HTTPException(400, "验证码错误或已过期")
+    _clear_reset_fail(email)
     if not update_user_password(user["id"], hash_password(body.new_password)):
         raise HTTPException(500, "重置失败，请稍后重试")
     consume_password_reset_code(email, code_hash)

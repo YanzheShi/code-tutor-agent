@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
@@ -314,7 +314,7 @@ async def _run_graph_and_generate_tests(graph, config, sid: str):
 @router.post("/{sid}/chat/stream")
 async def chat_with_tutor_stream(
     sid: str, body: dict, background_tasks: BackgroundTasks,
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(get_current_user), request: Request = None,
 ):
     """Streaming chat with the AI tutor via SSE."""
     # 越权校验：归属存在且不匹配 → 404
@@ -327,6 +327,18 @@ async def chat_with_tutor_stream(
         state = graph.get_state(_base)
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
+
+    # 每题提问配额（F-04）：仅提问计数（submit/run 是独立端点天然不经过）；
+    # 未绑题（出题对话阶段）不计。超限返回友好提示流（不烧 LLM、不计数）。
+    _problem = state.values.get("problem")
+    if _problem:
+        _pid = (
+            _problem.problem_id if hasattr(_problem, "problem_id") else _problem.get("problem_id")
+        )
+        if _pid:
+            from code_tutor_agent.api.quota import check_chat_ask
+
+            check_chat_ask(request, user_key(current), _pid)
 
     # 记录活跃时间（TTL 清理用）
     try:
@@ -360,6 +372,7 @@ async def chat_with_tutor_stream(
     if status == "dialog" and mode == "agent" and not agent_done:
         return _handle_agent_dialog_stream(
             sid, config, graph, values, message, background_tasks, uid=user_key(current),
+            request=request,
         )
 
     # 其余一律走常规辅导聊天（直接 LLM 流式 + 工具循环）
@@ -368,6 +381,7 @@ async def chat_with_tutor_stream(
 
 def _handle_agent_dialog_stream(
     sid, config, graph, values, message, background_tasks, uid: str = "default",
+    request=None,
 ) -> StreamingResponse:
     """Agent 对话分支：意图分析 → 出题 or 继续追问，走 SSE 伪流式输出。
 
@@ -441,6 +455,22 @@ def _handle_agent_dialog_stream(
             logger.info(
                 "intent 兜底强制 is_ready=True（关键词命中，原 is_ready=False）"
             )
+
+        # 做题配额（F-04）：is_ready 分支 = 出题绑定点，计 1 次做题。
+        # 超限不报错中断，而是降级为普通对话回复（友好提示，见 MSG_PROBLEM_LIMIT），
+        # 不置 awaiting_problem、不触发生成 —— 提交/运行等其他功能不受影响。
+        if intent.is_ready:
+            from code_tutor_agent.api.quota import check_problem_start
+
+            try:
+                check_problem_start(request, uid)
+            except HTTPException as exc:
+                intent.is_ready = False
+                intent.next_message = (
+                    exc.detail if isinstance(exc.detail, str)
+                    else "今天的做题额度已用完，明天再来继续加油！"
+                )
+                logger.info("problem start quota exceeded (uid=%s), downgrade to dialog reply", uid)
 
         if intent.is_ready:
             topic = intent.topic or values.get("topic", "数组")

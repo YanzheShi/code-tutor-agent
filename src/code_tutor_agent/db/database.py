@@ -2175,6 +2175,17 @@ def consume_password_reset_code(email: str, code_hash: str) -> None:
         logger.error("consume_password_reset_code(%s) failed: %s", email, exc)
 
 
+def invalidate_password_reset_code(email: str) -> None:
+    """按邮箱作废当前重置码（不论哈希）——验证码错误次数超限时调用（审计 F-09）。"""
+    try:
+        _with_conn(lambda cursor: cursor.execute(
+            "UPDATE password_reset_codes SET used = 1 WHERE email = ? AND used = 0",
+            (email,),
+        ))
+    except Exception as exc:
+        logger.error("invalidate_password_reset_code(%s) failed: %s", email, exc)
+
+
 # ── Token 用量(成本计量,见 docs/token-cost-control-design.md)──
 
 from datetime import datetime, timedelta  # noqa: E402  (本文件末尾聚合查询专用)

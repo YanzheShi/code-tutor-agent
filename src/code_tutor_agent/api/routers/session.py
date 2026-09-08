@@ -128,10 +128,16 @@ async def create_session(
     background_tasks: BackgroundTasks,
     body: CreateSessionRequest | None = None,
     current: dict = Depends(get_current_user),
+    request: Request = None,
 ):
     """Create a new tutoring session (background generation)."""
     graph = get_graph()
     uid = user_key(current)
+    # 做题配额（F-04）：建会话 = 绑定第一道新题（后台 run_generation 立即出题），
+    # 计 1 次做题；超限 429 + 友好文案（自带 key 用户豁免）
+    from code_tutor_agent.api.quota import check_problem_start
+
+    check_problem_start(request, uid)
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
@@ -517,6 +523,7 @@ class AnalyzeRequest(BaseModel):
 @router.post("/{sid}/analyze")
 async def analyze_trace_endpoint(
     sid: str, body: Optional[AnalyzeRequest] = None, current: dict = Depends(get_current_user),
+    request: Request = None,
 ):
     """触发/继续一次独立的做题轨迹分析（按题隔离、独立线程、不回灌画像）。
 
@@ -534,6 +541,17 @@ async def analyze_trace_endpoint(
         problem_meta = st.values.get("problem")
     except Exception:
         problem_meta = None
+    # 追问配额（F-04）：仅带 message 的追问计数，首轮结构化分析不计；
+    # problem_id 优先用会话当前题，退回 body 指定值
+    if body.message:
+        from code_tutor_agent.api.quota import check_trace_followup
+
+        _trace_pid = (
+            getattr(problem_meta, "problem_id", None)
+            if problem_meta is not None
+            else None
+        ) or body.problem_id or "default"
+        check_trace_followup(request, user_key(current), _trace_pid)
     try:
         if body.message:
             reply = continue_analysis(sid, body.problem_id, body.message)
@@ -553,6 +571,7 @@ async def analyze_trace_endpoint(
 @router.post("/{sid}/analyze/stream")
 async def analyze_trace_stream_endpoint(
     sid: str, body: Optional[AnalyzeRequest] = None, current: dict = Depends(get_current_user),
+    request: Request = None,
 ):
     """轨迹分析多轮追问的流式版本：SSE 实时吐出追问回复，结束时落库分析线程。
 
@@ -563,6 +582,10 @@ async def analyze_trace_stream_endpoint(
     body = body or AnalyzeRequest()
     if not body.message:
         raise HTTPException(400, "message is required for streaming follow-up")
+    # 追问配额（F-04）：流式追问与非流式同口径（problem_id 用 body 指定值）
+    from code_tutor_agent.api.quota import check_trace_followup
+
+    check_trace_followup(request, user_key(current), body.problem_id or "default")
     from code_tutor_agent.trace.agent import continue_analysis_stream
     return StreamingResponse(
         continue_analysis_stream(sid, body.problem_id, body.message),
@@ -773,10 +796,14 @@ async def get_reference_code(sid: str, current: dict = Depends(get_current_user)
 
 @router.post("/by-problem/{problem_id}")
 async def create_session_with_existing(
-    problem_id: int, current: dict = Depends(get_current_user),
+    problem_id: int, current: dict = Depends(get_current_user), request: Request = None,
 ):
     """Create a session using an existing problem from the database."""
     _uid = user_key(current)
+    # 做题配额（F-04）：指定题进入 = 立即绑题，计 1 次做题
+    from code_tutor_agent.api.quota import check_problem_start
+
+    check_problem_start(request, _uid)
     graph = get_graph()
 
     full = get_problem_by_id(problem_id)
