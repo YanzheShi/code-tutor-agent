@@ -347,6 +347,22 @@ def _user_payload(user: dict) -> dict:
     return {"id": user["id"], "email": user["email"], "role": user["role"]}
 
 
+@router.get("/public-invite")
+async def public_invite():
+    """注册页免登录拉取当前公开邀请码（admin 在面板标记 is_public 的码）。
+
+    返回 {"enabled": true, "invite_code": "XXXX"} 或 {"enabled": false}。
+    前端据此自动预填注册框；无公开码时前端回退为手动输入。
+    该接口不加 IP 限流（只读、不泄露额度），但仅在确有公开码时返回码值。
+    """
+    from code_tutor_agent.db.database import get_public_invite_code
+
+    code = get_public_invite_code()
+    if not code:
+        return {"enabled": False}
+    return {"enabled": True, "invite_code": code}
+
+
 @router.post("/register", response_model=AuthResponse)
 async def register(body: RegisterRequest, request: Request = None):
     """邀请码注册：无有效码不能注册（额度/有效期/停用任一不满足即拒）。

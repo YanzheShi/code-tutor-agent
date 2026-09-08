@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { forgotPassword, login, register, resetPassword } from '../api/auth';
+import { forgotPassword, login, register, resetPassword, fetchPublicInvite } from '../api/auth';
 
 /** 注册条款全文（「服务条款」弹窗内容；用户要求默认勾选同意）。 */
 const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以 Beta 提供，开源于 https://github.com/YanzheShi/code-tutor-agent 。
@@ -25,6 +25,8 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
+  // 公开邀请码：admin 在面板标记后，注册页自动拉取并预填，用户免手填
+  const [publicInvite, setPublicInvite] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -42,6 +44,21 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, showTerms, onClose]);
+
+  // 进入注册模式即拉取公开邀请码并预填（admin 在面板标记的码免手填）
+  useEffect(() => {
+    if (!open || mode !== 'register') return;
+    let cancelled = false;
+    setPublicInvite(null);
+    fetchPublicInvite().then((r) => {
+      if (cancelled) return;
+      if (r.enabled && r.invite_code) {
+        setPublicInvite(r.invite_code);
+        setInviteCode(r.invite_code);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [open, mode]);
 
   const canSubmit =
     email.includes('@') &&
@@ -162,15 +179,32 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
             {mode === 'register' && (
               <div>
                 <label className="mb-1 block text-sm text-ct-muted">邀请码</label>
-                <input
-                  type="text"
-                  required
-                  value={inviteCode}
-                  onChange={(e) => setInviteCode(e.target.value)}
-                  placeholder="向管理员获取"
-                  className={`${inputCls} font-mono tracking-widest uppercase`}
-                  autoComplete="off"
-                />
+                {publicInvite ? (
+                  <>
+                    <input
+                      type="text"
+                      required
+                      disabled
+                      value={inviteCode}
+                      placeholder="向管理员获取"
+                      className={`${inputCls} font-mono tracking-widest uppercase cursor-not-allowed opacity-70`}
+                      autoComplete="off"
+                    />
+                    <p className="mt-1 text-xs text-ct-muted">
+                      注册码已自动填入，直接点击「注册并登录」即可
+                    </p>
+                  </>
+                ) : (
+                  <input
+                    type="text"
+                    required
+                    value={inviteCode}
+                    onChange={(e) => setInviteCode(e.target.value)}
+                    placeholder="向管理员获取"
+                    className={`${inputCls} font-mono tracking-widest uppercase`}
+                    autoComplete="off"
+                  />
+                )}
               </div>
             )}
             <div>

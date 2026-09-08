@@ -291,6 +291,7 @@ interface InviteRow {
   used_count: number;
   expires_at: string | null;
   active: number;
+  is_public: number;
   note: string;
   created_at: string;
 }
@@ -303,6 +304,7 @@ function AdminUsersView() {
   const [maxUses, setMaxUses] = useState(100);
   const [expiresDays, setExpiresDays] = useState(1);
   const [note, setNote] = useState('');
+  const [isPublic, setIsPublic] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -335,12 +337,13 @@ function AdminUsersView() {
       const r = await apiFetch(API_BASE + '/admin/invites', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ max_uses: maxUses, expires_days: expiresDays, note }),
+        body: JSON.stringify({ max_uses: maxUses, expires_days: expiresDays, note, is_public: isPublic }),
       });
       const data = await r.json().catch(() => ({}));
       if (r.ok && data.code) {
-        setMsg(`已生成邀请码：${data.code}（额度 ${data.max_uses}${data.expires_at ? `，有效期至 ${data.expires_at}` : '，永久'}）`);
+        setMsg(`已生成邀请码：${data.code}（额度 ${data.max_uses}${data.expires_at ? `，有效期至 ${data.expires_at}` : '，永久'}${data.is_public ? '，已设为公开（注册页免填）' : ''}）`);
         setNote('');
+        setIsPublic(false);
         load();
       } else {
         setMsg(data?.detail || '生成失败');
@@ -353,6 +356,18 @@ function AdminUsersView() {
     try {
       const r = await apiFetch(`${API_BASE}/admin/invites/${code}/disable`, { method: 'POST' });
       if (r.ok) load(); else setMsg('停用失败');
+    } catch { setMsg('网络错误'); }
+  };
+
+  const setInvitePublic = async (code: string, pub: boolean) => {
+    setMsg('');
+    try {
+      const r = await apiFetch(`${API_BASE}/admin/invites/${code}/public`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ public: pub }),
+      });
+      if (r.ok) load(); else setMsg('操作失败');
     } catch { setMsg('网络错误'); }
   };
 
@@ -402,6 +417,10 @@ function AdminUsersView() {
           </label>
           <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="备注（可选）"
             className="w-40 rounded border border-ct-border bg-ct-bg px-2 py-1 text-xs text-ct-text" />
+          <label className="flex items-center gap-1 text-xs text-ct-muted">
+            <input type="checkbox" checked={isPublic} onChange={e => setIsPublic(e.target.checked)} className="shrink-0" />
+            设为公开（注册页免填）
+          </label>
           <button onClick={createInvite}
             className="rounded bg-ct-accent px-3 py-1 text-xs font-medium text-white hover:opacity-90">
             生成
@@ -413,7 +432,7 @@ function AdminUsersView() {
         <h3 className="mb-2 text-sm font-medium text-ct-text">邀请码（{invites.length}）</h3>
         <div className="overflow-x-auto rounded-lg border border-ct-border">
           <table className="w-full">
-            <thead className="bg-ct-bg"><tr><th className={th}>码</th><th className={th}>已用/额度</th><th className={th}>过期时间</th><th className={th}>状态</th><th className={th}>备注</th><th className={th}>操作</th></tr></thead>
+            <thead className="bg-ct-bg"><tr><th className={th}>码</th><th className={th}>已用/额度</th><th className={th}>过期时间</th><th className={th}>状态</th><th className={th}>公开</th><th className={th}>备注</th><th className={th}>操作</th></tr></thead>
             <tbody>
               {invites.map(v => (
                 <tr key={v.code} className="border-t border-ct-border">
@@ -421,19 +440,33 @@ function AdminUsersView() {
                   <td className={td}>{v.used_count}/{v.max_uses}</td>
                   <td className={td}>{v.expires_at ? v.expires_at.slice(0, 16) : '永久'}</td>
                   <td className={td}>{v.active ? '有效' : '已停用'}</td>
+                  <td className={td}>{v.is_public ? '✅' : '-'}</td>
                   <td className={td}>{v.note || '-'}</td>
                   <td className={td}>
                     {v.active === 1 && (
-                      <button onClick={() => disableInvite(v.code)}
-                        className="rounded border border-ct-border px-2 py-0.5 text-xs text-red-500 hover:text-red-600">
-                        停用
-                      </button>
+                      <>
+                        <button onClick={() => disableInvite(v.code)}
+                          className="rounded border border-ct-border px-2 py-0.5 text-xs text-red-500 hover:text-red-600">
+                          停用
+                        </button>
+                        {v.is_public ? (
+                          <button onClick={() => setInvitePublic(v.code, false)}
+                            className="ml-1 rounded border border-ct-border px-2 py-0.5 text-xs text-ct-muted hover:text-ct-text">
+                            取消公开
+                          </button>
+                        ) : (
+                          <button onClick={() => setInvitePublic(v.code, true)}
+                            className="ml-1 rounded border border-ct-border px-2 py-0.5 text-xs text-ct-accent hover:opacity-80">
+                            设为公开
+                          </button>
+                        )}
+                      </>
                     )}
                   </td>
                 </tr>
               ))}
               {invites.length === 0 && (
-                <tr><td className={td} colSpan={6}>还没有邀请码，用上面的表单生成一个</td></tr>
+                <tr><td className={td} colSpan={7}>还没有邀请码，用上面的表单生成一个</td></tr>
               )}
             </tbody>
           </table>

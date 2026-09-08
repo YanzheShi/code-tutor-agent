@@ -528,3 +528,146 @@ def test_admin_users_and_invites_api(temp_db):
             "confirm_password": "password123", "invite_code": inv2["code"]}).status_code == 400
         # 清理临时目录引用（保持 temp_db fixture 语义）
         del _os
+
+
+# ── 公开邀请码（注册页免填，2026-09-08）──
+
+
+def test_public_invite_code_db_layer(temp_db):
+    """is_public 标记驱动 get_public_invite_code：未标记不暴露、标记后返回、可来回切换。"""
+    assert dbmod.get_public_invite_code() is None  # 开局无公开码
+
+    # 普通（非公开）码不得被公开接口暴露
+    dbmod.create_invite_code("PRIV001", 10, None)
+    assert dbmod.get_public_invite_code() is None
+
+    # 设为公开
+    dbmod.create_invite_code("PUB001", 10, None, is_public=True)
+    assert dbmod.get_public_invite_code() == "PUB001"
+
+    # 取消公开
+    assert dbmod.set_invite_code_public("PUB001", False)
+    assert dbmod.get_public_invite_code() is None
+
+    # 再设回
+    assert dbmod.set_invite_code_public("PUB001", True)
+    assert dbmod.get_public_invite_code() == "PUB001"
+
+    # list_invite_codes 现在带 is_public 字段
+    rows = {r["code"]: r["is_public"] for r in dbmod.list_invite_codes()}
+    assert rows.get("PUB001") == 1 and rows.get("PRIV001") == 0
+
+
+def test_public_invite_picks_most_recent_valid(temp_db):
+    """多个有效公开码并存时，取创建时间最新的那个（admin 轮换即生效）。"""
+    dbmod.create_invite_code("OLDPUB", 10, None, is_public=True)
+    dbmod.create_invite_code("NEWPUB", 10, None, is_public=True)
+    assert dbmod.get_public_invite_code() == "NEWPUB"
+
+
+def test_public_invite_excludes_invalid(temp_db):
+    """过期 / 额满的公开码不返回；仍有有效公开码时返回它。"""
+    from datetime import datetime as dt, timedelta as td
+
+    # 过期公开码
+    expired = (dt.now() - td(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+    dbmod.create_invite_code("EXPPIB", 10, expired, is_public=True)
+    assert dbmod.get_public_invite_code() is None
+
+    # 额满公开码
+    dbmod.create_invite_code("FULLPUB", 1, None, is_public=True)
+    assert dbmod.consume_invite_code("FULLPUB")
+    assert dbmod.get_public_invite_code() is None
+
+    # 兜底有效公开码
+    dbmod.create_invite_code("GOODPUB", 10, None, is_public=True)
+    assert dbmod.get_public_invite_code() == "GOODPUB"
+
+
+def test_register_with_public_code(temp_db):
+    """公开码仍可被正常消费注册（is_public 不影响注册逻辑，只是免手填）。"""
+    import anyio
+    from fastapi import HTTPException
+
+    from code_tutor_agent.api import auth as a
+
+    a._RATE_BUCKETS.clear()
+    dbmod.create_invite_code("PUBREG01", 10, None, is_public=True)
+
+    async def _do():
+        return await a.register(a.RegisterRequest(
+            email="pubreg@test.com", password="password123",
+            confirm_password="password123", invite_code="PUBREG01"))
+
+    resp = anyio.run(_do)
+    assert resp["user"]["role"] == "user"
+    assert dbmod.get_public_invite_code() == "PUBREG01"  # 额度 10，用掉 1 仍有效
+
+
+def test_public_invite_endpoint_unauthenticated(temp_db):
+    """GET /auth/public-invite 免登录：无公开码返回 {enabled:false}，有则吐码。"""
+    import os as _os
+
+    from fastapi.testclient import TestClient
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api.main import app
+
+    with TestClient(app) as c:
+        # 无公开码 → 200 + {enabled:false}
+        r = c.get("/auth/public-invite")
+        assert r.status_code == 200
+        assert r.json() == {"enabled": False}
+
+        # 直写公开码（免 admin 登录）
+        dbmod.create_invite_code("PUBLIC99", 5, None, is_public=True)
+        r2 = c.get("/auth/public-invite")
+        assert r2.status_code == 200
+        body = r2.json()
+        assert body["enabled"] is True
+        assert body["invite_code"] == "PUBLIC99"
+        del _os
+
+
+def test_admin_toggle_public_invite_endpoint(temp_db):
+    """admin 生成即标记公开 / 列表展示 is_public / 取消公开；普通用户操作 → 403。"""
+    import os as _os
+
+    from fastapi.testclient import TestClient
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api.main import app
+
+    admin_uid = dbmod.create_user("boss2@test.com", a.hash_password("password123"), role="admin")
+    dbmod.create_user("user2@test.com", a.hash_password("password123"))
+    a._RATE_BUCKETS.clear()
+    assert admin_uid
+
+    with TestClient(app) as c:
+        tok = c.post("/auth/login", json={"email": "boss2@test.com", "password": "password123"}).json()["token"]
+        ah = {"Authorization": f"Bearer {tok}"}
+        victim_tok = c.post("/auth/login", json={"email": "user2@test.com", "password": "password123"}).json()["token"]
+        vh = {"Authorization": f"Bearer {victim_tok}"}
+
+        # 生成即标记公开
+        inv = c.post("/admin/invites", headers=ah,
+                     json={"max_uses": 3, "expires_days": 0, "is_public": True}).json()
+        assert inv["ok"] and inv["is_public"] is True
+
+        # 列表带 is_public 字段
+        rows = c.get("/admin/invites", headers=ah).json()["invites"]
+        pub = next(r for r in rows if r["code"] == inv["code"])
+        assert pub["is_public"] == 1
+
+        # 注册页能拉到
+        assert c.get("/auth/public-invite").json()["invite_code"] == inv["code"]
+
+        # 普通用户取消公开 → 403
+        assert c.post(f"/admin/invites/{inv['code']}/public", headers=vh,
+                      json={"public": False}).status_code == 403
+
+        # admin 取消公开 → 注册页不再暴露
+        assert c.post(f"/admin/invites/{inv['code']}/public", headers=ah,
+                      json={"public": False}).status_code == 200
+        assert c.get("/auth/public-invite").json()["enabled"] is False
+        del _os

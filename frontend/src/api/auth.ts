@@ -94,6 +94,19 @@ export async function register(
   return data.user;
 }
 
+/** 注册页免登录拉取当前公开邀请码；无公开码时返回 { enabled: false }。 */
+export async function fetchPublicInvite(): Promise<{ enabled: boolean; invite_code?: string }> {
+  try {
+    const r = await authFetch(`${API_BASE}/auth/public-invite`, { method: 'GET' });
+    if (!r.ok) return { enabled: false };
+    const data = await r.json().catch(() => ({}));
+    return data?.enabled ? { enabled: true, invite_code: data.invite_code } : { enabled: false };
+  } catch {
+    // 网络失败：回退为手动输入，不打断注册流程
+    return { enabled: false };
+  }
+}
+
 /** 自助改密（验证旧密码）。 */
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   const auth = getStoredAuth();

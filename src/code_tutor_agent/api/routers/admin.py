@@ -175,11 +175,15 @@ class InviteCreateRequest(BaseModel):
     max_uses: int = 100
     expires_days: int = 1
     note: str = ""
+    is_public: bool = False
 
 
 @router.post("/invites")
 async def admin_create_invite(body: InviteCreateRequest, current: dict = Depends(require_admin)):
-    """生成邀请码：额度 + 有效天数自定（expires_days=0 表示永久）。"""
+    """生成邀请码：额度 + 有效天数自定（expires_days=0 表示永久）。
+
+    is_public=True 时该码直接作为注册页公开码（用户免填，页面自动预填）。
+    """
     import secrets as _secrets
 
     from datetime import datetime as _dt, timedelta as _td
@@ -193,10 +197,11 @@ async def admin_create_invite(body: InviteCreateRequest, current: dict = Depends
     # 去易混字符的 8 位码；主键冲突重试
     for _ in range(5):
         code = "".join(_secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
-        if create_invite_code(code, max_uses, expires_at, body.note):
-            logger.info("admin %s created invite %s (max_uses=%s, expires=%s)",
-                        current["id"], code, max_uses, expires_at or "never")
-            return {"ok": True, "code": code, "max_uses": max_uses, "expires_at": expires_at}
+        if create_invite_code(code, max_uses, expires_at, body.note, body.is_public):
+            logger.info("admin %s created invite %s (max_uses=%s, expires=%s, public=%s)",
+                        current["id"], code, max_uses, expires_at or "never", body.is_public)
+            return {"ok": True, "code": code, "max_uses": max_uses, "expires_at": expires_at,
+                    "is_public": body.is_public}
     raise HTTPException(500, "邀请码生成失败，请重试")
 
 
@@ -207,3 +212,21 @@ async def admin_disable_invite(code: str, current: dict = Depends(require_admin)
     if not set_invite_code_active(code.upper(), False):
         raise HTTPException(404, "邀请码不存在")
     return {"ok": True}
+
+
+@router.post("/invites/{code}/public")
+async def admin_set_invite_public(code: str, body: dict | None = None,
+                                  current: dict = Depends(require_admin)):
+    """把某邀请码设为公开 / 取消公开（注册页免填开关）。
+
+    body 形如 {"public": true}；缺省按 true 处理（兼容直接 POST 切换为公开）。
+    """
+    from code_tutor_agent.db.database import set_invite_code_public
+
+    public = True
+    if isinstance(body, dict):
+        public = bool(body.get("public", True))
+    if not set_invite_code_public(code.upper(), public):
+        raise HTTPException(404, "邀请码不存在")
+    logger.info("admin %s set invite %s public=%s", current["id"], code.upper(), public)
+    return {"ok": True, "is_public": public}

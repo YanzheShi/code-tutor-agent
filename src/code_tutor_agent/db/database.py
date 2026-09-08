@@ -280,10 +280,15 @@ def _init_db_tables(cursor) -> None:
             used_count INTEGER NOT NULL DEFAULT 0,
             expires_at TEXT,
             active INTEGER NOT NULL DEFAULT 1,
+            is_public INTEGER NOT NULL DEFAULT 0,
             note TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT LOCALTIMESTAMP
         )
     """)
+    # 兼容存量库：新列以 ALTER 追加（幂等，PG 9.6+ 支持 ADD COLUMN IF NOT EXISTS）
+    cursor.execute(
+        "ALTER TABLE invite_codes ADD COLUMN IF NOT EXISTS is_public INTEGER NOT NULL DEFAULT 0"
+    )
 
     # ── 密码重置码（忘记密码自助流程， Brevo 可选；存哈希不存明文）──
     cursor.execute("""
@@ -2146,13 +2151,19 @@ def list_users() -> list[dict]:
 
 # ── 邀请码（注册准入：额度 + 有效期）──
 
-def create_invite_code(code: str, max_uses: int, expires_at: str | None, note: str = "") -> bool:
-    """插入邀请码（code 由调用方生成；重复码返回 False）。"""
+def create_invite_code(
+    code: str, max_uses: int, expires_at: str | None, note: str = "", is_public: bool = False,
+) -> bool:
+    """插入邀请码（code 由调用方生成；重复码返回 False）。
+
+    is_public=True 时该码会被 /auth/public-invite 公开吐给注册页（免填）。
+    """
     try:
         def _do(cursor):
             cursor.execute(
-                "INSERT INTO invite_codes (code, max_uses, expires_at, note) VALUES (?, ?, ?, ?)",
-                (code, max_uses, expires_at, note),
+                "INSERT INTO invite_codes (code, max_uses, expires_at, note, is_public) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (code, max_uses, expires_at, note, 1 if is_public else 0),
             )
             return True
         return _with_conn(_do)
@@ -2186,13 +2197,47 @@ def list_invite_codes() -> list[dict]:
     """邀请码列表（admin 面板），按创建时间倒序。"""
     try:
         rows = _with_conn(lambda cursor: cursor.execute(
-            "SELECT code, max_uses, used_count, expires_at, active, note, created_at "
+            "SELECT code, max_uses, used_count, expires_at, active, is_public, note, created_at "
             "FROM invite_codes ORDER BY created_at DESC, code LIMIT 200"
         ).fetchall())
         return [dict(r) for r in rows]
     except Exception as exc:
         logger.error("list_invite_codes() failed: %s", exc)
         return []
+
+
+def get_public_invite_code() -> str | None:
+    """返回当前有效（active、额度未满、未过期）的公开邀请码；无则返回 None。
+
+    取创建时间最新的一个——admin 把新码标为公开、旧码停用即完成轮换。
+    供免登录的 /auth/public-invite 使用：注册页据此自动预填，用户无需手动输入。
+    """
+    try:
+        rows = _with_conn(lambda cursor: cursor.execute(
+            "SELECT code FROM invite_codes "
+            "WHERE is_public = 1 AND active = 1 AND used_count < max_uses "
+            "AND (expires_at IS NULL OR expires_at = '' OR expires_at::timestamp > LOCALTIMESTAMP) "
+            "ORDER BY created_at DESC, code LIMIT 1"
+        ).fetchall())
+        return rows[0]["code"] if rows else None
+    except Exception as exc:
+        logger.error("get_public_invite_code() failed: %s", exc)
+        return None
+
+
+def set_invite_code_public(code: str, is_public: bool) -> bool:
+    """把某邀请码设为公开 / 取消公开（admin 面板开关）。"""
+    try:
+        def _do(cursor):
+            cursor.execute(
+                "UPDATE invite_codes SET is_public = ? WHERE code = ?",
+                (1 if is_public else 0, code.upper()),
+            )
+            return cursor.rowcount > 0
+        return _with_conn(_do)
+    except Exception as exc:
+        logger.error("set_invite_code_public(%s) failed: %s", exc)
+        return False
 
 
 def set_invite_code_active(code: str, active: bool) -> bool:
