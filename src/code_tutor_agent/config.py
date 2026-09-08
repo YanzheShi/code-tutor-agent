@@ -243,3 +243,11 @@ def get_token_user_daily_budget() -> float:
 # 需要时置 ENSURE_DUAL_BRUTE=1 开启。请求级开关 ctx.options.dual_solution 仍控制
 # “是否要双解对拍”这一能力诉求；本开关控制“缺 brute 时是否现补”的实现细节。
 ENSURE_DUAL_BRUTE = os.getenv("ENSURE_DUAL_BRUTE", "0") == "1"
+
+
+# ── 是否允许用户自定义 LLM API key（设置页 custom 模式）──
+# 默认关闭（"0"）：不允许用户填入自己的 key，强制走服务器统一配置。
+# 置 CTA_ALLOW_CUSTOM_LLM=1 开启（如自部署且信任用户时）。
+def get_allow_custom_llm() -> bool:
+    """设置页「自定义 API key」功能总开关，默认关闭。"""
+    return os.getenv("CTA_ALLOW_CUSTOM_LLM", "0") == "1"

@@ -24,6 +24,7 @@ from code_tutor_agent.db.database import (
     get_user_settings,
     save_user_settings,
 )
+from code_tutor_agent.config import get_allow_custom_llm
 from code_tutor_agent.runtime_settings import build_override
 
 logger = logging.getLogger(__name__)
@@ -155,15 +156,18 @@ def _validate_base_url(base_url: str) -> None:
 
 
 def _payload(row: dict | None) -> dict:
+    allow_custom = get_allow_custom_llm()
     if not row or row.get("llm_mode") != "custom":
         return {"mode": "default", "model": "", "base_url": "",
-                "api_key_masked": "", "has_custom": False}
+                "api_key_masked": "", "has_custom": False,
+                "allow_custom": allow_custom}
     return {
         "mode": "custom",
         "model": row.get("llm_model") or "",
         "base_url": row.get("llm_base_url") or "",
         "api_key_masked": _mask(row.get("llm_api_key") or ""),
         "has_custom": True,
+        "allow_custom": allow_custom,
     }
 
 
@@ -194,6 +198,8 @@ async def update_settings(body: LlmSettingsBody, current: dict = Depends(get_cur
     """保存设置。custom 模式三项必填（key 可沿用旧值）；default 模式删除自定义记录。"""
     uid = current["id"]
     mode = body.mode if body.mode in ("default", "custom") else "default"
+    if mode == "custom" and not get_allow_custom_llm():
+        raise HTTPException(403, "管理员已关闭自定义 API key 功能，请使用系统默认模型")
     try:
         if mode == "default":
             delete_user_settings(uid)
@@ -221,6 +227,8 @@ async def test_settings(body: LlmSettingsBody, current: dict = Depends(get_curre
     from code_tutor_agent.api.auth import rate_limit
 
     rate_limit(f"llmtest:{current['id']}", 10, 3600)
+    if body.mode == "custom" and not get_allow_custom_llm():
+        raise HTTPException(403, "管理员已关闭自定义 API key 功能，无法测试自定义模型")
     if body.mode == "custom":
         cfg = _resolve_custom_cfg(body, current["id"])
     else:

@@ -4,7 +4,7 @@ import { forgotPassword, login, register, resetPassword, fetchPublicInvite } fro
 /** 注册条款全文（「服务条款」弹窗内容；用户要求默认勾选同意）。 */
 const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以 Beta 提供，开源于 https://github.com/YanzheShi/code-tutor-agent 。
 
-欢迎使用！ 当前为测试阶段，功能可能不稳定，有可能在做题过程中重启；域名可能变更、服务可能下线；使用系统 API 有对话/提交配额，自定义 API Key（加密保存） 无系统配额但受模型方限制，如果有泄露安全担忧，可以自部署；因网络、节点、数据库问题可能导致数据丢失，重要数据请自行导出。
+欢迎使用！ 当前为测试阶段，功能可能不稳定，有可能在做题过程中重启；域名可能变更、服务可能下线；使用系统 API 有对话/提交配额，如果使用频繁，可以自部署使用自己的apikey；因网络、节点、数据库问题可能导致数据丢失，重要数据请自行导出。
 
 继续注册即同意《服务条款》。`;
 

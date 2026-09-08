@@ -8,6 +8,7 @@ export interface LlmSettings {
   base_url: string;
   api_key_masked?: string;
   has_custom?: boolean;
+  allow_custom?: boolean;
 }
 
 /** 保存/测试共用请求体；api_key 留空表示沿用已保存的 key。 */

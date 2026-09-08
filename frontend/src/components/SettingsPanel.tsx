@@ -61,6 +61,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [allowCustom, setAllowCustom] = useState(true); // 后端总开关：是否允许自定义 API key
   const [savedMasked, setSavedMasked] = useState(''); // 已保存 key 的打码形式（placeholder 提示用）
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -75,6 +76,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
         setModel(s.model || '');
         setBaseUrl(s.base_url || '');
         setSavedMasked(s.api_key_masked || '');
+        setAllowCustom(s.allow_custom ?? true);
       })
       .catch((e) => { if (!cancelled) setLoadError(String(e?.message || e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -88,6 +90,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   const handleSave = async () => {
     setSaving(true); setFeedback(null);
+    if (mode === 'custom' && !allowCustom) {
+      setFeedback({ kind: 'err', text: '自定义 API key 功能已被管理员关闭' });
+      setSaving(false);
+      return;
+    }
     try {
       const saved = await saveLlmSettings(currentInput());
       setMode(saved.mode);
@@ -173,7 +180,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
-          {/* ── 模型服务 ── */}
+          {/* ── 模型服务（开关关闭时整块隐藏）── */}
+          {allowCustom && (
           <section>
             <h2 className="mb-1 text-sm font-semibold text-ct-text">模型服务</h2>
             <p className="mb-3 text-xs text-ct-muted">
@@ -204,14 +212,17 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                   </button>
                   <button
                     onClick={() => setMode('custom')}
+                    disabled={!allowCustom}
                     className={`rounded-xl border p-4 text-left transition ${
                       mode === 'custom'
                         ? 'border-ct-accent bg-ct-accent/10 ring-2 ring-ct-accent/20'
                         : 'border-ct-border hover:border-ct-accent/50'
-                    }`}
+                    } ${!allowCustom ? 'cursor-not-allowed opacity-50' : ''}`}
                   >
                     <span className="block text-sm font-medium text-ct-text">🔑 自定义</span>
-                    <span className="mt-0.5 block text-xs text-ct-muted">填入你自己的 API key</span>
+                    <span className="mt-0.5 block text-xs text-ct-muted">
+                      {allowCustom ? '填入你自己的 API key' : '已被管理员关闭'}
+                    </span>
                   </button>
                 </div>
 
@@ -260,6 +271,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               </>
             )}
           </section>
+          )}
 
           {/* ── 账号（低频操作：置底 + 默认折叠）── */}
           <section>
