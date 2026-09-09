@@ -82,6 +82,8 @@ def _to_run_results(results: list, test_cases: list) -> list[dict]:
             "explanation": tc.get("explanation", "") if isinstance(tc, dict) else "",
             "runtime_ms": r.runtime_ms,
             "memory_kb": r.memory_kb,
+            # 编译错误结构化 payload（^ 指针等）：非 CE 时为 None，不占 payload
+            "compile_error": getattr(r, "compile_error", None),
         })
     return run_results
 
@@ -167,6 +169,7 @@ def _build_base_result(raw_results: list, test_cases: list | None = None) -> Jud
         "Passed": "AC",
         "Wrong Answer": "WA",
         "Runtime Error": "RE",
+        "Compile Error": "CE",
         "TLE": "TLE",
         "Time Limit Exceeded": "TLE",
     }
@@ -183,6 +186,8 @@ def _build_base_result(raw_results: list, test_cases: list | None = None) -> Jud
             expected_output=first_fail.expected_output or "",
             actual_output=first_fail.actual_output or "",
             explanation=_tc.get("explanation", "") if isinstance(_tc, dict) else "",
+            # CE 专属：结构化编译错误 payload 直通前端（编辑器红标 + CE 结果面板）
+            compile_error=getattr(first_fail, "compile_error", None),
         )
     return JudgeResult(
         status="AC",

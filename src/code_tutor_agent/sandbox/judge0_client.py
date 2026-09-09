@@ -375,6 +375,24 @@ def submit_test_cases(
     n = len(test_cases)
     logger.info("▶ judge0.submit_test_cases() — %d test cases, %d chars", n, len(source_code))
 
+    # ── 编译预检短路（2026-09-09 CE 指针）：语法错直接返回，省一次 Judge0 往返。
+    # 行号/泄露优势与本地路径一致（用户代码单独 compile，见 compile_check 模块注释）。
+    # run_solution 已在其入口先行预检，此处是直连调用方的兜底。──
+    from code_tutor_agent.sandbox.compile_check import COMPILE_ERROR_STATUS, check_compile
+
+    ce = check_compile(source_code)
+    if ce is not None:
+        return [
+            {
+                "test_case_id": i,
+                "status": COMPILE_ERROR_STATUS,
+                "detail": (ce.get("human") or ce.get("message", ""))[:200],
+                "runtime_ms": 0.0,
+                "compile_error": ce,
+            }
+            for i in range(n)
+        ]
+
     harness = _build_test_case_harness(source_code, test_cases, function_signature)
     # PEP 563 前置必须在 harness 顶部（future import 必须是文件第一条语句），
     # user_start 行号映射在下方基于最终 harness 重算，前置不影响其正确性。

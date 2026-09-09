@@ -262,7 +262,7 @@ export default function MainLayout(props: MainLayoutProps) {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       {/* 顶栏进度条 */}
       {progressMsgs.length > 0 && !isDialogPhase && (
         <div className="flex items-center gap-2 border-b border-ct-border bg-ct-surface px-4 py-1.5 text-xs text-ct-muted">

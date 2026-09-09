@@ -101,9 +101,13 @@ export default function App() {
     onSetTraceInput: s.setTraceInput, onTraceAsk: s.onTraceAsk,
   };
   return (
-    <>
+    // 横幅 + 做题主界面共用一屏：横幅占自身高度，MainLayout 占满剩余空间，
+    // 否则 h-screen(100vh) + 横幅会把底部「运行/提交」按钮栏顶出屏幕外
+    <div className="flex h-screen flex-col overflow-hidden">
       <AnnouncementsBanner />
-      <MainLayout {...mainProps} />
-    </>
+      <div className="min-h-0 flex-1">
+        <MainLayout {...mainProps} />
+      </div>
+    </div>
   );
 }

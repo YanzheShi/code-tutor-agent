@@ -59,12 +59,17 @@ class Solution:
         for r in results:
             assert r.status == "Passed", f"TC #{r.test_case_id}: {r.detail}"
 
-    def test_syntax_error_returns_re(self):
-        """Malformed code should return Runtime Error."""
+    def test_syntax_error_returns_compile_error(self):
+        """Malformed code → Compile Error（2026-09-09 CE 指针：预检短路取代旧的
+        harness 级 SyntaxError → Runtime Error 行为，payload 带 ^ 指针）。"""
         bad_code = "class Solution:\n    def solve(self):\n        syntax error here\n"
         results = run_solution(bad_code, [{"input_args": ["[]"], "expected_output": "0"}])
         assert len(results) > 0
-        assert results[0].status in ("Runtime Error", "Judge Error")
+        assert results[0].status in ("Compile Error", "Judge Error")
+        for r in results:
+            if r.status == "Compile Error":
+                assert r.compile_error is not None
+                assert r.compile_error["line"] == 3
 
     def test_wrong_answer_detected(self):
         """Code that returns wrong results should be flagged WA."""

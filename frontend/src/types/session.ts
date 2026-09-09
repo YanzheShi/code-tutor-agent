@@ -59,6 +59,17 @@ export type SubmitResponse = {
   hint_level: number;
 };
 
+/** 编译错误结构化 payload（后端 sandbox/compile_check.py Phase 0 契约）。 */
+export type CompileErrorInfo = {
+  status: "Compile Error";
+  line: number;
+  column: number;
+  text: string;    // 出错源码行（Tab 已展开）
+  pointer: string; // ^ 指针行（与 text 等宽对齐）
+  message: string; // SyntaxError 消息
+  human?: string;  // 多行降级渲染串
+};
+
 /** POST /session/{sid}/run 返回 */
 export type RunResult = {
   test_case_id: number;
@@ -70,6 +81,7 @@ export type RunResult = {
   explanation?: string;
   runtime_ms: number;
   memory_kb: number;
+  compile_error?: CompileErrorInfo | null;
 };
 
 export type RunCodeResponse = {
@@ -100,6 +112,8 @@ export type JudgeResult = {
   expected_output?: string;
   actual_output?: string;
   explanation?: string;
+  /** CE 专属：编译错误结构化 payload（与 RunResult.compile_error 同形） */
+  compile_error?: CompileErrorInfo | null;
 };
 
 /** 失败用例对比数据（从最后一条 submission 的 base 阶段取） */

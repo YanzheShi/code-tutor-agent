@@ -130,6 +130,9 @@ class JudgeResult(BaseModel):
     expected_output: str = Field(default="", description="Expected output of the first failing test case")
     actual_output: str = Field(default="", description="Actual output of the first failing test case")
     explanation: str = Field(default="", description="该用例的语义说明（测试用例自带 explanation）")
+    # CE 专属：编译错误结构化 payload（sandbox/compile_check.py），随 model_dump 直通前端，
+    # 供提交路径在编辑器画行内红标 + 渲染 CE 结果面板（2026-09-09）
+    compile_error: dict | None = Field(default=None, description="Compile error payload (line/column/text/pointer/message)")
 
 
 class Submission(BaseModel):

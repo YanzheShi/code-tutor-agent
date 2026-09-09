@@ -1,5 +1,22 @@
 import type { RunResult } from '../types/session';
 
+/** 编译错误指针块：源码行 + ^ 指针 + 消息，<pre> 保等宽与换行（LeetCode 风格）。 */
+function CompileErrorPanel({ r }: { r: RunResult }) {
+  const ce = r.compile_error!;
+  return (
+    <div className="mb-1 rounded bg-ct-surface-secondary p-2 overflow-x-auto">
+      <div className="text-ct-error font-medium mb-1">
+        Compile Error · Line {ce.line}{ce.column ? `:${ce.column}` : ''} · {ce.message}
+      </div>
+      {ce.text && (
+        <pre className="whitespace-pre text-[11px] leading-5 text-ct-text m-0">
+          {ce.text + '\n' + ce.pointer}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export default function RunResults({ results, running }: { results: RunResult[] | null; running: boolean }) {
   if (!results && !running) {
     return <div className="flex-1 overflow-y-auto p-4"><p className="text-sm text-ct-muted">点击「运行」查看结果</p></div>;
@@ -27,7 +44,12 @@ export default function RunResults({ results, running }: { results: RunResult[] 
             <div className="text-ct-muted mb-1">输入: {r.input_args.join('  ')}</div>
           )}
           {r.explanation && <div className="text-ct-muted mb-1">{r.explanation}</div>}
-          {r.detail && <div className="text-ct-muted mb-1">{r.detail}</div>}
+          {/* 编译错误：结构化 payload 优先（<pre> 指针），detail 仅作降级兜底 */}
+          {r.compile_error ? (
+            <CompileErrorPanel r={r} />
+          ) : (
+            r.detail && <div className="text-ct-muted mb-1 whitespace-pre-wrap">{r.detail}</div>
+          )}
           <div className="text-ct-muted">期望: {r.expected}</div>
         </div>
       ))}

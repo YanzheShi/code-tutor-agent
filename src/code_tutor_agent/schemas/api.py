@@ -104,6 +104,11 @@ class RunResult(BaseModel):
     explanation: str = ""
     runtime_ms: float = 0.0
     memory_kb: float = 0.0
+    # 编译错误结构化 payload（sandbox/compile_check.py Phase 0 契约）：
+    # {status, line, column, text, pointer, message, human}，非 Compile Error 时为 None。
+    # 必须显式声明字段：pydantic v2 会静默丢弃未声明的键，compile_error 会在
+    # last_run_results → RunCodeResponse 的字典校验里凭空消失。
+    compile_error: Optional[dict] = None
 
 
 class RunCodeResponse(BaseModel):

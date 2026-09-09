@@ -176,7 +176,7 @@ def format_results_for_prompt(results: list[RunnerResult]) -> str:
 def _deterministic_verdict(results: list) -> str:
     """由执行引擎的客观结果归约出权威 verdict——绝不交给 LLM 主观判断。
 
-    优先级：TLE > RE > WA > AC。「Skipped」= 无参考答案（空 expected），
+    优先级：TLE > CE > RE > WA > AC。「Skipped」= 无参考答案（空 expected），
     不参与判定，视为通过，避免误判 WA。
     """
     judged = [r for r in results if getattr(r, "status", "") != "Skipped"]
@@ -184,6 +184,8 @@ def _deterministic_verdict(results: list) -> str:
         return "AC"
     if any(r.status == "TLE" for r in judged):
         return "TLE"
+    if any(r.status == "Compile Error" for r in judged):
+        return "CE"
     if any(r.status == "Runtime Error" for r in judged):
         return "RE"
     if any(r.status == "Wrong Answer" for r in judged):

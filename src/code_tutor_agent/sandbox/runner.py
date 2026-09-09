@@ -81,18 +81,22 @@ class RunnerResult:
         input_args: list[str] | None = None,
         expected_output: str = "",
         actual_output: str = "",
+        compile_error: dict | None = None,
     ):
         self.test_case_id = test_case_id
-        self.status = status       # Passed / Wrong Answer / Runtime Error / TLE
+        self.status = status       # Passed / Wrong Answer / Runtime Error / TLE / Compile Error
         self.detail = detail
         self.runtime_ms = runtime_ms
         self.memory_kb = memory_kb
         self.input_args = input_args or []
         self.expected_output = expected_output
         self.actual_output = actual_output
+        # 编译错误结构化 payload（sandbox/compile_check.py，Phase 0 契约）：
+        # 仅 status == "Compile Error" 时非 None；同一次预检的所有用例共享同一 payload。
+        self.compile_error = compile_error
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "test_case_id": self.test_case_id,
             "status": self.status,
             "detail": self.detail,
@@ -102,6 +106,9 @@ class RunnerResult:
             "expected_output": self.expected_output,
             "actual_output": self.actual_output,
         }
+        if self.compile_error is not None:
+            d["compile_error"] = self.compile_error
+        return d
 
 
 def _extract_python_code(text: str) -> str:
@@ -147,6 +154,24 @@ def run_solution(
     n = len(test_cases) or 1
     logger.info("▶ run_solution() — %d test cases, timeout=%.1fs, force_local=%s", n, timeout, force_local)
 
+    # ── 编译预检短路（2026-09-09 CE 指针）：用户代码单独 compile，语法错 →
+    # 所有用例返回同一 Compile Error payload（含 ^ 指针）。
+    # 好处：行号 = 用户编辑器行号（免 harness remap）、不泄露 harness 内部代码；
+    # 本地 / Judge0 两路径统一在此拦下（judge0_client 内部另有兜底短路）。──
+    from code_tutor_agent.sandbox.compile_check import COMPILE_ERROR_STATUS, check_compile
+
+    ce = check_compile(code)
+    if ce is not None:
+        logger.info("  compile pre-check failed: line %s — %s", ce.get("line"), ce.get("message"))
+        return [
+            RunnerResult(
+                i, COMPILE_ERROR_STATUS,
+                detail=ce.get("human") or ce.get("message", ""),
+                compile_error=ce,
+            )
+            for i in range(n)
+        ]
+
     # ── Try Judge0 backend when JUDGE0_URL is configured (skip if force_local) ──
     judge0_url = os.getenv("JUDGE0_URL")
     if judge0_url and not force_local:
@@ -167,6 +192,7 @@ def run_solution(
                     input_args=r.get("input_args"),
                     expected_output=r.get("expected_output", ""),
                     actual_output=r.get("actual_output", ""),
+                    compile_error=r.get("compile_error"),
                 ) for r in dict_results]
             else:
                 logger.warning("Judge0 returned errors, falling back to local subprocess")

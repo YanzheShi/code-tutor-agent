@@ -9,6 +9,12 @@ import { useProgressSSE } from './useProgressSSE';
 import { API_BASE } from '../api/config';
 import { useEditTrace } from './useEditTrace';
 import { reportError } from './useErrorReport';
+import { CE_MARKER_EVENT, type CeMarkerDetail } from '../components/LeftPanel/CodeEditor';
+
+/** 把编译错误投给编辑器画行内红标（CodeEditor 监听 ct:compile-error）；detail=null 清除标记。 */
+function dispatchCompileError(detail: CeMarkerDetail) {
+  window.dispatchEvent(new CustomEvent(CE_MARKER_EVENT, { detail }));
+}
 
 const BASE = API_BASE;
 export type Screen = 'welcome' | 'loading' | 'main' | 'error' | 'admin' | 'settings';
@@ -308,6 +314,32 @@ export function useSession() {
       if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code }, { role: 'tutor' as const, content: resp.tutor_message ?? '' }]);
       setHintLevel(resp.hint_level); setLatestVerdict(resp.verdict);
       const full = await getState(sid);
+      // 提交 CE：从 base judge_result 取结构化 payload → 编辑器行内红标 + 运行结果面板
+      //（submit 响应本身只有 verdict/tutor_message，结果在 getState 的 submissions 里）
+      let ceShowPanel = false;
+      if (resp.verdict === 'CE') {
+        const subs = (full.submissions || []) as Submission[];
+        const ceJudge = subs[subs.length - 1]?.judge_results?.find(r => r.status === 'CE' && r.compile_error);
+        const ce = ceJudge?.compile_error;
+        if (ce) {
+          dispatchCompileError({ line: ce.line, column: ce.column, message: ce.message });
+          // 与「运行」一致的结果面板：CE 映射为单条运行结果，切到「运行结果」tab
+          setRunResults([{
+            test_case_id: 0,
+            passed: false,
+            status: 'Compile Error',
+            detail: ceJudge?.detail || ce.human || ce.message,
+            input_args: [],
+            expected: '',
+            runtime_ms: ceJudge?.runtime_ms || 0,
+            memory_kb: 0,
+            compile_error: ce,
+          }]);
+          ceShowPanel = true;
+        }
+      } else {
+        dispatchCompileError(null);
+      }
       setSubmissions((full.submissions || []) as Submission[]);
       // 同步后端 phase：AC 后后端 critic 会置 phase=reviewing，
       // 让 isDone (= phase==='reviewing' && verdict==='AC') 成立，从而显示「下一题」按钮
@@ -319,7 +351,8 @@ export function useSession() {
         if (resp.status === 'done') setJudgeReport(full.last_review_payload as JudgeReport | null);
         try { const ref = await getReferenceCode(sid); setReferenceCode(ref.code); } catch {}
       }
-      setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+      // CE 提交：右栏切到「运行结果」展示 CE 面板；否则保持原行为切到导师对话
+      setActiveTabs(prev => ({ ...prev, right: ceShowPanel ? 'run' : 'tutor' }));
     } catch (e) {
       // 413（代码超 10KB/300 行）不进 error 屏：用户只是代码写长了，
       // 在对话流里给可读提示、留在做题页继续改即可（与 handleRun 同口径）。
@@ -341,6 +374,11 @@ export function useSession() {
     setRunning(true); setRunResults(null); setActiveTabs(prev => ({ ...prev, right: 'run' }));
     try {
       const resp = await runCode(sid, code);
+      // 编译错误 → 编辑器行内红标（本次运行无 CE 则顺带清除旧标记）
+      const ceHit = (resp.results || []).find(r => r.compile_error);
+      dispatchCompileError(ceHit?.compile_error
+        ? { line: ceHit.compile_error.line, column: ceHit.compile_error.column, message: ceHit.compile_error.message }
+        : null);
       setRunResults(resp.results);
       // 运行 = 快速自测：仅展示 Judge0 执行结果，不触发 LLM 导师评价。
       // 同时把运行结果摘要拼接进对话（纯本地、不调 LLM、不会误判 AC），
@@ -355,11 +393,18 @@ export function useSession() {
           // 「答案不对，再检查一下逻辑」），避免与「✅ 全部通过」同时出现造成误导。
           setLatestVerdict(null);
         } else {
-          const fails = resp.results
-            .filter(r => !r.passed)
-            .map(r => `• 用例#${r.test_case_id}（${r.status}）输入: ${r.input_args?.join(' ') || '—'} → 期望 ${r.expected || '—'}`)
-            .join('\n');
-          summary = `⚠️ **运行结果**：样例 ${pass}/${total} 通过。\n${fails}`;
+          const ceFail = resp.results.find(r => r.compile_error);
+          if (ceFail?.compile_error) {
+            // 编译错误：对话里直接给 出错行 + ^ 指针（与「运行结果」tab 的面板一致）
+            const ce = ceFail.compile_error;
+            summary = `❌ **编译错误**：第 ${ce.line} 行 · ${ce.message}\n\`\`\`\n${ce.text}\n${ce.pointer}\n\`\`\`\n修复后再运行/提交～`;
+          } else {
+            const fails = resp.results
+              .filter(r => !r.passed)
+              .map(r => `• 用例#${r.test_case_id}（${r.status}）输入: ${r.input_args?.join(' ') || '—'} → 期望 ${r.expected || '—'}`)
+              .join('\n');
+            summary = `⚠️ **运行结果**：样例 ${pass}/${total} 通过。\n${fails}`;
+          }
         }
         setTutorMessages(prev => [...prev, { role: 'tutor', content: summary }]);
         setActiveTabs(prev => ({ ...prev, right: 'tutor' }));

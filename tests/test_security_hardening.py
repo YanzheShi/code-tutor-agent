@@ -158,14 +158,16 @@ def test_judge_quota_rolling_window_recovers(quota_on, monkeypatch):
     quota_mod.check_judge(req, "42")  # 不抛 = 已恢复
 
 
-def test_judge_quota_not_exempt_for_custom_llm(quota_on):
+def test_judge_quota_not_exempt_for_custom_llm(quota_on, monkeypatch):
     """自带 API key 用户**不豁免**判题限频（判题 CPU 是服务器资源）。"""
     from code_tutor_agent import runtime_settings
 
+    # 显式设定限额，不依赖默认值（默认值调整不应影响本测试）
+    monkeypatch.setenv("CTA_QUOTA_SUBMIT_USER", "20")
     token = runtime_settings.set_llm_override({"model": "m", "base_url": "https://x", "api_key": "k"})
     try:
         req = _FakeReq()
-        for _ in range(10):
+        for _ in range(20):
             quota_mod.check_judge(req, "42")
         with pytest.raises(HTTPException):
             quota_mod.check_judge(req, "42")
