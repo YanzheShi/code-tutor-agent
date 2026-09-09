@@ -28,7 +28,7 @@
 - CTA_QUOTA_PROBLEM_WINDOW_H / _D   两窗口秒数，默认 3600 / 86400
 - CTA_QUOTA_CHAT_USER / _IP      每题提问上限，默认 20
 - CTA_QUOTA_TRACE_USER / _IP     每题追问上限，默认 20
-- CTA_QUOTA_SUBMIT_USER          判题限频（次/窗口），默认 10
+- CTA_QUOTA_SUBMIT_USER          判题限频（次/窗口），默认 20
 - CTA_QUOTA_SUBMIT_WINDOW        判题限频窗口秒数，默认 1200（20 分钟）
 """
 from __future__ import annotations
@@ -152,7 +152,7 @@ def _take_counter(key: str, limit: int, msg: str) -> None:
 
 
 def check_judge(request: Request | None, uid: str) -> None:
-    """提交/运行判题限频：按用户滑动窗口（默认 10 次/20 分钟）。
+    """提交/运行判题限频：按用户滑动窗口（默认 20 次/小时）。
 
     ⚠️ 与其他配额的豁免规则**刻意不同**：判题 CPU 是服务器自身资源（与
     LLM 成本不同源），本配额**不豁免**自带 API key 的用户（2026-09-08 确认）。
@@ -160,10 +160,10 @@ def check_judge(request: Request | None, uid: str) -> None:
     """
     if not _enabled():
         return
-    limit = _env_int("CTA_QUOTA_SUBMIT_USER", 10)
+    limit = _env_int("CTA_QUOTA_SUBMIT_USER", 20)
     if limit <= 0:
         return
-    window = _env_int("CTA_QUOTA_SUBMIT_WINDOW", 1200)
+    window = _env_int("CTA_QUOTA_SUBMIT_WINDOW", 3600)
     now = time.monotonic()
     with _lock:
         _prune_locked(now)
