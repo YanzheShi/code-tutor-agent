@@ -42,6 +42,82 @@ class TestEditTraceStore:
         assert len(db.get_edit_trace("s2")) == 2
 
 
+class TestEditTraceFifoCap:
+    """存储闸门（2026-09-09）：事件数 FIFO 上限 + 超大代码快照整条丢弃。"""
+
+    def _ev(self, i: int) -> dict:
+        return {"ts": 1000 + i, "type": "edit", "seq": i}
+
+    def test_fifo_cap_keeps_latest_1000(self, tmp_db):
+        from code_tutor_agent.db.database import MAX_EDIT_TRACE_EVENTS
+
+        # 两次 flush 共 1200 条 → 只保留最近 1000 条（丢最旧 200 条）
+        db.save_edit_trace("cap1", "default", [self._ev(i) for i in range(400)])
+        db.save_edit_trace("cap1", "default", [self._ev(i) for i in range(400, 1200)])
+        events = db.get_edit_trace("cap1")
+        assert len(events) == MAX_EDIT_TRACE_EVENTS == 1000
+        # 最旧的被裁掉：剩下的是 [200, 1199]
+        seqs = [e["seq"] for e in events]
+        assert seqs[0] == 200 and seqs[-1] == 1199
+        assert seqs == sorted(seqs)  # 顺序保持
+
+    def test_stress_2000_events_across_4_flushes(self, tmp_db):
+        """压测：4 次 flush × 500 条 = 2000 条 → 稳定收敛到 1000，最新 flush 完整保留。"""
+        for flush in range(4):
+            base = flush * 500
+            db.save_edit_trace("cap2", "default", [self._ev(base + i) for i in range(500)])
+        events = db.get_edit_trace("cap2")
+        assert len(events) == 1000
+        seqs = [e["seq"] for e in events]
+        assert seqs[-1] == 1999  # 最新事件永远在
+        assert seqs[0] == 1000   # 最旧 1000 条被 FIFO 裁掉
+
+    def test_cap_isolated_per_problem(self, tmp_db):
+        """上限按 (session, problem) 行独立计量，不跨题互相挤占。"""
+        from code_tutor_agent.db.database import MAX_EDIT_TRACE_EVENTS
+
+        evs_a = [dict(self._ev(i), code=f"a{i}") for i in range(MAX_EDIT_TRACE_EVENTS + 100)]
+        evs_b = [self._ev(i) for i in range(10)]
+        db.save_edit_trace("cap3", "default", evs_a, problem_id="67")
+        db.save_edit_trace("cap3", "default", evs_b, problem_id="68")
+        assert len(db.get_edit_trace_by_problem("cap3", "67")) == MAX_EDIT_TRACE_EVENTS
+        assert len(db.get_edit_trace_by_problem("cap3", "68")) == 10
+
+    def test_oversized_code_snapshot_dropped(self, tmp_db):
+        from code_tutor_agent.config import MAX_CODE_BYTES
+
+        oversized = "a" * (MAX_CODE_BYTES + 1)
+        events = [
+            {"ts": 1, "type": "edit", "code": "ok\n"},
+            {"ts": 2, "type": "edit", "code": oversized},          # 超大快照 → 整条丢弃
+            {"ts": 3, "type": "idle", "idleMs": 5000},             # 无 code 字段，不受影响
+        ]
+        db.save_edit_trace("cap4", "default", events)
+        out = db.get_edit_trace("cap4")
+        assert [e["ts"] for e in out] == [1, 3]
+        assert not any(e.get("code") == oversized for e in out)
+
+    def test_oversized_code_at_pause_dropped(self, tmp_db):
+        from code_tutor_agent.config import MAX_CODE_BYTES
+
+        events = [
+            {"ts": 1, "type": "idle", "code_at_pause": "x" * (MAX_CODE_BYTES + 1)},
+            {"ts": 2, "type": "edit", "code": "ok\n"},
+        ]
+        db.save_edit_trace("cap5", "default", events)
+        out = db.get_edit_trace("cap5")
+        assert [e["ts"] for e in out] == [2]
+
+    def test_all_events_dropped_still_writes_row(self, tmp_db):
+        """整批都是超大事件：不抛错、落一行空事件（与既有 no-events 行为一致）。"""
+        from code_tutor_agent.config import MAX_CODE_BYTES
+
+        db.save_edit_trace("cap6", "default", [
+            {"ts": 1, "type": "edit", "code": "x" * (MAX_CODE_BYTES + 1)},
+        ])
+        assert db.get_edit_trace("cap6") == []
+
+
 class TestReconstructEditTrace:
     """覆盖：diff 事件按序重建全量快照、链断丢弃、旧数据原样通过。"""
 

@@ -15,6 +15,26 @@ import { clearAuth, getStoredAuth, NETWORK_ERROR_MSG } from './auth';
  */
 const CREDENTIAL_PATH_RE = /\/auth\/(login|register|forgot-password|reset-password)([/?]|$)/;
 
+/** 带 HTTP 状态码的业务错误：调用方可按 status 分流（如 413 超限提示不进 error 屏）。 */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** 解析 FastAPI 错误响应体里的 detail（非 JSON / 无 detail 时回退原文或状态码文案）。 */
+export async function parseApiError(r: Response, fallback: string): Promise<ApiError> {
+  const text = await r.text().catch(() => '');
+  let detail = text;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.detail === 'string') detail = parsed.detail;
+  } catch { /* 非 JSON，保留原文 */ }
+  return new ApiError(r.status, detail || fallback);
+}
+
 export async function apiFetch(input: string, init?: RequestInit): Promise<Response> {
   const isCredentialPath = CREDENTIAL_PATH_RE.test(input);
   const headers = new Headers(init?.headers || {});

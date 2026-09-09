@@ -1280,6 +1280,16 @@ def update_profile_on_result(
 # ── 编辑轨迹 + 错误模式画像（error-mode-tracking 特性）──
 
 
+# 编辑轨迹事件数上限（每 (session, problem) 行）：防「反复修改 → 每次 flush 追加」
+# 把 events_json / DB 撑爆。触顶保留最近 N 条（FIFO 丢最旧）——新编辑永远比老历史值钱，
+# 功能不中断。可用 CTA_MAX_EDIT_TRACE_EVENTS 调整。
+MAX_EDIT_TRACE_EVENTS = int(os.getenv("CTA_MAX_EDIT_TRACE_EVENTS", "1000"))
+
+# 事件里允许携带的代码快照字段：正常前端编辑器被 300 行硬拦，快照不可能超过
+# 10KB（config.MAX_CODE_BYTES）；直连 API 塞巨块代码的整条事件会被丢弃，防存储层被撑爆。
+_EVENT_CODE_FIELDS = ("code", "code_at_pause", "code_diff")
+
+
 def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_id: str = "default") -> None:
     """累计保存某会话的编辑轨迹事件（UPSERT + 追加），按 (session_id, problem_id) 联合主键隔离。
 
@@ -1287,16 +1297,34 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_i
     追加 → 写回，保证多次 flush 的事件不丢。整个读改写在一个连接事务内完成。
     事件按内嵌 problem_id 分组后写入各自行；无内嵌 pid 的事件用请求体 problem_id 兜底。
     每行 events_json 只存该题的事件，不再每条事件冗余 problem_id（行级 problem_id 已是主键）。
+
+    两道存储闸门（2026-09-09，防 DB 被轨迹撑爆）：
+    - 逐事件代码快照闸门：code/code_at_pause/code_diff 任一超过 MAX_CODE_BYTES 的
+      事件整条丢弃（正常前端编辑器被 300 行硬拦，不可能出现这种事件）；
+    - 事件数 FIFO 上限：每 (session, problem) 最多保留最近 MAX_EDIT_TRACE_EVENTS 条。
     """
+    from code_tutor_agent.config import MAX_CODE_BYTES
+
     problem_id = str(problem_id) if problem_id is not None else "default"
     # 按事件内嵌 pid 分组，去除冗余的 per-event problem_id（行级 pid 已是联合主键）
     groups: dict[str, list[dict]] = {}
+    dropped_oversized = 0
     for e in events:
         if not isinstance(e, dict):
             continue
-        pid = str(e.get("problem_id") or problem_id)
         ev = {k: v for k, v in e.items() if k != "problem_id"}
+        # 逐事件代码快照闸门：超大快照整条丢弃（直连 API 滥用防御；正常流量不会触发）
+        if any(isinstance(ev.get(f), str) and len(ev[f]) > MAX_CODE_BYTES for f in _EVENT_CODE_FIELDS):
+            dropped_oversized += 1
+            continue
+        pid = str(e.get("problem_id") or problem_id)
         groups.setdefault(pid, []).append(ev)
+
+    if dropped_oversized:
+        logger.warning(
+            "save_edit_trace(%s): dropped %d oversized event(s) (code snapshot > %d bytes)",
+            session_id, dropped_oversized, MAX_CODE_BYTES,
+        )
 
     if not groups:
         groups[problem_id] = []
@@ -1307,9 +1335,15 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_i
                 "SELECT events_json FROM edit_traces WHERE session_id = ? AND problem_id = ?",
                 (session_id, pid)
             ).fetchone()
+            old = json.loads(row["events_json"] or "[]") if row else []
+            merged = old + evs
+            if len(merged) > MAX_EDIT_TRACE_EVENTS:
+                merged = merged[-MAX_EDIT_TRACE_EVENTS:]
+                logger.info(
+                    "save_edit_trace(%s/%s): 事件超上限，FIFO 裁剪至最近 %d 条",
+                    session_id, pid, MAX_EDIT_TRACE_EVENTS,
+                )
             if row:
-                old = json.loads(row["events_json"] or "[]")
-                merged = old + evs
                 cursor.execute(
                     "UPDATE edit_traces SET events_json = ?, user_id = ?, updated_at = LOCALTIMESTAMP "
                     "WHERE session_id = ? AND problem_id = ?",
@@ -1318,7 +1352,7 @@ def save_edit_trace(session_id: str, user_id: str, events: list[dict], problem_i
             else:
                 cursor.execute(
                     "INSERT INTO edit_traces (session_id, user_id, problem_id, events_json) VALUES (?, ?, ?, ?)",
-                    (session_id, user_id, pid, json.dumps(evs, ensure_ascii=False)),
+                    (session_id, user_id, pid, json.dumps(merged, ensure_ascii=False)),
                 )
     try:
         _with_conn(_do)

@@ -35,20 +35,32 @@ import _agent_helpers  # noqa: E402
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _inject_admin_env(monkeypatch):
+def _inject_admin_env():
     """集成测试显式注入引导管理员凭据，使 ensure_bootstrap_admin 可创建 admin。
 
     auth.py 已改为 env-only（无源码默认值），故测试环境必须提供
     CTA_ADMIN_EMAIL / CTA_ADMIN_PASSWORD；值与 _agent_helpers 的登录账号保持一致。
+
+    注意：不能在这里请求 function 级 monkeypatch（ScopeMismatch，pytest 9 实测
+    54 条集成测试 setup 全 ERROR，2026-09-09）——session 级 fixture 直接
+    os.environ 写入并在会话结束后还原。
+
+    兜底值必须与 _agent_helpers 的登录兜底**同源**（CTA_TEST_EMAIL 未设时
+    两处都取 534629255@qq.com / test123456），否则 bootstrap admin 建出来
+    是 test-admin@example.com、自愈登录却拿 534629255@qq.com → 「邮箱或
+    密码错误」全军覆没（2026-09-09 实测）。
     """
-    monkeypatch.setenv(
-        "CTA_ADMIN_EMAIL",
-        os.getenv("CTA_TEST_EMAIL", "test-admin@example.com"),
-    )
-    monkeypatch.setenv(
-        "CTA_ADMIN_PASSWORD",
-        os.getenv("CTA_TEST_PASSWORD", "test123456"),
-    )
+    _test_email = os.getenv("CTA_TEST_EMAIL", "534629255@qq.com")
+    _test_password = os.getenv("CTA_TEST_PASSWORD", "test123456")
+    saved = {k: os.environ.get(k) for k in ("CTA_ADMIN_EMAIL", "CTA_ADMIN_PASSWORD")}
+    os.environ["CTA_ADMIN_EMAIL"] = _test_email
+    os.environ["CTA_ADMIN_PASSWORD"] = _test_password
+    yield
+    for key, old in saved.items():
+        if old is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = old
 
 
 @pytest.fixture(autouse=True)

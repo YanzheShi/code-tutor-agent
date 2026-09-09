@@ -37,6 +37,11 @@ async def run_code(
     _owner = get_session_owner(sid)
     if _owner is not None and _owner != user_key(current):
         raise HTTPException(404, f"Session {sid} not found")
+    # 输入闸门（10KB / 300 行）：放在限频之前——超限拒收不应消耗判题配额。
+    # 413 detail 会由前端解析并在对话流里展示可读提示（不进 error 屏）。
+    from code_tutor_agent.api.validation import enforce_code_limits
+
+    enforce_code_limits(body.code)
     # 判题限频（F-04 补充）：与 submit 同口径（不豁免自带 key 用户）
     from code_tutor_agent.api.quota import check_judge
 

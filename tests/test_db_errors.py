@@ -81,6 +81,7 @@ def _auth_headers(client) -> dict:
     _db.create_invite_code("DBERRCODE", 100000, None)  # 邀请码注册制
     email = f"dberr-{_uuid.uuid4().hex[:8]}@test.com"
     r = client.post("/auth/register", json={"email": email, "password": "password123",
+                                            "confirm_password": "password123",
                                             "invite_code": "DBERRCODE"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}

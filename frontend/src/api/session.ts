@@ -1,4 +1,4 @@
-import { apiFetch } from './client';
+import { apiFetch, parseApiError } from './client';
 import type { RunCodeResponse, SessionStateResp, SubmitResponse } from '../types/session';
 import { API_BASE } from './config';
 
@@ -33,8 +33,9 @@ export async function submitCode(
       body: JSON.stringify({ code, language: 'python' }),
       signal: ctrl.signal,
     });
-    if (!r.ok) throw new Error(`submit failed: ${r.status}`);
-    return r.json();
+      // 非 2xx：解析 detail（如 413「代码过长：301 行…」），调用方按 status 分流展示
+      if (!r.ok) throw await parseApiError(r, `submit failed: ${r.status}`);
+      return r.json();
   } finally {
     clearTimeout(timer);
   }
@@ -55,8 +56,9 @@ export async function runCode(
       body: JSON.stringify({ code, language: 'python' }),
       signal: ctrl.signal,
     });
-    if (!r.ok) throw new Error(`runCode failed: ${r.status}`);
-    return r.json();
+      // 非 2xx：解析 detail（如 413「代码过长：301 行…」），调用方按 status 分流展示
+      if (!r.ok) throw await parseApiError(r, `runCode failed: ${r.status}`);
+      return r.json();
   } finally {
     clearTimeout(timer);
   }

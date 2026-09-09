@@ -1,4 +1,4 @@
-import { apiFetch } from '../api/client';
+import { apiFetch, ApiError } from '../api/client';
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, analyzeTraceStream, summarizeTrace, fetchTraceAnalysis } from '../api/session';
@@ -320,7 +320,16 @@ export function useSession() {
         try { const ref = await getReferenceCode(sid); setReferenceCode(ref.code); } catch {}
       }
       setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
-    } catch (e) { setErrorMsg(String(e)); setScreen('error'); }
+    } catch (e) {
+      // 413（代码超 10KB/300 行）不进 error 屏：用户只是代码写长了，
+      // 在对话流里给可读提示、留在做题页继续改即可（与 handleRun 同口径）。
+      if (e instanceof ApiError && e.status === 413) {
+        setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ 提交被拒：${e.message}` }]);
+        setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+      } else {
+        setErrorMsg(String(e)); setScreen('error');
+      }
+    }
     finally { setSubmittingFlag(false); }
   }, [sessionId, editorCode, submittingFlag]);
 

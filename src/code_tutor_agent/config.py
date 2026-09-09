@@ -251,3 +251,11 @@ ENSURE_DUAL_BRUTE = os.getenv("ENSURE_DUAL_BRUTE", "0") == "1"
 def get_allow_custom_llm() -> bool:
     """设置页「自定义 API key」功能总开关，默认关闭。"""
     return os.getenv("CTA_ALLOW_CUSTOM_LLM", "0") == "1"
+
+
+# ── 用户代码输入闸门（10KB / 300 行，2026-09-09）──
+# 放中性配置层：api/validation.py（run/submit 入口 413 硬拒）与 db/database.py
+# （编辑轨迹逐事件快照闸门）都要用，避免 db 层反向依赖 api 层。
+# 限长是 reject 而非 truncate：截断后编译的报错行号无意义，且挡不住紧凑解析炸弹。
+MAX_CODE_BYTES = int(os.getenv("CTA_MAX_CODE_BYTES", str(10 * 1024)))   # 10KB
+MAX_CODE_LINES = int(os.getenv("CTA_MAX_CODE_LINES", "300"))            # 300 行
