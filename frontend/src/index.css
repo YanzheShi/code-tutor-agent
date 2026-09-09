@@ -56,3 +56,15 @@ html, body {
   color: var(--ct-text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
+
+/* ── CE 编译错误：行号左侧红点（CodeEditor linesDecorations 装饰） ──
+   波浪线在小字号/长行下不够显眼，gutter 图标保证一眼锁定出错行。 */
+.ct-ce-gutter-dot {
+  width: 7px;
+  height: 7px;
+  margin: 6px 0 0 6px;
+  border-radius: 50%;
+  background: #f85149; /* --ct-error，深浅主题均醒目 */
+  box-shadow: 0 0 0 1.5px var(--ct-surface);
+  cursor: pointer;
+}

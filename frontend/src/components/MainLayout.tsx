@@ -180,8 +180,10 @@ export default function MainLayout(props: MainLayoutProps) {
       );
     case 'code':
       return (
-        <div className="flex-1 flex flex-col">
-          <div className="flex-1"><CodeEditor code={editorCode} onChange={onSetEditorCode} starterCode={problem?.starter_code} /></div>
+        // min-h-0 + overflow-hidden：flex 子项默认 min-height:auto，Monaco 重算尺寸时
+        // 会把面板撑高、把底部「运行/提交」栏顶出裁剪区（全屏切换时偶现）
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex-1 min-h-0 overflow-hidden"><CodeEditor code={editorCode} onChange={onSetEditorCode} starterCode={problem?.starter_code} /></div>
         </div>
       );
     case 'run':
@@ -354,7 +356,7 @@ export default function MainLayout(props: MainLayoutProps) {
               </div>
               {renderPanelContent('right')}
               {problem ? (
-                <div className="flex items-center gap-3 border-t border-ct-border p-3">
+                <div className="flex shrink-0 items-center gap-3 border-t border-ct-border p-3">
                   <button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
                     className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
                   <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}
@@ -383,7 +385,7 @@ export default function MainLayout(props: MainLayoutProps) {
                 )}
               </div>
               {renderPanelContent('right')}
-              <div className="flex items-center gap-3 border-t border-ct-border p-3">
+              <div className="flex shrink-0 items-center gap-3 border-t border-ct-border p-3">
                 <button onClick={onRun} disabled={!editorCode.trim() || running || isDialogPhase}
                   className="rounded border border-ct-border px-4 py-2 text-sm text-ct-text hover:bg-ct-hover disabled:opacity-40">{running ? '运行中...' : '\u25b6 运行'}</button>
                 <button onClick={onSubmit} disabled={!editorCode.trim() || submittingFlag || isDialogPhase}

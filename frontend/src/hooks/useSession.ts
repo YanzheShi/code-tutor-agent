@@ -9,10 +9,13 @@ import { useProgressSSE } from './useProgressSSE';
 import { API_BASE } from '../api/config';
 import { useEditTrace } from './useEditTrace';
 import { reportError } from './useErrorReport';
-import { CE_MARKER_EVENT, type CeMarkerDetail } from '../components/LeftPanel/CodeEditor';
+import { CE_MARKER_EVENT, recordCeDetail, type CeMarkerDetail } from '../components/LeftPanel/CodeEditor';
 
 /** 把编译错误投给编辑器画行内红标（CodeEditor 监听 ct:compile-error）；detail=null 清除标记。 */
 function dispatchCompileError(detail: CeMarkerDetail) {
+  // 先落模块级恢复账（编辑器可能已被 tab 切换卸载、监听不在场——运行链路必经此坑），
+  // 再派发事件给在场的实例画图；重挂载时由 handleMount 按 lastCeDetail 恢复。
+  recordCeDetail(detail);
   window.dispatchEvent(new CustomEvent(CE_MARKER_EVENT, { detail }));
 }
 

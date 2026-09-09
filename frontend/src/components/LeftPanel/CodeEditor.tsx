@@ -38,6 +38,15 @@ export function buildCeMarkers(detail: CeMarkerDetail, lineCount: number) {
  */
 let lastCeDetail: CeMarkerDetail = null;
 
+/**
+ * 只记录、不画标记（模块级恢复态的权威写入口）。
+ * 「运行」链路在结果返回前就已把编辑器切走卸载，组件的 window 监听已移除，
+ * 事件会丢失——useSession 必须先调本函数落账，再派发 CE_MARKER_EVENT 给在场的实例画图。
+ */
+export function recordCeDetail(detail: CeMarkerDetail) {
+  lastCeDetail = detail;
+}
+
 export default function CodeEditor({
   code,
   onChange,
@@ -50,6 +59,8 @@ export default function CodeEditor({
   const { theme } = useTheme();
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
+  // CE 行号左侧红点装饰（随 applyCompileError 增删；模型 dispose 后由 handleMount 重建）
+  const gutterDecoRef = useRef<ReturnType<Parameters<OnMount>[0]['createDecorationsCollection']> | null>(null);
   const [overLimitNotice, setOverLimitNotice] = useState(false);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -61,8 +72,18 @@ export default function CodeEditor({
     const model = editor?.getModel();
     if (!editor || !monaco || !model) return;
     monaco.editor.setModelMarkers(model, CE_MARKER_OWNER, buildCeMarkers(detail, model.getLineCount()));
+    // 行号左侧红点：波浪线在小字号/长行下不显眼，gutter 图标保证一眼看到出错行
+    if (gutterDecoRef.current) {
+      try { gutterDecoRef.current.clear(); } catch { /* 旧模型已释放 */ }
+      gutterDecoRef.current = null;
+    }
     if (detail && detail.line >= 1) {
-      editor.revealLineInCenter(Math.min(detail.line, model.getLineCount()));
+      const line = Math.min(detail.line, model.getLineCount());
+      gutterDecoRef.current = editor.createDecorationsCollection([{
+        range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+        options: { linesDecorationsClassName: 'ct-ce-gutter-dot' },
+      }]);
+      editor.revealLineInCenter(line);
     }
   }, []);
 
@@ -91,6 +112,7 @@ export default function CodeEditor({
     if ((window as unknown as Record<string, unknown>).__ct_editor === editorRef.current) {
       (window as unknown as Record<string, unknown>).__ct_editor = undefined;
     }
+    gutterDecoRef.current = null; // 旧模型随卸载 dispose，装饰集合引用一并作废
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
   }, []);
 
