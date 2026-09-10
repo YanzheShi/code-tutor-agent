@@ -289,10 +289,15 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
           <section>
             <h2 className="mb-1 text-sm font-semibold text-ct-text">账号</h2>
             <p className="text-xs text-ct-muted">
-              {email ? `当前登录：${email}` : '登录账号相关设置'}
+              {isTrial ? '当前登录：体验账号' : email ? `当前登录：${email}` : '登录账号相关设置'}
             </p>
 
-            {!pwOpen ? (
+            {/* 体验账号：无密码概念，隐藏改密入口 */}
+            {isTrial ? (
+              <p className="mt-3 rounded-lg border border-ct-border px-4 py-3 text-xs leading-relaxed text-ct-muted">
+                体验账号无需密码。注册正式账号后即可保留全部学习记录并设置密码。
+              </p>
+            ) : !pwOpen ? (
               <button
                 type="button"
                 onClick={() => setPwOpen(true)}

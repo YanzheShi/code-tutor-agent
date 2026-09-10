@@ -371,7 +371,7 @@ export default function WelcomeScreen({
                 <button
                   type="button"
                   onClick={onLogout}
-                  title={user?.email ? `退出登录 (${user.email})` : '退出登录'}
+                  title={user?.role === 'test' ? '退出登录 (体验账号)' : user?.email ? `退出登录 (${user.email})` : '退出登录'}
                   className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
                 >
                   退出登录
