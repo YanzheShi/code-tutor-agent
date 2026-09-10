@@ -814,10 +814,10 @@ async def create_session_with_existing(
 ):
     """Create a session using an existing problem from the database."""
     _uid = user_key(current)
-    # 做题配额（F-04）：指定题进入 = 立即绑题，计 1 次做题
-    from code_tutor_agent.api.quota import check_problem_start
-
-    check_problem_start(request, _uid, is_test=current.get("role") == "test")
+    # ⚠️ 选题豁免做题配额（2026-09-10 起）：by-problem 复用题库已有题面，
+    # 不消耗「新题生成」的 LLM 成本，故不受 check_problem_start 限制——
+    # 即使做题配额触顶，用户仍可继续从题库选题练习（运行/提交/提问仍受各自配额约束）。
+    # 旧实现曾对 by-problem 调 check_problem_start，导致触额后连选题都被 429 挡死。
     graph = get_graph()
 
     full = get_problem_by_id(problem_id)

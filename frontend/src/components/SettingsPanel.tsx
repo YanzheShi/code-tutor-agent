@@ -195,7 +195,7 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
               选择出题、判题、对话共用的模型接入方式。自定义需为 OpenAI 兼容接口。
             </p>
             <p className="mb-3 text-xs text-ct-muted">
-              系统模型配置有时间区间限额，ai对话可能超额，可自部署服务
+              系统模型配置有时间区间限额，ai对话可能超额，可使用个人apikey或者自部署服务
             </p>
 
             {loading ? (

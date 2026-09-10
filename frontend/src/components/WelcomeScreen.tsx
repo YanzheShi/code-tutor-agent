@@ -387,7 +387,7 @@ export default function WelcomeScreen({
             <div className="min-w-0">
               <p className="text-sm font-medium text-ct-text">🧪 体验模式</p>
               <p className="truncate text-xs text-ct-muted">
-                做题额度与正式账号相同；注册后额度重新开启、做题记录完整保留
+                体验账号与他人共享做题窗口配额，高峰时刻可能响应慢或者配额不足；注册后可自定义apikey，做题和问答无限制、同时方便查看个人做题记录和画像
               </p>
             </div>
             <button

@@ -358,10 +358,12 @@ export function useSession() {
       // CE 提交：右栏切到「运行结果」展示 CE 面板；否则保持原行为切到导师对话
       setActiveTabs(prev => ({ ...prev, right: ceShowPanel ? 'run' : 'tutor' }));
     } catch (e) {
-      // 413（代码超 10KB/300 行）不进 error 屏：用户只是代码写长了，
-      // 在对话流里给可读提示、留在做题页继续改即可（与 handleRun 同口径）。
-      if (e instanceof ApiError && e.status === 413) {
-        setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ 提交被拒：${e.message}` }]);
+      // 413（代码超 10KB/300 行）/ 429（提交限频）都不进 error 屏：留在做题页、
+      // 在对话流里给可读提示即可（与 handleRun 同口径）。429 文案由后端携带
+      // 已用/上限/恢复时间，直接透出，避免「点提交被弹到错误页」的突兀感。
+      if (e instanceof ApiError && (e.status === 413 || e.status === 429)) {
+        const tip = e.status === 429 ? '提交太频繁' : '提交被拒';
+        setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ ${tip}：${e.message}` }]);
         setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
       } else {
         setErrorMsg(String(e)); setScreen('error');
@@ -414,10 +416,12 @@ export function useSession() {
         setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
       }
     } catch (e) {
-      setErrorMsg(String(e));
-      // 运行失败必须可见：后端 400（如会话未就绪）此前只写 errorMsg，
+      const runErr = e instanceof ApiError ? e.message : String(e);
+      setErrorMsg(runErr);
+      // 运行失败必须可见：后端 400（如会话未就绪）/ 429（限频）此前只写 errorMsg，
       // 而 errorMsg 仅在 error 屏展示，做题页静默无反馈=「点了没反应」。
-      setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ 运行失败：${String(e)}` }]);
+      // 429 限频文案由后端携带已用/上限/恢复时间，直接透出（去掉 "ApiError: " 前缀）。
+      setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ 运行失败：${runErr}` }]);
       setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
     }
     finally { setRunning(false); }
