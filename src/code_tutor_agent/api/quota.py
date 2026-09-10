@@ -10,6 +10,11 @@
 - 判题限频：submit/run 每用户滚动窗口 10 次/20 分钟（不豁免自带 key 用户——判题
   CPU 是服务器自身资源，见 check_judge）
 
+IP 维度口径（2026-09-10 起）：**仅对测试用户（体验账号，role='test'）生效**——
+清 localStorage 即换新身份，需要不可自选的锚防刷；注册用户纯用户维度
+（校园网/NAT 多人同公网 IP 会误杀，见 2026-09-09 调研）。测试用户触额文案
+走转化钩子（引导注册），注册=原地转正后配额桶清零重新开闸。
+
 扣减点设计（每道新题恰好计 1，防双计/防绕过）：
 - create_session：后台 run_generation 立即绑题 → 计 1
 - by-problem：立即绑题 → 计 1
@@ -91,6 +96,21 @@ MSG_TRACE_LIMIT = (
 MSG_JUDGE_LIMIT = (
     "提交/运行太频繁了（每小时最多 {limit} 次）。"
     "先消化一下刚才的判题反馈，改完代码再试～"
+)
+
+# 测试用户（免注册试用）专属文案：触额即转化钩子——引导注册而非「明天再来」。
+# 注册=原地转正（user_id 不变），做题记录全保留。
+MSG_PROBLEM_LIMIT_TRIAL = (
+    "体验额度已用完（同一网络下的体验额度共享）。注册正式账号即可继续练习，"
+    "你在这里做过的题和记录会完整保留！"
+)
+MSG_CHAT_LIMIT_TRIAL = (
+    "体验账号的提问次数已达上限（{limit} 次）。注册正式账号后继续本题，"
+    "对话与做题记录都会完整保留！"
+)
+MSG_TRACE_LIMIT_TRIAL = (
+    "体验账号的轨迹追问次数已达上限（{limit} 次）。注册正式账号后可继续追问，"
+    "记录会完整保留！"
 )
 
 
@@ -177,13 +197,29 @@ def reset_all() -> None:
         _counters.clear()
 
 
+def reset_user(uid: str) -> None:
+    """清空某用户的全部配额桶（测试用户转正后重新开闸；仅供 /auth/claim 调用）。
+
+    按 key 分段精确匹配 uid（用户桶 pu/cu/tu/ju 都含 uid 段）；
+    IP 桶 pi/ci 的分段是 IP（含点号，与纯数字 uid 不同段）不会被误清。
+    """
+    with _lock:
+        for k in [k for k in _windows if uid in k.split(":")]:
+            _windows.pop(k, None)
+        for k in [k for k in _counters if uid in k.split(":")]:
+            _counters.pop(k, None)
+
+
 # ── 对外检查入口（超限直接抛 HTTPException 429 + 友好文案）──
 
 
-def check_problem_start(request: Request | None, uid: str) -> None:
+def check_problem_start(request: Request | None, uid: str, is_test: bool = False) -> None:
     """开始做一道新题的配额检查（滚动 1h + 滚动 24h 双窗口）。
 
     扣减点：create_session / by-problem / chat 出题分支（见模块 docstring）。
+    is_test（体验账号）：IP 维度**仅对测试用户生效**（清 localStorage 即换新身份，
+    需不可自选的锚防刷；注册用户纯用户维度，校园网/NAT 误杀只与注册用户相关）。
+    触额时文案走转化钩子（引导注册，见 MSG_*_TRIAL）。
     """
     if not _enabled() or _custom_llm_active():
         return
@@ -193,19 +229,20 @@ def check_problem_start(request: Request | None, uid: str) -> None:
     win_h = _env_int("CTA_QUOTA_PROBLEM_WINDOW_H", 3600)
     win_d = _env_int("CTA_QUOTA_PROBLEM_WINDOW_D", 86400)
     ip = _client_ip(request)
+    msg = MSG_PROBLEM_LIMIT_TRIAL if is_test else MSG_PROBLEM_LIMIT
     now = time.monotonic()
     with _lock:
         _prune_locked(now)
         # 全部窗口先检查后扣减：任一超限即整体拒绝（不产生半扣状态）
         if limit > 0:
-            _take_window(f"pu:{uid}:h", limit, win_h, now)
-            _take_window(f"pu:{uid}:d", limit, win_d, now)
-        if ip_limit > 0 and ip != "direct":
-            _take_window(f"pi:{ip}:h", ip_limit, win_h, now)
-            _take_window(f"pi:{ip}:d", ip_limit, win_d, now)
+            _take_window(f"pu:{uid}:h", limit, win_h, now, msg)
+            _take_window(f"pu:{uid}:d", limit, win_d, now, msg)
+        if is_test and ip_limit > 0 and ip != "direct":
+            _take_window(f"pi:{ip}:h", ip_limit, win_h, now, msg)
+            _take_window(f"pi:{ip}:d", ip_limit, win_d, now, msg)
 
 
-def check_chat_ask(request: Request | None, uid: str, problem_id) -> None:
+def check_chat_ask(request: Request | None, uid: str, problem_id, is_test: bool = False) -> None:
     """每题导师提问配额（仅 chat/stream 调用；problem_id 为空=未绑题，不计量）。"""
     if not problem_id or not _enabled() or _custom_llm_active():
         return
@@ -214,16 +251,16 @@ def check_chat_ask(request: Request | None, uid: str, problem_id) -> None:
         return
     pid = str(problem_id)
     ip = _client_ip(request)
-    msg = MSG_CHAT_LIMIT
+    msg = MSG_CHAT_LIMIT_TRIAL if is_test else MSG_CHAT_LIMIT
     with _lock:
         _prune_locked(time.monotonic())
         if limit > 0:
             _take_counter(f"cu:{uid}:{pid}", limit, msg)
-        if ip_limit > 0 and ip != "direct":
+        if is_test and ip_limit > 0 and ip != "direct":
             _take_counter(f"ci:{ip}:{pid}", ip_limit, msg)
 
 
-def check_trace_followup(request: Request | None, uid: str, problem_id) -> None:
+def check_trace_followup(request: Request | None, uid: str, problem_id, is_test: bool = False) -> None:
     """每题轨迹追问配额（仅 analyze 系列带 message 的追问；首轮结构化分析不计）。"""
     if not problem_id or not _enabled() or _custom_llm_active():
         return
@@ -232,10 +269,10 @@ def check_trace_followup(request: Request | None, uid: str, problem_id) -> None:
         return
     pid = str(problem_id)
     ip = _client_ip(request)
-    msg = MSG_TRACE_LIMIT
+    msg = MSG_TRACE_LIMIT_TRIAL if is_test else MSG_TRACE_LIMIT
     with _lock:
         _prune_locked(time.monotonic())
         if limit > 0:
             _take_counter(f"tu:{uid}:{pid}", limit, msg)
-        if ip_limit > 0 and ip != "direct":
+        if is_test and ip_limit > 0 and ip != "direct":
             _take_counter(f"ti:{ip}:{pid}", ip_limit, msg)

@@ -1,4 +1,4 @@
-import { apiFetch, ApiError } from '../api/client';
+import { apiFetch, ApiError, parseApiError } from '../api/client';
 /** 封装会话全部状态与回调，让 App.tsx 只管路由 */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createSession, getState, runCode, submitCode, getReferenceCode, analyzeTrace, analyzeTraceStream, summarizeTrace, fetchTraceAnalysis } from '../api/session';
@@ -301,7 +301,8 @@ export function useSession() {
     editorInitialized.current = false;
     try {
       const r = await apiFetch(BASE + '/session/by-problem/' + problemId, { method: 'POST' });
-      if (!r.ok) throw new Error('failed: ' + r.status);
+      // 429 配额等：parseApiError 透出 FastAPI detail（体验账号转化文案），不再只有状态码
+      if (!r.ok) throw await parseApiError(r, 'failed: ' + r.status);
       applySessionState(await r.json(), true); setScreen('main');
     } catch (e) { reportError('screen_error', String(e), { problemId }); setScreen('error'); setErrorMsg(String(e)); }
   }, []);
@@ -431,7 +432,12 @@ export function useSession() {
       await readStream(sessionId, text, (token) => {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor', content: (last.content || '') + token }; return next; });
       });
-    } catch (e) { console.error('Agent chat error:', e); return; }
+    } catch (e) {
+      console.error('Agent chat error:', e);
+      // 429 配额等业务错误：后端 detail（如体验账号「注册即可继续」）直接给用户看
+      const msg = e instanceof Error && e.message ? e.message : '(chat error)';
+      setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: msg }; return next; });
+    }
     finally { sendLockRef.current = false; }
     // 对话若触发出下一题，题目就绪时后端会经 SSE 推送 done 事件自动进入主界面，
     // 无需轮询 getState。纯对话（无题）时 SSE 也会推 dialog-ready 的 done，无副作用。
@@ -449,8 +455,10 @@ export function useSession() {
         setTutorMessages(prev => { const next = [...prev]; const last = next[next.length - 1]; if (last?.role === 'tutor') next[next.length - 1] = { role: 'tutor' as const, content: (last.content || '') + token }; return next; });
       }, undefined, editorCode);
       if (!ok) setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat not available)' }; return next; });
-    } catch {
-      setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: '(chat error)' }; return next; });
+    } catch (e) {
+      // 429 配额等业务错误：透传后端 detail（体验账号转化提示），不再是干巴巴的 (chat error)
+      const msg = e instanceof Error && e.message ? e.message : '(chat error)';
+      setTutorMessages(prev => { const next = [...prev]; if (next.length) next[next.length - 1] = { role: 'tutor' as const, content: msg }; return next; });
     } finally {
       sendLockRef.current = false;
     }

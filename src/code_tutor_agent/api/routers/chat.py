@@ -338,7 +338,8 @@ async def chat_with_tutor_stream(
         if _pid:
             from code_tutor_agent.api.quota import check_chat_ask
 
-            check_chat_ask(request, user_key(current), _pid)
+            check_chat_ask(request, user_key(current), _pid,
+                           is_test=current.get("role") == "test")
 
     # 记录活跃时间（TTL 清理用）
     try:
@@ -372,7 +373,7 @@ async def chat_with_tutor_stream(
     if status == "dialog" and mode == "agent" and not agent_done:
         return _handle_agent_dialog_stream(
             sid, config, graph, values, message, background_tasks, uid=user_key(current),
-            request=request,
+            request=request, is_test=current.get("role") == "test",
         )
 
     # 其余一律走常规辅导聊天（直接 LLM 流式 + 工具循环）
@@ -381,7 +382,7 @@ async def chat_with_tutor_stream(
 
 def _handle_agent_dialog_stream(
     sid, config, graph, values, message, background_tasks, uid: str = "default",
-    request=None,
+    request=None, is_test: bool = False,
 ) -> StreamingResponse:
     """Agent 对话分支：意图分析 → 出题 or 继续追问，走 SSE 伪流式输出。
 
@@ -463,7 +464,7 @@ def _handle_agent_dialog_stream(
             from code_tutor_agent.api.quota import check_problem_start
 
             try:
-                check_problem_start(request, uid)
+                check_problem_start(request, uid, is_test=is_test)
             except HTTPException as exc:
                 intent.is_ready = False
                 intent.next_message = (

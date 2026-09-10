@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import AuthModal from './AuthModal';
+import { createTrialUser } from '../api/auth';
 
 /** 访客主页（方案 B 访客改造）：未登录用户的第一屏。
  *
@@ -39,6 +40,22 @@ const TOPIC_TEASERS = [
 
 export default function GuestWelcome({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [authOpen, setAuthOpen] = useState(false);
+  // 一键免注册体验：创建测试用户直接进主页（2026-09-10 测试用户体系）
+  const [trialBusy, setTrialBusy] = useState(false);
+  const [trialError, setTrialError] = useState('');
+
+  const handleTrial = async () => {
+    if (trialBusy) return;
+    setTrialBusy(true);
+    setTrialError('');
+    try {
+      await createTrialUser();
+      onLoggedIn(); // App 整页刷新，useSession 以体验账号身份初始化
+    } catch (err) {
+      setTrialError(err instanceof Error ? err.message : '体验创建失败，请重试');
+      setTrialBusy(false);
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col bg-ct-bg text-ct-text">
@@ -71,16 +88,31 @@ export default function GuestWelcome({ onLoggedIn }: { onLoggedIn: () => void })
             从出题、写码、判题到复盘的完整刷题闭环——
             导师陪你选题、判题给反馈、分析你的解题轨迹，把零散刷题变成有针对性的学习和提升。
           </p>
-          <div className="mt-8 flex items-center justify-center gap-3">
-            <button
-              type="button"
-              onClick={() => setAuthOpen(true)}
-              className="rounded-lg bg-ct-accent px-8 py-3 text-base font-medium text-white transition hover:opacity-90"
-            >
-              开始使用
-            </button>
+          <div className="mt-8 flex flex-col items-center justify-center gap-3">
+            <div className="flex items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={handleTrial}
+                disabled={trialBusy}
+                className="rounded-lg bg-ct-accent px-8 py-3 text-base font-medium text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {trialBusy ? '正在进入…' : '免注册直接体验'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAuthOpen(true)}
+                className="rounded-lg border border-ct-border bg-ct-panel px-8 py-3 text-base font-medium text-ct-text transition hover:bg-ct-hover"
+              >
+                开始使用
+              </button>
+            </div>
+            {trialError && (
+              <p className="text-sm text-red-500">{trialError}</p>
+            )}
+            <p className="text-xs text-ct-muted">
+              体验账号与正式账号做题额度相同，注册后记录完整保留
+            </p>
           </div>
-          {/*<p className="mt-3 text-xs text-ct-muted">注册需邀请码，可向管理员获取</p>*/}
         </section>
 
         {/* 特性卡片 */}

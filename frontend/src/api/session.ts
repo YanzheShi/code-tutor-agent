@@ -13,8 +13,8 @@ export async function createSession(
     body: opts ? JSON.stringify(opts) : undefined,
   });
   if (!r.ok) {
-    const errBody = await r.text().catch(() => '');
-    throw new Error(`创建会话失败 (${r.status}): ${errBody || '请确认后端服务已启动'}`);
+    // 2026-09-10：走 parseApiError 透出 FastAPI detail（429 配额文案/413 超限等友好提示）
+    throw await parseApiError(r, `创建会话失败 (${r.status})，请确认后端服务已启动`);
   }
   return r.json();
 }

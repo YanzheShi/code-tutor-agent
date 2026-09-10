@@ -30,7 +30,9 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 export default function SettingsPanel({ onClose }: { onClose: () => void }) {
   const { theme, setTheme } = useTheme();
-  const email = getStoredAuth()?.user.email;
+  const authUser = getStoredAuth()?.user;
+  const email = authUser?.email;
+  const isTrial = authUser?.role === 'test'; // 体验账号：禁用自定义 LLM（后端同样 403 硬拦）
 
   // ── 修改密码表单状态（2026-09-08 从 WelcomeScreen 画像 tab 迁入；低频操作，折叠收起置底）──
   const [pwOpen, setPwOpen] = useState(false);
@@ -92,6 +94,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
     setSaving(true); setFeedback(null);
     if (mode === 'custom' && !allowCustom) {
       setFeedback({ kind: 'err', text: '自定义 API key 功能已被管理员关闭' });
+      setSaving(false);
+      return;
+    }
+    if (mode === 'custom' && isTrial) {
+      setFeedback({ kind: 'err', text: '体验账号不支持自定义 API key，注册正式账号后即可使用' });
       setSaving(false);
       return;
     }
@@ -180,8 +187,8 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
             </div>
           </section>
 
-          {/* ── 模型服务（开关关闭时整块隐藏）── */}
-          {allowCustom && (
+          {/* ── 模型服务（总闸关闭或体验账号时整块隐藏）── */}
+          {allowCustom && !isTrial && (
           <section>
             <h2 className="mb-1 text-sm font-semibold text-ct-text">模型服务</h2>
             <p className="mb-3 text-xs text-ct-muted">
@@ -245,6 +252,11 @@ export default function SettingsPanel({ onClose }: { onClose: () => void }) {
                         placeholder={savedMasked ? `沿用已保存的 ${savedMasked}` : 'sk-...'}
                         autoComplete="new-password" />
                     </Field>
+                    <p className="rounded-lg bg-ct-warn-bg px-3 py-2 text-xs leading-relaxed text-ct-warn">
+                      🔐 安全提示：如果担心 key 泄露，建议在模型服务商控制台创建一个<b>额度受限的临时
+                      API key</b> 专用于本站，使用后及时在控制台<b>销毁或轮换</b>。key 仅加密存储于本站数据库，
+                      不会展示给其他用户。
+                    </p>
                   </div>
                 )}
 

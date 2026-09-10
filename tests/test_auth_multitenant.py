@@ -22,6 +22,18 @@ from code_tutor_agent.db import database as dbmod
 from code_tutor_agent.observability import build_run_config
 
 
+@pytest.fixture(autouse=True)
+def _email_service_offline(monkeypatch):
+    """本文件统一跑「邮件通道未配置」降级口径（注册=仅邀请码）。
+
+    2026-09-10 起注册接入邮箱验证码（email_svc.is_configured() 可用时强制），
+    而测试进程经 conftest load_dotenv 会带上 MCP_HUB_* 使其默认为 True——
+    把全部旧注册测试打回降级路径；邮箱验证码流程由
+    test_register_email_flow.py 专项覆盖（含配置可用/不可用两态）。
+    """
+    monkeypatch.setattr("code_tutor_agent.api.email.is_configured", lambda: False)
+
+
 @pytest.fixture()
 def temp_db():
     """把 DB_PATH 指到临时库并初始化，测完还原。"""
@@ -413,6 +425,8 @@ def test_forgot_reset_with_hub(temp_db, monkeypatch):
 
     uid = dbmod.create_user("br@test.com", a.hash_password("oldpassword1"))
     monkeypatch.setenv("MCP_HUB_TOKEN", "test-key")
+    # 本文件 autouse fixture 强制 is_configured=False；本测试专测「hub 已配置」路径，显式打开
+    monkeypatch.setattr(email_svc, "is_configured", lambda: True)
     monkeypatch.setattr(email_svc, "send_email", lambda *a2, **k: True)
     # 固定验证码为 222222（choice 恒返 '2'）
     monkeypatch.setattr(a.secrets, "choice", lambda s: "2")
@@ -617,7 +631,7 @@ def test_public_invite_endpoint_unauthenticated(temp_db):
         # 无公开码 → 200 + {enabled:false}
         r = c.get("/auth/public-invite")
         assert r.status_code == 200
-        assert r.json() == {"enabled": False}
+        assert r.json() == {"enabled": False, "email_verification": False}
 
         # 直写公开码（免 admin 登录）
         dbmod.create_invite_code("PUBLIC99", 5, None, is_public=True)

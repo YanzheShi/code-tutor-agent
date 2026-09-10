@@ -26,7 +26,7 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 - **规划节点（选题器）长期画像驱动选题**：跨会话维护 **per-tag 知识点画像**（熟练度 ELO / 稳定性 / 遗忘）+ **6 维错误模式画像**，下一题不是随机出，而是选"最该练"的薄弱点。
 - **护栏节点（Critic）负责换题路由与 episode 收尾**：在一题终结（真实提交 AC / 换题 abandon）时 flush `problem_history`、做挫败情绪检测并路由到下一题。⚠️ 这是**纯旁路的收尾节点，不做内容守门**——代码泄露过滤（R01）当前是未生效的死逻辑，挫败情绪检测（R04）只打日志无后续动作，详见[已知限制](#已知限制)。
 
-除核心教学闭环外，项目已具备一套**企业级运行基座**：多用户 JWT 认证（邮箱注册/登录、按用户隔离的画像/提交/成本数据）、PostgreSQL 统一持久化（业务库 + 会话状态）、Brevo 邮件通道（告警通知 + 忘记密码）、自研监控告警（指标采集 → 规则评估 → 邮件 + 公告横幅），详见[核心设计决策](#核心设计决策)。
+除核心教学闭环外，项目已具备一套**企业级运行基座**：多用户 JWT 认证（邀请码 + 邮箱验证码注册、免注册体验账号、按用户隔离的画像/提交/成本数据）、PostgreSQL 统一持久化（业务库 + 会话状态）、业务配额限流（做题/提问/判题按用户计量，体验账号叠加 IP 锚点）、Brevo 邮件通道（告警通知 + 忘记密码/注册验证码）、自研监控告警（指标采集 → 规则评估 → 邮件 + 公告横幅），详见[核心设计决策](#核心设计决策)。
 
 ---
 
@@ -92,8 +92,9 @@ CodeTutor Agent 的逻辑是 ：能够根据用户个人的情况出题，知道
 | 流程编排 | LangGraph 1.x StateGraph（8 个编排节点）+ checkpointer + store | 状态机 / 会话状态持久化 / human-in-the-loop (`interrupt`) |
 | LLM 调用 | langchain-openai + base_url + 主备 failover | OpenAI 兼容口，DeepSeek / 通义 / 自建都能走 |
 | API 层 | FastAPI + uvicorn | /auth /session /submit /chat /admin /settings /monitoring |
-| 认证 | JWT（PyJWT HS256）+ PBKDF2-HMAC-SHA256 密码哈希 | 邮箱注册/登录、角色权限（user / admin），零重依赖 |
-| 前端 | React 19 + Vite 6 + TypeScript | SPA，登录/注册 + Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
+| 认证 | JWT（PyJWT HS256）+ PBKDF2-HMAC-SHA256 密码哈希 | 邀请码 + 邮箱验证码注册、体验账号原地转正、角色权限（user / admin / test），零重依赖 |
+| 业务限流 | 进程内滑动窗口 + 生命周期计数（`api/quota.py`） | 做题/提问/追问/判题按用户计量；IP 维度仅锚体验账号（反滥用），触额走注册转化文案 |
+| 前端 | React 19 + Vite 6 + TypeScript | SPA，登录/注册/体验转正 + Monaco 编辑器，Tailwind 样式，纯 SVG 雷达图 |
 | 判题沙箱 | Judge0（Docker）/ 本地 subprocess 兜底 | 资源隔离 + 用例执行 |
 | 数据库 | PostgreSQL 16（psycopg3 + 连接池） | 业务数据 + LangGraph 会话状态统一持久化，写锁/多副本友好 |
 | 状态持久化 | langgraph-checkpoint-postgres（PostgresSaver） | 会话恢复与 `interrupt()` 挂起依赖 |
@@ -169,8 +170,11 @@ flowchart TB
 | 出题防碰撞 | 随机二选一注入场景（F）/ 维度（G），维度数据覆盖 20 个知识点 | ✅ 已实现 |
 | 成本中心 | Token 用量 / 预算看板（按目的 / 模型 / 会话下钻） | ✅ 已实现 |
 | PostgreSQL 迁移 | 业务库 + LangGraph checkpointer 统一迁 PG（compose `app-db` 服务） | ✅ 已实现 |
-| 多用户与认证 | 邮箱注册/登录 + JWT + 角色权限 + 忘记密码邮件重置 + 按用户隔离数据 | ✅ 已实现 |
-| 用户级 LLM 设置 | 用户自定义 API key / base URL / model，按用户隔离、key 不回传明文 | ✅ 已实现 |
+| 多用户与认证 | 邀请码 + 邮箱验证码注册 + JWT + 角色权限 + 忘记密码邮件重置 + 按用户隔离数据 | ✅ 已实现 |
+| 注册防滥用 | 发码限频（per-IP 1/min + per-email 5/24h）+ 注册/登录/忘记密码 IP 限流 + 邮箱验证码双确认 | ✅ 已实现 |
+| 测试用户体验体系 | 免注册一键体验（影子账号）→ 触额引导注册 → 邀请码原地转正（user_id 不变、记录全保留） | ✅ 已实现 |
+| 业务配额限流 | 做题/提问/追问/判题按用户滑动窗口计量，体验账号叠加 IP 锚点 | ✅ 已实现 |
+| 用户级 LLM 设置 | 用户自定义 API key / base URL / model，按用户隔离、key 加密落库（Fernet）不回传明文 | ✅ 已实现 |
 | 邮件服务 | Brevo API：监控告警通知 + 忘记密码验证码，未配置自动降级 | ✅ 已实现 |
 | 监控告警 | 指标采集 + 13 条告警规则（rate/streak）+ 邮件通知 + 公告横幅 + 前端错误上报 | ✅ 已实现 |
 | Docker 部署 | app-db（PostgreSQL）+ Judge0 沙箱（按需启用）+ nginx 反向代理 | ✅ 已实现 |
@@ -180,6 +184,8 @@ flowchart TB
 ---
 
 ## 已知限制
+
+- **业务配额为进程内存态**：`api/quota.py` 的滑动窗口 / 计数器不落库，多副本部署各副本独立计数（额度按副本数放大）；与 `_generation_progress`、JWT 密钥文件同属多副本待办。单实例部署无影响。
 
 - **用户画像（v2）尚未持久化**：存画像的 `store` 当前是 `InMemoryStore`，**进程重启即丢**。`graph/graph.py::compile_graph()` 已给 `checkpointer` 配 `PostgresSaver`（2026-09-07 迁移后，会话状态随业务库统一落 PostgreSQL）。换 `PostgresStore` / RedisStore 对业务代码零改动（LG 的 `store.list/put/get` 接口统一），但尚未实施。
 
@@ -215,10 +221,12 @@ code-tutor-agent/
 │   └── code_tutor_agent/
 │       ├── api/           # FastAPI 入口
 │       │   ├── main.py        # app 装配 + /health + lifespan（bootstrap admin / 监控 watch loop）
-│       │   ├── auth.py        # 注册/登录/JWT/忘记密码 + 依赖（get_current_user / require_admin）
-│       │   ├── email.py       # Brevo 邮件发送（告警 / 忘记密码验证码）
+│       │   ├── auth.py        # 注册(邀请码+邮箱码)/登录/JWT/体验账号 trial+claim/忘记密码 + 限流 + 依赖
+│       │   ├── quota.py       # 业务配额限流（滑动窗口 + 生命周期计数；用户维度 + 体验账号 IP 锚点）
+│       │   ├── email.py       # mcp-hub 优先 / Brevo 兜底（告警 / 忘记密码 / 注册验证码）
 │       │   ├── logging_config.py / deps.py / serializers.py / run.py
 │       │   └── routers/       # session / chat / run / problems / admin / token / settings / monitoring
+│       ├── security/      # secret_crypto.py：用户 API key Fernet 加密落库（enc:: 前缀，密钥派生自 JWT_SECRET）
 │       ├── db/            # 数据库层（PostgreSQL）
 │       │   ├── pg_compat.py   # 兼容外观：?→%s、Row 双索引、RETURNING 捕 lastrowid、psycopg_pool
 │       │   ├── database.py    # 表结构 + 业务 SQL
@@ -248,8 +256,8 @@ code-tutor-agent/
 │       ├── progress.py    # 进度流（SSE）
 │       ├── topics.py      # 知识点 / 标签（32 个 Tag）
 │       └── config.py
-├── frontend/              # React 19 + Vite 6 + TypeScript SPA（登录/注册 + 主应用）
-│   └── src/components/    # MainLayout / CodeEditor / 导师对话面板 / AdminPanel(六维雷达) / CostCenter / 轨迹分析
+├── frontend/              # React 19 + Vite 6 + TypeScript SPA（登录/注册/体验转正 + 主应用）
+│   └── src/components/    # MainLayout / CodeEditor / 导师对话面板 / GuestWelcome(免注册体验) / WelcomeScreen(体验横幅+转正) / AuthModal / SettingsPanel / AdminPanel(六维雷达) / CostCenter / 轨迹分析
 ├── tests/
 └── docs/                  # 设计文档（本地评审用，未纳入 git 追踪）
 ```
@@ -328,11 +336,15 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 4. API 端点
 
-除 `/health`、`/auth/*`、`GET /announcements`、`POST /client/errors` 外，所有端点都要求 `Authorization: Bearer <JWT>`；`/admin/*` 另要求管理员角色。
+除 `/health`、`POST /auth/login|register|trial|claim|forgot-password|reset-password|send-register-code`、`GET /auth/public-invite`、`GET /announcements`、`POST /client/errors` 外，所有端点都要求 `Authorization: Bearer <JWT>`；`/admin/*` 另要求管理员角色。
 
 ```
 # ── 认证（多用户）──
-POST   /auth/register                        → 邮箱注册（开放注册，角色 user）
+POST   /auth/register                        → 邀请码 + 邮箱验证码注册（邮件未配置时降级为仅邀请码，角色 user）
+POST   /auth/send-register-code              → 发送注册邮箱验证码（per-IP 1/min + per-email 5/24h 限频）
+GET    /auth/public-invite                   → 注册页拉取注册配置（公开邀请码预填 + 是否需邮箱验证码，免登录）
+POST   /auth/trial                           → 免注册一键体验（role=test 影子账号，per-IP 限速）
+POST   /auth/claim                           → 体验账号原地转正（邀请码 + 邮箱验证码，user_id 不变、记录全保留）
 POST   /auth/login                           → 登录，返回 JWT（默认 7 天有效）
 GET    /auth/me                              → 当前用户信息
 GET    /auth/me/profile                      → 个人画像（v1 整体熟练度）
@@ -371,6 +383,7 @@ GET    /admin/alerts                         → 告警历史
 POST   /admin/alerts/test                    → 发测试告警邮件验证链路
 GET/POST /admin/announcements                → 公告查询 / 发布
 POST   /admin/announcements/{id}/disable     → 下线公告
+GET/POST /admin/invites                      → 邀请码查询 / 生成（额度、有效期、是否公开预填）
 GET    /health                               → 健康检查
 ```
 
@@ -390,7 +403,7 @@ docker compose -f docker/docker-compose.yml up -d --build
 
 # 3. 验证
 curl http://localhost:8765/health
-# 前端访问 http://localhost:3000（首次使用先注册账号；管理员由 ADMIN_EMAIL/ADMIN_PASSWORD 启动引导创建）
+# 前端访问 http://localhost:3000（可免注册一键体验；正式注册走邀请码 + 邮箱验证码；管理员由 CTA_ADMIN_EMAIL/CTA_ADMIN_PASSWORD 启动引导创建）
 ```
 
 ### 生产模式（nginx 反向代理）
@@ -411,13 +424,21 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 | `CTA_PG_PASSWORD` | 否 | `code_tutor` | app-db 数据库密码（compose 内同步注入 DATABASE_URL） |
 | `JWT_SECRET` | 否 | 首次生成后持久化到 `data/db/.jwt_secret` | JWT 签名密钥；**多副本部署必须统一配置**（或共享该文件） |
 | `JWT_EXPIRE_DAYS` | 否 | `7` | JWT 有效期天数 |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | — | 启动时引导创建管理员账号（`ensure_bootstrap_admin`） |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | — | ⚠️ 旧变量名（历史遗留，勿用）。引导管理员认准下面的 `CTA_ADMIN_*` |
+| `CTA_ADMIN_EMAIL` / `CTA_ADMIN_PASSWORD` | 否 | — | 启动时引导创建管理员账号（`ensure_bootstrap_admin`，缺失则不创建） |
+| `CTA_ALLOW_CUSTOM_LLM` | 否 | `0` | 用户自定义 LLM 总开关（0=禁止用户自带 key，settings 相关端点 403；1=放开） |
+| `CTA_QUOTA_PROBLEM_USER` / `_IP` | 否 | `5` / `5` | 做题配额：每用户滚动 1h/24h 双窗口各 5 题；IP 维度仅对体验账号生效（≤0 关闭该项） |
+| `CTA_QUOTA_CHAT_USER` / `_IP` | 否 | `20` / `20` | 每题导师提问配额（IP 维度仅对体验账号生效） |
+| `CTA_QUOTA_TRACE_USER` / `_IP` | 否 | `20` / `20` | 每题轨迹追问配额（IP 维度仅对体验账号生效） |
+| `CTA_QUOTA_SUBMIT_USER` / `_WINDOW` | 否 | `20` / `1200` | 判题 submit/run 限频（不豁免自带 key 用户） |
+| `CTA_RESET_MAX_ATTEMPTS` | 否 | `5` | 同一邮箱验证码错误达上限即作废，需重新申请 |
+| `CTA_TRUST_PROXY_HEADERS` | 否 | `0` | 是否信任反代覆写的 X-Forwarded-For（XFF 可伪造，默认关闭）。**Docker/nginx 部署必须置 1**，否则 IP 限流/体验账号 IP 锚点全部按 nginx 的 IP 计数（应用端口不对公网暴露时开启是安全的） |
 | `MCP_HUB_URL` | 否 | `http://127.0.0.1:8080/mcp` | mcp-hub 端点（邮件统一通道 + 联网搜索默认端点） |
 | `MCP_HUB_TOKEN` | 否 | — | mcp-hub 的 Bearer token；未配置则邮件通道自动降级、导师无联网搜索 |
 | `SEARCH_MCP_URL` / `SEARCH_MCP_TOKEN` | 否 | 复用 `MCP_HUB_*` | 搜索独立覆盖（搜索 MCP 与 hub 分开部署时才需要） |
 | `SEARCH_MCP_TOOL_NAME` | 否 | `web_search` | 要调用的搜索工具名（对接非默认命名的搜索 MCP 时改这里） |
 | `SEARCH_MCP_TIMEOUT_SECONDS` | 否 | `20` | 搜索单次调用超时秒数 |
-| `CTA_ALERT_EMAIL_TO` | 否 | `ADMIN_EMAIL` | 告警收件人（逗号分隔多个） |
+| `CTA_ALERT_EMAIL_TO` | 否 | `CTA_ADMIN_EMAIL` | 告警收件人（逗号分隔多个） |
 | `JUDGE0_URL` | 否 | `http://localhost:2358` | Judge0 沙箱地址（设为 `http://judge0:2358` 由 compose 自动注入） |
 | `JUDGE_BACKEND` | 否 | `self` | 判题后端切换：`self`（本地 subprocess）/ `judge0` |
 | `CORS_ORIGINS` | 否 | `http://localhost:3000,...` | 前端跨域来源 |
@@ -427,7 +448,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 - **app-db**：PostgreSQL 16 主库（业务数据 + LangGraph checkpoint），数据卷 `app_postgres_data`，带 `pg_isready` 健康检查
 - **backend**：FastAPI + uvicorn，端口 8765，挂载 `src/`（开发模式热重载）和 `data/`，`depends_on` app-db 健康后启动
-- **frontend**：Nginx 静态服务，端口 3000，代理 `/session/`、`/problems`、`/admin/`、`/health` 到后端（SSE 路径关闭缓冲）
+- **frontend**：Nginx 静态服务，端口 3000，代理全部 API 前缀（`/auth` / `/session` / `/problems` / `/admin/` / `/settings` / `/announcements` / `/client` / `/health` 等）到后端（SSE 路径关闭缓冲；`/auth` 未代理会被 SPA 回退吞成 index.html）。多用户限流按真实客户端 IP 计数需置 `CTA_TRUST_PROXY_HEADERS=1`（nginx 已覆写 XFF，应用端口不直接暴露公网）
 - **judge0**：判题沙箱，含 PostgreSQL + Redis，需要 `privileged` 模式
 
 ### 移除 skill-engine
@@ -474,12 +495,30 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 
 ### 多用户：JWT 认证 + 按用户隔离
 
-- **注册/登录**：邮箱密码开放注册（角色一律 `user`），密码哈希 PBKDF2-HMAC-SHA256（390k 迭代，OWASP 推荐），JWT 用 PyJWT HS256（默认 7 天，`JWT_EXPIRE_DAYS` 可调），零新增重依赖。
+- **注册/登录**：邀请码 + 邮箱验证码注册（角色一律 `user`；邮件服务未配置时降级为仅邀请码，验证码 purpose 与重置码隔离），密码哈希 PBKDF2-HMAC-SHA256（390k 迭代，OWASP 推荐），JWT 用 PyJWT HS256（默认 7 天，`JWT_EXPIRE_DAYS` 可调），零新增重依赖。注册/登录/忘记密码/发码各有独立的 IP（及部分邮箱维度）限流（`auth.py::_RATE_LIMITS`，全部可环境变量覆盖）。
 - **JWT secret**：优先 `JWT_SECRET` 环境变量；否则首次生成并持久化到 `data/db/.jwt_secret`，重启后 token 不失效。**多副本部署必须统一配置 `JWT_SECRET`**。
-- **权限即时生效**：`get_current_user` 每次请求回库查用户（role 变更/禁用即时生效，不只信 token claims）；`/admin/*` 由 `require_admin` 守门；管理员由启动引导 `ensure_bootstrap_admin`（`ADMIN_EMAIL` / `ADMIN_PASSWORD`）创建。
+- **权限即时生效**：`get_current_user` 每次请求回库查用户（role 变更/禁用即时生效，不只信 token claims）；`/admin/*` 由 `require_admin` 守门；管理员由启动引导 `ensure_bootstrap_admin`（`CTA_ADMIN_EMAIL` / `CTA_ADMIN_PASSWORD`，缺失则不创建）创建。
 - **隔离口径**：profiles / session_activity / submissions / token_usage / user_settings 均按 `user_id` 隔离；题库（problems）保持全局共享。
-- **用户级 LLM 设置**：用户可自带 API key / base URL / model（`/settings/me`），完整 key 永不回传前端（GET 只回打码形式），生效路径是请求中间件解出 user_id → ContextVar 覆盖 `config.get_llm()`，默认模式继续走服务器 `.env`。
-- **忘记密码**：邮件验证码重置（依赖 Brevo）；未配置邮件时降级为管理员重置。
+- **用户级 LLM 设置**：用户可自带 API key / base URL / model（`/settings/me`），完整 key 永不回传前端（GET 只回打码形式），落库经 Fernet 加密（`security/secret_crypto.py`，密文带 `enc::` 前缀，存量明文在下次保存时自动加密），生效路径是请求中间件解出 user_id → ContextVar 覆盖 `config.get_llm()`，默认模式继续走服务器 `.env`。自定义 LLM 总开关 `CTA_ALLOW_CUSTOM_LLM`（默认 0=关闭，置 1 放开）；base_url 有 SSRF 校验（开发档拦 metadata、生产档拦私网/环回）。
+- **忘记密码**：邮件验证码重置（依赖 Brevo / mcp-hub）；未配置邮件时降级为管理员重置。
+
+### 注册转化漏斗：免注册体验 → 触额引导 → 原地转正
+
+面向新访客的三段式设计，兼顾「零门槛试用」与「防滥用」：
+
+- **免注册一键体验**：落地页「免注册直接体验」按钮调 `POST /auth/trial` 创建影子账号（`role='test'`，占位邮箱 + 随机密码，不可登录），per-IP 建号限速（默认 20 次/小时）。体验账号与正式账号**做题/提问配额相同**，且不能自定义 LLM 配置（403）。
+- **触额即转化钩子**：体验账号触额时 429 文案不再是冷冰冰的报错，而是「注册正式账号即可继续练习，你在这里做过的题和记录会完整保留」；前端在体验模式下常驻「🧪 体验模式」横幅 + 一键唤起注册弹窗。
+- **原地转正**：注册弹窗走 `POST /auth/claim`（邀请码 + 邮箱验证码 + 密码），只更新邮箱/密码/角色，**user_id 不变**——体验期间做过的题、提交记录、画像零迁移全保留；转正成功清空该 uid 的配额桶重新开闸。仅 `role='test'` 可转正（防重复 claim），邮箱冲突 409。
+- **为什么体验账号要叠 IP 维度**：清 localStorage 即换新身份，纯用户维度挡不住；IP 是**不可自选的锚**，同 IP 换 uid 仍受限。但 IP 维度**仅对体验账号生效**——注册用户纯用户维度，校园网/NAT 多人同公网 IP 不互相误杀（误杀变转化）。
+
+### 业务配额限流：用户维度为主，IP 仅锚体验账号
+
+`api/quota.py` 的进程内限流（滑动窗口 + 生命周期计数），超限 429 + 友好文案：
+
+- **四个计量点**：开始做新题（滚动 1h + 24h 双窗口）、每题导师提问、每题轨迹追问、判题 submit/run 限频（与 LLM 成本不同源，不豁免自带 key 用户）。
+- **维度选择是刻意设计**：做题/提问/追问按**用户维度**计量（自带 key 用户豁免 LLM 类配额），IP 维度仅对体验账号生效（见上节）；判题限频纯用户维度。
+- 阈值全部环境变量可调（`CTA_QUOTA_*`，≤0 关闭该项），默认：做题 5 题/窗口、提问/追问 20 次/题、判题 20 次/20 分钟。
+- ⚠️ 配额状态在**进程内存**中：单实例部署没问题，多副本部署各副本独立计数（等于额度按副本数放大），与 `_generation_progress` 同属多副本待办。
 
 ### 监控告警：指标 → 规则 → 邮件 + 公告横幅
 

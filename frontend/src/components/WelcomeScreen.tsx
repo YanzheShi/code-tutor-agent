@@ -2,6 +2,7 @@ import { isAdmin } from '../api/auth';
 import { apiFetch } from '../api/client';
 import { useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
+import AuthModal from './AuthModal';
 
 const BASE = API_BASE;
 
@@ -322,6 +323,9 @@ export default function WelcomeScreen({
   const [problems, setProblems] = useState<ProblemBrief[]>([]);
   const [problemsLoading, setProblemsLoading] = useState(false);
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  // 体验账号（测试用户）：顶部提示条 + 转正注册弹窗（2026-09-10 测试用户体系）
+  const isTrial = user?.role === 'test';
+  const [claimOpen, setClaimOpen] = useState(false);
 
   useEffect(() => {
     if (tab === 'existing') {
@@ -377,6 +381,25 @@ export default function WelcomeScreen({
           )}
         </div>
 
+        {/* 体验账号提示条（测试用户转化钩子：注册=原地转正，记录保留） */}
+        {isTrial && (
+          <div className="mt-4 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-ct-warn/40 bg-ct-warn-bg px-4 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-ct-text">🧪 体验模式</p>
+              <p className="truncate text-xs text-ct-muted">
+                做题额度与正式账号相同；注册后额度重新开启、做题记录完整保留
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setClaimOpen(true)}
+              className="shrink-0 rounded-lg bg-ct-accent px-3 py-1.5 text-xs font-medium text-white transition hover:opacity-90"
+            >
+              注册正式账号
+            </button>
+          </div>
+        )}
+
         {/* 标签切换（固定，切换 tab 不漂移） */}
         <div className="mt-5 flex shrink-0 gap-1 rounded-lg bg-ct-input p-1">
           {tabs.map(t => (
@@ -395,8 +418,7 @@ export default function WelcomeScreen({
         </div>
 
         {/* 内容区：固定卡片高度内滚动，矮内容居中、高内容滚动 */}
-        <div className="mt-5 flex-1 overflow-y-auto">
-          {/* ── 从题库选 ── */}
+        <div className="mt-5 flex-1 overflow-y-auto">          {/* ── 从题库选 ── */}
           {tab === 'existing' && (
             <section className="flex h-full flex-col">
               <h2 className="mb-3 shrink-0 text-sm font-semibold text-ct-text">已有题目</h2>
@@ -456,6 +478,14 @@ export default function WelcomeScreen({
           {tab === 'subs' && <MySubmissionsView />}
         </div>
       </div>
+
+      {/* 体验账号转正注册弹窗（原地升级，成功后整页刷新以新身份初始化） */}
+      <AuthModal
+        open={claimOpen}
+        onClose={() => setClaimOpen(false)}
+        onLoggedIn={() => window.location.reload()}
+        claimMode
+      />
     </div>
   );
 }

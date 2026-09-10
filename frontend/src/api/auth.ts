@@ -77,6 +77,7 @@ export async function register(
   password: string,
   confirmPassword: string,
   inviteCode: string,
+  emailCode: string = '',
 ): Promise<AuthUser> {
   const r = await authFetch(`${API_BASE}/auth/register`, {
     method: 'POST',
@@ -86,6 +87,7 @@ export async function register(
       password,
       confirm_password: confirmPassword,
       invite_code: inviteCode.trim().toUpperCase(),
+      email_code: emailCode.trim(),
     }),
   });
   const data = await r.json().catch(() => ({}));
@@ -94,17 +96,82 @@ export async function register(
   return data.user;
 }
 
-/** 注册页免登录拉取当前公开邀请码；无公开码时返回 { enabled: false }。 */
-export async function fetchPublicInvite(): Promise<{ enabled: boolean; invite_code?: string }> {
+/** 一键免注册体验：创建测试用户（role='test'）并登录，做题记录挂在本地凭证上。 */
+export async function createTrialUser(): Promise<AuthUser> {
+  const r = await authFetch(`${API_BASE}/auth/trial`, { method: 'POST' });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.detail || '体验创建失败，请稍后再试');
+  setAuth(data.token, data.user);
+  return data.user;
+}
+
+/**
+ * 测试用户转正：在当前体验账号上补邮箱/密码/邀请码（原地升级，user_id 不变，
+ * 做题记录全保留）。成功后用返回的新 token 覆盖本地凭证（role 已变为 user）。
+ */
+export async function claimAccount(
+  email: string,
+  password: string,
+  confirmPassword: string,
+  inviteCode: string,
+  emailCode: string = '',
+): Promise<AuthUser> {
+  const auth = getStoredAuth();
+  if (!auth) throw new Error('请先进入体验模式');
+  const r = await authFetch(`${API_BASE}/auth/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auth.token}` },
+    body: JSON.stringify({
+      email,
+      password,
+      confirm_password: confirmPassword,
+      invite_code: inviteCode.trim().toUpperCase(),
+      email_code: emailCode.trim(),
+    }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.detail || '注册失败');
+  setAuth(data.token, data.user);
+  return data.user;
+}
+
+/** 注册页免登录拉取注册配置（公开邀请码 + 是否需邮箱验证码）。 */
+export async function fetchPublicInvite(): Promise<{
+  enabled: boolean;
+  invite_code?: string;
+  email_verification: boolean;
+}> {
   try {
     const r = await authFetch(`${API_BASE}/auth/public-invite`, { method: 'GET' });
-    if (!r.ok) return { enabled: false };
+    if (!r.ok) return { enabled: false, email_verification: false };
     const data = await r.json().catch(() => ({}));
-    return data?.enabled ? { enabled: true, invite_code: data.invite_code } : { enabled: false };
+    return {
+      enabled: !!data?.enabled,
+      invite_code: data?.enabled ? data.invite_code : undefined,
+      email_verification: !!data?.email_verification,
+    };
   } catch {
     // 网络失败：回退为手动输入，不打断注册流程
-    return { enabled: false };
+    return { enabled: false, email_verification: false };
   }
+}
+
+/** 注册邮箱验证码下发（delivered=false + email_verification=false 表示邮件通道未配置）。 */
+export async function sendRegisterCode(
+  email: string,
+): Promise<{ delivered: boolean; email_verification: boolean; message: string }> {
+  const r = await authFetch(`${API_BASE}/auth/send-register-code`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim() }),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.detail || '验证码发送失败，请稍后再试');
+  return {
+    delivered: !!data.delivered,
+    email_verification: data.email_verification !== false,
+    message: data.message || '',
+  };
 }
 
 /** 自助改密（验证旧密码）。 */

@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react';
-import { forgotPassword, login, register, resetPassword, fetchPublicInvite } from '../api/auth';
+import { useEffect, useRef, useState } from 'react';
+import {
+  claimAccount, forgotPassword, login, register, resetPassword,
+  fetchPublicInvite, sendRegisterCode,
+} from '../api/auth';
 
 /** 注册条款全文（「服务条款」弹窗内容；用户要求默认勾选同意）。 */
 const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以 Beta 提供，开源于 https://github.com/YanzheShi/code-tutor-agent 。
@@ -11,16 +14,20 @@ const TERMS_TEXT = `CodeTutor Agent 由独立开发者（GitHub @YanzheShi）以
 /** 登录/注册/忘记密码弹窗（访客主页改造：从 LoginScreen 抽取的表单逻辑 + 弹窗壳）。
  *
  * - 访客在主页点「开始使用 / 登录」时弹出，不整页跳转
- * - 注册需要邀请码（admin 面板生成，额度内有效）
- * - 忘记密码三步流：填邮箱 → 收验证码（Brevo 未配置时提示找管理员）→ 验证码 + 新密码重置
+ * - 注册 = 邀请码 +（邮件通道可用时）邮箱验证码双确认
+ * - claimMode：体验账号（测试用户）转正注册——提交走 /auth/claim 原地升级，
+ *   user_id 不变、做题记录全保留（2026-09-10 测试用户体系）
+ * - 忘记密码三步流：填邮箱 → 收验证码（邮件未配置时提示找管理员）→ 验证码 + 新密码重置
  * - 遮罩点击 / Esc / 右上角 × 均可关闭；登录或注册成功回调 onLoggedIn（由调用方决定后续，如整页刷新）
  */
-export default function AuthModal({ open, onClose, onLoggedIn }: {
+export default function AuthModal({ open, onClose, onLoggedIn, claimMode = false }: {
   open: boolean;
   onClose: () => void;
   onLoggedIn: () => void;
+  /** 体验账号转正模式：弹窗直接进注册表单，提交走 claim 接口。 */
+  claimMode?: boolean;
 }) {
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(claimMode ? 'register' : 'login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -33,6 +40,11 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
   // 注册条款：默认勾选同意；「服务条款」点开可查看全文
   const [agreed, setAgreed] = useState(true);
   const [showTerms, setShowTerms] = useState(false);
+  // 注册邮箱验证码（2026-09-10）：邮件通道可用时注册需「邀请码 + 邮箱码」双确认
+  const [emailVerification, setEmailVerification] = useState(false);
+  const [emailCode, setEmailCode] = useState('');
+  const [sendCooldown, setSendCooldown] = useState(0); // 剩余秒数（60s 倒计时，与服务端 per-IP 1/min 对齐）
+  const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // 忘记密码流程状态
   const [codeSent, setCodeSent] = useState(false);
   const [resetCode, setResetCode] = useState('');
@@ -45,17 +57,37 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [open, showTerms, onClose]);
 
-  // 进入注册模式即拉取公开邀请码并预填（admin 在面板标记的码免手填）
+  // 60s 发送倒计时（纯 UX；真正的限频锚点在服务端 per-IP 1/min）
+  useEffect(() => {
+    if (sendCooldown <= 0) return;
+    cooldownTimer.current = setInterval(() => {
+      setSendCooldown((s) => (s <= 1 ? 0 : s - 1));
+    }, 1000);
+    return () => {
+      if (cooldownTimer.current) clearInterval(cooldownTimer.current);
+      cooldownTimer.current = null;
+    };
+  }, [sendCooldown > 0]);
+
+  // claim 模式：弹窗打开即进注册表单（体验账号转正）
+  useEffect(() => {
+    if (open && claimMode) setMode('register');
+  }, [open, claimMode]);
+
+  // 进入注册模式即拉取公开邀请码并预填（admin 在面板标记的码免手填）+ 邮箱验证开关
   useEffect(() => {
     if (!open || mode !== 'register') return;
     let cancelled = false;
     setPublicInvite(null);
+    setEmailCode('');
+    setSendCooldown(0);
     fetchPublicInvite().then((r) => {
       if (cancelled) return;
       if (r.enabled && r.invite_code) {
         setPublicInvite(r.invite_code);
         setInviteCode(r.invite_code);
       }
+      setEmailVerification(r.email_verification);
     });
     return () => { cancelled = true; };
   }, [open, mode]);
@@ -65,6 +97,7 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
     password.length >= (mode === 'register' ? 8 : 1) &&
     (mode !== 'register' || (confirmPassword.length >= 8 && confirmPassword === password)) &&
     (mode !== 'register' || inviteCode.trim().length >= 4) &&
+    (mode !== 'register' || !emailVerification || emailCode.trim().length === 6) &&
     (mode !== 'register' || agreed) &&
     !busy;
 
@@ -73,6 +106,28 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
     setError('');
     setNotice('');
     setCodeSent(false);
+  };
+
+  // 注册验证码下发：前端 60s 倒计时是 UX，服务端 per-IP 1/min 才是硬限频
+  const handleSendRegisterCode = async () => {
+    if (!email.includes('@') || sendCooldown > 0 || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await sendRegisterCode(email.trim());
+      if (!r.email_verification) {
+        // 邮件通道未配置：注册无需验证码，藏起发码 UI
+        setEmailVerification(false);
+        setNotice(r.message || '邮件服务未配置，注册无需邮箱验证码。');
+        return;
+      }
+      setNotice(r.message || '验证码已发送，请查收（含垃圾箱）。');
+      setSendCooldown(60);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '验证码发送失败，请重试');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const handleForgotRequest = async () => {
@@ -115,12 +170,15 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
     try {
       if (mode === 'login') {
         await login(email.trim(), password);
+      } else if (claimMode) {
+        // 体验账号转正：原地升级（user_id 不变），成功后新 token 覆盖本地凭证
+        await claimAccount(email.trim(), password, confirmPassword, inviteCode, emailCode);
       } else {
         if (confirmPassword !== password) {
           setError('两次输入的密码不一致');
           return;
         }
-        await register(email.trim(), password, confirmPassword, inviteCode);
+        await register(email.trim(), password, confirmPassword, inviteCode, emailCode);
       }
       onLoggedIn();
     } catch (err) {
@@ -154,11 +212,15 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
         </button>
 
         <h2 className="text-center text-xl font-medium text-ct-text">
-          {mode === 'login' ? '登录 Code Tutor' : mode === 'register' ? '注册 Code Tutor' : '找回密码'}
+          {mode === 'login' ? '登录 Code Tutor'
+            : mode === 'register' ? (claimMode ? '注册正式账号' : '注册 Code Tutor')
+            : '找回密码'}
         </h2>
         <p className="mt-2 text-center text-sm text-ct-muted">
           {mode === 'login' && '用邮箱继续你的算法练习'}
-          {mode === 'register' && '注册需要邀请码，可向管理员获取'}
+          {mode === 'register' && (claimMode
+            ? '注册后体验额度重新开启，你的做题记录会完整保留'
+            : '注册需要邀请码，可向管理员获取')}
           {mode === 'forgot' && '输入注册邮箱，按提示重置密码'}
         </p>
 
@@ -176,6 +238,31 @@ export default function AuthModal({ open, onClose, onLoggedIn }: {
                 autoComplete="email"
               />
             </div>
+            {mode === 'register' && emailVerification && (
+              <div>
+                <label className="mb-1 block text-sm text-ct-muted">邮箱验证码</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    required
+                    value={emailCode}
+                    onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="6 位数字"
+                    className={`${inputCls} flex-1 font-mono tracking-widest`}
+                    autoComplete="one-time-code"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSendRegisterCode}
+                    disabled={!email.includes('@') || sendCooldown > 0 || busy}
+                    className="shrink-0 rounded-lg border border-ct-border bg-ct-surface px-3 py-2 text-sm text-ct-text transition hover:bg-ct-hover disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {sendCooldown > 0 ? `${sendCooldown}s 后重发` : '发送验证码'}
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-ct-muted">验证码 15 分钟内有效，请查收邮箱（含垃圾箱）</p>
+              </div>
+            )}
             {mode === 'register' && (
               <div>
                 <label className="mb-1 block text-sm text-ct-muted">邀请码</label>

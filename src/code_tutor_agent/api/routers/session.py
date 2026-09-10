@@ -7,7 +7,7 @@ import logging
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from langchain_core.tracers.context import collect_runs
 from langgraph.types import Command
@@ -137,7 +137,7 @@ async def create_session(
     # 计 1 次做题；超限 429 + 友好文案（自带 key 用户豁免）
     from code_tutor_agent.api.quota import check_problem_start
 
-    check_problem_start(request, uid)
+    check_problem_start(request, uid, is_test=current.get("role") == "test")
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
@@ -563,7 +563,8 @@ async def analyze_trace_endpoint(
             if problem_meta is not None
             else None
         ) or body.problem_id or "default"
-        check_trace_followup(request, user_key(current), _trace_pid)
+        check_trace_followup(request, user_key(current), _trace_pid,
+                             is_test=current.get("role") == "test")
     try:
         if body.message:
             reply = continue_analysis(sid, body.problem_id, body.message)
@@ -597,7 +598,8 @@ async def analyze_trace_stream_endpoint(
     # 追问配额（F-04）：流式追问与非流式同口径（problem_id 用 body 指定值）
     from code_tutor_agent.api.quota import check_trace_followup
 
-    check_trace_followup(request, user_key(current), body.problem_id or "default")
+    check_trace_followup(request, user_key(current), body.problem_id or "default",
+                         is_test=current.get("role") == "test")
     from code_tutor_agent.trace.agent import continue_analysis_stream
     return StreamingResponse(
         continue_analysis_stream(sid, body.problem_id, body.message),
@@ -815,7 +817,7 @@ async def create_session_with_existing(
     # 做题配额（F-04）：指定题进入 = 立即绑题，计 1 次做题
     from code_tutor_agent.api.quota import check_problem_start
 
-    check_problem_start(request, _uid)
+    check_problem_start(request, _uid, is_test=current.get("role") == "test")
     graph = get_graph()
 
     full = get_problem_by_id(problem_id)

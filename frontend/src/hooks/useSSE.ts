@@ -1,4 +1,4 @@
-import { apiFetch } from '../api/client';
+import { apiFetch, parseApiError } from '../api/client';
 /** SSE 流式聊天读取 hook — 消除 App.tsx 中 3 处重复的流式读取代码。 */
 import { useCallback } from 'react';
 import { API_BASE } from '../api/config';
@@ -34,7 +34,10 @@ export function useSSE() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, ...(code != null && code.trim() ? { code } : {}) }),
     });
-    if (!resp.ok || !resp.body) return false;
+    // 非 200：抛 ApiError（含 FastAPI detail）——429 配额文案（如体验账号转化提示）
+    // 必须透传到对话流，不能静默吞成 "(chat error)"（2026-09-10 测试用户体系）
+    if (!resp.ok) throw await parseApiError(resp, `chat failed: ${resp.status}`);
+    if (!resp.body) return false;
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();

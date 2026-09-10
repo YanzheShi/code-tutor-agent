@@ -76,13 +76,18 @@ class TestUpdateProblemOptimalSolution:
 def _auth_headers(client) -> dict:
     """注册一个测试用户并返回带 Bearer 的请求头（多用户改造后端点需要 JWT）。"""
     import uuid as _uuid
+    from unittest.mock import patch
 
+    from code_tutor_agent.api import email as _email
     from code_tutor_agent.db import database as _db
     _db.create_invite_code("DBERRCODE", 100000, None)  # 邀请码注册制
     email = f"dberr-{_uuid.uuid4().hex[:8]}@test.com"
-    r = client.post("/auth/register", json={"email": email, "password": "password123",
-                                            "confirm_password": "password123",
-                                            "invite_code": "DBERRCODE"})
+    # 2026-09-10 注册接入邮箱验证码（is_configured 可用时强制）；本套件只测 DB 错误态，
+    # 固定走「邮件未配置 → 仅邀请码」降级路径，避免依赖开发者 .env 是否配了 MCP_HUB。
+    with patch.object(_email, "is_configured", return_value=False):
+        r = client.post("/auth/register", json={"email": email, "password": "password123",
+                                                "confirm_password": "password123",
+                                                "invite_code": "DBERRCODE"})
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['token']}"}
 

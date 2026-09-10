@@ -198,6 +198,8 @@ async def update_settings(body: LlmSettingsBody, current: dict = Depends(get_cur
     """保存设置。custom 模式三项必填（key 可沿用旧值）；default 模式删除自定义记录。"""
     uid = current["id"]
     mode = body.mode if body.mode in ("default", "custom") else "default"
+    if mode == "custom" and current.get("role") == "test":
+        raise HTTPException(403, "体验账号不支持自定义 API key，注册正式账号后即可使用")
     if mode == "custom" and not get_allow_custom_llm():
         raise HTTPException(403, "管理员已关闭自定义 API key 功能，请使用系统默认模型")
     try:
@@ -227,6 +229,8 @@ async def test_settings(body: LlmSettingsBody, current: dict = Depends(get_curre
     from code_tutor_agent.api.auth import rate_limit
 
     rate_limit(f"llmtest:{current['id']}", 10, 3600)
+    if body.mode == "custom" and current.get("role") == "test":
+        raise HTTPException(403, "体验账号不支持自定义 API key，注册正式账号后即可使用")
     if body.mode == "custom" and not get_allow_custom_llm():
         raise HTTPException(403, "管理员已关闭自定义 API key 功能，无法测试自定义模型")
     if body.mode == "custom":

@@ -236,6 +236,11 @@ _RATE_LIMITS = {
     "forgot": ("FORGOT_RATE_LIMIT", 3, 3600),   # 次/小时/IP，默认 3
     "forgot_email": ("FORGOT_EMAIL_RATE_LIMIT", 3, 3600),  # 次/小时/邮箱，默认 3（堵「换 IP 针对同一邮箱轰炸」的 IP 限流缺口）
     "reset": ("RESET_RATE_LIMIT", 5, 3600),     # 次/小时/IP，默认 5
+    # ── 注册邮箱验证码（2026-09-10，图形验证码方案砍掉后的防轰炸双维限频）──
+    "regsnd": ("SEND_REGISTER_RATE_LIMIT", 1, 60),         # 次/分钟/IP，默认 1（前端 60s 倒计时的服务端锚点）
+    "regsnd_email": ("SEND_REGISTER_EMAIL_RATE_LIMIT", 5, 86400),  # 次/24h/邮箱，默认 5（滚动窗口，防单一邮箱被轰炸）
+    # ── 测试用户（免注册试用）建号：per-IP 限速防脚本灌表；班级/校园同 IP 批量体验场景默认给到 20/h ──
+    "trial": ("TRIAL_CREATE_RATE_LIMIT", 20, 3600),        # 次/小时/IP，默认 20
 }
 
 
@@ -278,6 +283,20 @@ class RegisterRequest(BaseModel):
     password: str = Field(min_length=8, description="密码（至少 8 位）")
     confirm_password: str = Field(min_length=8, description="确认密码（须与密码一致）")
     invite_code: str = Field(description="邀请码（admin 面板生成，额度内有效）")
+    email_code: str = Field(default="", description="邮箱验证码（邮件服务已配置时必填）")
+
+
+class SendRegisterCodeRequest(BaseModel):
+    email: str = Field(description="接收注册验证码的邮箱")
+
+
+class ClaimRequest(BaseModel):
+    """测试用户转正请求（原地升级，user_id 不变）。"""
+    email: str = Field(description="邮箱（登录账号）")
+    password: str = Field(min_length=8, description="密码（至少 8 位）")
+    confirm_password: str = Field(min_length=8, description="确认密码")
+    invite_code: str = Field(description="邀请码")
+    email_code: str = Field(default="", description="邮箱验证码（邮件服务已配置时必填）")
 
 
 class ChangePasswordRequest(BaseModel):
@@ -349,23 +368,66 @@ def _user_payload(user: dict) -> dict:
 
 @router.get("/public-invite")
 async def public_invite():
-    """注册页免登录拉取当前公开邀请码（admin 在面板标记 is_public 的码）。
+    """注册页免登录拉取注册配置（admin 在面板标记 is_public 的码 + 是否需邮箱验证码）。
 
-    返回 {"enabled": true, "invite_code": "XXXX"} 或 {"enabled": false}。
-    前端据此自动预填注册框；无公开码时前端回退为手动输入。
+    返回 {"enabled": true, "invite_code": "XXXX", "email_verification": bool} 或
+    {"enabled": false, "email_verification": bool}。
+    前端据此自动预填注册框 / 决定是否展示「发送验证码」UI；无公开码时不返回码值。
     该接口不加 IP 限流（只读、不泄露额度），但仅在确有公开码时返回码值。
     """
+    from code_tutor_agent.api import email as email_svc
     from code_tutor_agent.db.database import get_public_invite_code
 
     code = get_public_invite_code()
+    email_verification = email_svc.is_configured()
     if not code:
-        return {"enabled": False}
-    return {"enabled": True, "invite_code": code}
+        return {"enabled": False, "email_verification": email_verification}
+    return {"enabled": True, "invite_code": code, "email_verification": email_verification}
+
+
+@router.post("/send-register-code")
+async def send_register_code(body: SendRegisterCodeRequest, request: Request = None):
+    """注册邮箱验证码下发（2026-09-10：图形验证码方案砍掉，防轰炸靠双维限频）。
+
+    - per-IP 1 次/分钟：前端 60s 倒计时的服务端锚点（倒计时只是 UX，绕过前端也发不出）
+    - per-email 5 次/24h 滚动窗口：防脚本反复触发、轰炸单一邮箱
+    - 邮件通道未配置 → 返回 email_verification=False，前端降级为「仅邀请码注册」
+    验证码存哈希（purpose='register'，与忘记密码的 'reset' 码互不混用），15 分钟有效。
+    """
+    from code_tutor_agent.api import email as email_svc
+
+    if not email_svc.is_configured():
+        return {
+            "delivered": False,
+            "email_verification": False,
+            "message": "邮件服务未配置，注册无需邮箱验证码。",
+        }
+    _limited("regsnd", _client_ip(request))  # per-IP 1 次/分钟
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "邮箱格式不正确")
+    if get_user_by_email(email):
+        raise HTTPException(409, "该邮箱已注册")
+    _limited("regsnd_email", email)  # per-email 5 次/24h（在 409 之后，已注册邮箱不烧额度）
+    code = "".join(secrets.choice("23456789") for _ in range(6))  # 去掉易混 0/1
+    code_hash = hashlib.sha256((code + _get_jwt_secret()).encode("utf-8")).hexdigest()
+    expires = (datetime.now() + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    save_password_reset_code(email, code_hash, expires, purpose="register")
+    sent = email_svc.send_email(
+        email,
+        "Code Tutor 注册验证码",
+        f"您的注册验证码是：{code}\n\n15 分钟内有效。如果不是您本人操作，请忽略本邮件。",
+    )
+    return {
+        "delivered": sent,
+        "email_verification": True,
+        "message": "验证码已发送，请查收（含垃圾箱）。" if sent else "验证码发送失败，请稍后重试。",
+    }
 
 
 @router.post("/register", response_model=AuthResponse)
 async def register(body: RegisterRequest, request: Request = None):
-    """邀请码注册：无有效码不能注册（额度/有效期/停用任一不满足即拒）。
+    """邀请码 + 邮箱验证码注册（邮件服务未配置时降级为仅邀请码）。
 
     注册用户一律 role=user（管理员由启动脚本分配，见 ensure_bootstrap_admin）。
     """
@@ -382,6 +444,21 @@ async def register(body: RegisterRequest, request: Request = None):
     if get_user_by_email(email):
         raise HTTPException(409, "该邮箱已注册")
 
+    # 邮箱验证码双确认（通道可用时强制；purpose='register' 与重置码隔离）。
+    # 先验证后消费：注册失败不烧码，用户可直接重试。
+    from code_tutor_agent.api import email as email_svc
+
+    email_verification = email_svc.is_configured()
+    reg_code_hash = ""
+    if email_verification:
+        reg_code_hash = hashlib.sha256(
+            (body.email_code.strip() + _get_jwt_secret()).encode("utf-8")
+        ).hexdigest()
+        if not body.email_code.strip() or not verify_password_reset_code(
+            email, reg_code_hash, purpose="register"
+        ):
+            raise HTTPException(400, "邮箱验证码错误或已过期")
+
     # 先扣额度（原子），后建号；建号失败属极端情况，额度已扣记日志即可
     from code_tutor_agent.db.database import consume_invite_code
     if not consume_invite_code(code):
@@ -397,8 +474,92 @@ async def register(body: RegisterRequest, request: Request = None):
         raise HTTPException(500, "注册失败，请稍后重试")
 
     user = get_user_by_id(uid)
-    logger.info("user registered: id=%s email=%s (invite=%s)", uid, email, code)
+    if email_verification:
+        consume_password_reset_code(email, reg_code_hash, purpose="register")
+    logger.info("user registered: id=%s email=%s (invite=%s, email_verified=%s)",
+                uid, email, code, email_verification)
     return {"token": create_access_token(user), "user": _user_payload(user)}
+
+
+@router.post("/trial", response_model=AuthResponse)
+async def create_trial_user(request: Request = None):
+    """测试用户（免注册试用）：一键创建 role='test' 影子账号并签发 JWT。
+
+    - 占位邮箱 trial-<rand>@trial.local（满足 UNIQUE；不可登录——密码为随机值用户不知晓）
+    - 做题/提问/追问/判题配额与普通用户一致；IP 维度配额仅对测试用户生效（防清
+      localStorage 重置身份刷 LLM 成本），触额文案引导注册
+    - per-IP 建号限速（防脚本灌 user 表）；前端 JWT 存 localStorage，同浏览器复用不重复建号
+    """
+    _limited("trial", _client_ip(request))
+    rand = secrets.token_hex(6)
+    email = f"trial-{rand}@trial.local"
+    password = secrets.token_hex(16)  # 随机且不外泄：体验账号无法密码登录
+    uid = create_user(email, hash_password(password), role="test")
+    user = get_user_by_id(uid)
+    logger.info("trial user created: id=%s email=%s", uid, email)
+    return {"token": create_access_token(user), "user": _user_payload(user)}
+
+
+@router.post("/claim", response_model=AuthResponse)
+async def claim_account(body: ClaimRequest, current: dict = Depends(get_current_user),
+                        request: Request = None):
+    """测试用户原地转正：补邮箱/密码/邀请码/邮箱码，user_id 不变（历史/画像/提交全保留）。
+
+    流程：仅 role='test' 可转正 → 邮箱码校验（通道可用时）→ 消费邀请码 →
+    UPDATE users（email/password/role）→ 清空该 uid 配额桶重新开闸 → 重签 JWT。
+    转正不可逆（role='test' 行才命中 UPDATE）；成功后旧体验身份自然失效。
+    """
+    user = get_user_by_id(current["id"])
+    if not user or user["role"] != "test":
+        raise HTTPException(403, "仅体验账号需要转正，正式账号请直接登录")
+    email = body.email.strip().lower()
+    if not _EMAIL_RE.match(email):
+        raise HTTPException(400, "邮箱格式不正确")
+    if len(body.password) < 8 or body.password != body.confirm_password:
+        raise HTTPException(400, "密码至少 8 位且两次输入一致")
+    existing = get_user_by_email(email)
+    if existing and existing["id"] != user["id"]:
+        raise HTTPException(409, "该邮箱已注册")
+
+    # 邮箱码校验（与注册同一套基建，purpose='register'；先验证后消费，失败不烧码）
+    from code_tutor_agent.api import email as email_svc
+    from code_tutor_agent.db.database import claim_trial_user, consume_invite_code
+
+    email_verification = email_svc.is_configured()
+    reg_code_hash = ""
+    if email_verification:
+        reg_code_hash = hashlib.sha256(
+            (body.email_code.strip() + _get_jwt_secret()).encode("utf-8")
+        ).hexdigest()
+        if not body.email_code.strip() or not verify_password_reset_code(
+            email, reg_code_hash, purpose="register"
+        ):
+            raise HTTPException(400, "邮箱验证码错误或已过期")
+
+    # 先扣邀请码额度（原子），后转正；额度校验失败不产生任何变更
+    if not consume_invite_code(body.invite_code.strip().upper()):
+        raise HTTPException(400, "邀请码无效或已用完")
+
+    try:
+        ok = claim_trial_user(user["id"], email, hash_password(body.password))
+    except Exception:
+        raise HTTPException(409, "该邮箱已注册")
+    if not ok:
+        raise HTTPException(409, "该体验账号已转正或状态异常，请刷新后重试")
+
+    if email_verification:
+        consume_password_reset_code(email, reg_code_hash, purpose="register")
+
+    # 清空该 uid 的配额桶：转正即重新开闸（邀请码门槛保证不可反复刷）
+    try:
+        from code_tutor_agent.api.quota import reset_user
+        reset_user(str(user["id"]))
+    except Exception:
+        logger.warning("quota reset after claim failed: uid=%s", user["id"], exc_info=True)
+
+    updated = get_user_by_id(user["id"])
+    logger.info("trial user claimed: id=%s email=%s", user["id"], email)
+    return {"token": create_access_token(updated), "user": _user_payload(updated)}
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -473,6 +634,9 @@ async def forgot_password(body: ForgotPasswordRequest, request: Request):
     user = get_user_by_email(email)
     if not user:
         return generic  # 不泄露邮箱是否存在
+    if user["role"] == "test":
+        # 体验账号邮箱是 trial-xxx@trial.local 占位符，无处发信；统一措辞引导注册/联系管理员
+        return generic
 
     code = "".join(secrets.choice("23456789") for _ in range(6))  # 去掉易混 0/1
     code_hash = hashlib.sha256((code + _get_jwt_secret()).encode("utf-8")).hexdigest()

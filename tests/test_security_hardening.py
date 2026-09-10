@@ -52,12 +52,24 @@ def test_problem_start_quota_blocks_after_limit(quota_on, monkeypatch):
 
 
 def test_problem_start_quota_ip_dimension(quota_on, monkeypatch):
+    """IP 维度仅对测试用户（体验账号）生效（2026-09-10 契约变更）。
+
+    - 体验账号清 localStorage 即换新身份，IP 是不可自选的锚：同 IP 换 uid 仍受限；
+    - 注册用户纯用户维度：校园网/NAT 多人同公网 IP 不再互相误杀（换 uid 各自计）。
+    """
     monkeypatch.setenv("CTA_QUOTA_PROBLEM_USER", "0")  # 只测 IP 维度
+    # 显式恢复 IP 维度默认阈值：conftest load_dotenv 会带入 .env 的覆盖值，测试不依赖 .env 现状
+    monkeypatch.setenv("CTA_QUOTA_PROBLEM_IP", "5")
     req = _FakeReq(ip="9.9.9.9")
+    # 测试用户：同 IP 换 uid 仍受 IP 限额约束
     for _ in range(5):
-        quota_mod.check_problem_start(req, "1")
+        quota_mod.check_problem_start(req, "1", is_test=True)
     with pytest.raises(HTTPException):
-        quota_mod.check_problem_start(req, "2")  # 换用户仍受同 IP 限额约束
+        quota_mod.check_problem_start(req, "2", is_test=True)  # 换用户仍受同 IP 限额约束
+
+    # 注册用户：IP 维度不生效（换 uid 各自独立，同 IP 不互相影响）
+    for uid in ("11", "12", "13"):
+        quota_mod.check_problem_start(req, uid, is_test=False)  # 不抛 = 通过
 
 
 def test_problem_start_quota_rolling_window_recovers(quota_on, monkeypatch):
