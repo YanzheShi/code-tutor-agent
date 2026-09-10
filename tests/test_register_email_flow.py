@@ -2,8 +2,10 @@
 
 覆盖：
 - DB 层 purpose 隔离：register 码与 reset 码互不混用、重发作废旧码、单次消费
-- send-register-code 端点：未配邮件降级、happy path、per-IP 1/min、per-email 5/24h、
+- send-register-code 端点：未配邮件降级、happy path、per-IP 限流（阈值 SEND_REGISTER_RATE_LIMIT 可配，当前 .env=3，
+  放宽到 3 是为放行同 IP 下的多个不同用户、避免校园网/NAT 误杀正常注册）、per-email 5/24h、
   已注册邮箱 409、非法邮箱 400
+- 注：前端 AuthModal 的 60s 倒计时 UX 限制的是单个用户重复发码，与后端 per-IP 限流职责不同、各管各的
 - register 双确认：邮件服务可用时强制邮箱码（缺/错/过期/已消费均拒），
   未配置时降级为仅邀请码
 """
@@ -111,18 +113,18 @@ def test_send_code_disabled_when_email_unconfigured(client, monkeypatch):
 
 
 def test_send_code_happy_path_and_per_ip_limit(client, email_configured):
-    """正常下发；同 IP 60s 内第二次 → 429（per-IP 1/min 是前端倒计时的硬锚点）。"""
-    r = client.post("/auth/send-register-code", json={"email": "fresh@test.com"})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["delivered"] is True and body["email_verification"] is True
-    assert len(email_configured) == 1
-    assert email_configured[0][0] == "fresh@test.com"
+    """正常下发；同 IP 60s 内最多 3 次（SEND_REGISTER_RATE_LIMIT=3），第 4 次 → 429。"""
+    # 同 IP（TestClient 固定 testclient）一分钟内前 3 次放行
+    for i in range(3):
+        r = client.post("/auth/send-register-code", json={"email": "fresh@test.com"})
+        assert r.status_code == 200, f"第 {i + 1} 次不应被限"
+    assert len(email_configured) == 3
+    assert all(e == "fresh@test.com" for e, _ in email_configured)
 
-    # 同 IP（TestClient 固定 testclient）一分钟内再发 → 429
-    r2 = client.post("/auth/send-register-code", json={"email": "fresh@test.com"})
-    assert r2.status_code == 429
-    assert len(email_configured) == 1  # 限频拒绝时不发信
+    # 第 4 次 → 429（per-IP 3/min，SEND_REGISTER_RATE_LIMIT 可配）
+    r4 = client.post("/auth/send-register-code", json={"email": "fresh@test.com"})
+    assert r4.status_code == 429
+    assert len(email_configured) == 3  # 限频拒绝时不发信
 
 
 def test_send_code_per_email_daily_limit(client, email_configured, monkeypatch):
@@ -151,10 +153,16 @@ def test_send_code_rejects_registered_email(client, email_configured):
 
 
 def test_send_code_per_ip_counts_rejected_attempts(client, email_configured):
-    """per-IP 1/min 对被拒请求同样计数：409 后立刻重试 → 429（防滥用语义）。"""
+    """per-IP 3/min 对被拒请求同样计数：连续 3 次 409 后立刻重试 → 第 4 次 429（防滥用语义）。"""
     dbmod.create_user("taken2@test.com", auth_mod.hash_password("password123"))
-    assert client.post("/auth/send-register-code", json={"email": "taken2@test.com"}).status_code == 409
-    assert client.post("/auth/send-register-code", json={"email": "taken2@test.com"}).status_code == 429
+    # 被拒请求（已注册邮箱 409）同样占用 per-IP 额度：前 3 次返回 409
+    for i in range(3):
+        r = client.post("/auth/send-register-code", json={"email": "taken2@test.com"})
+        assert r.status_code == 409, f"第 {i + 1} 次应被拒(409)"
+    # 第 4 次：per-IP 桶（SEND_REGISTER_RATE_LIMIT=3）耗尽 → 429
+    r4 = client.post("/auth/send-register-code", json={"email": "taken2@test.com"})
+    assert r4.status_code == 429
+    assert len(email_configured) == 0  # 409/429 均不发信
 
 
 def test_send_code_rejects_bad_email(client, email_configured):

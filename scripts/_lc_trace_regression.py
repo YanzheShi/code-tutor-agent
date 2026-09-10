@@ -154,6 +154,7 @@ def run_one(client: TutorClient, llm: SolverLLM, url: str) -> dict:
 def main() -> None:
     urls = sys.argv[1:] or DEFAULT_URLS
     client = TutorClient(BASE)
+    client.login()
     llm = SolverLLM(
         model=os.getenv("LLM_MODEL", "deepseek-v4-flash"),
         base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),

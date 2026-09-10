@@ -124,6 +124,7 @@ class TutorClient:
         self.base = base_url.rstrip("/")
         self.timeout = timeout
         self.s = requests.Session()
+        self.token = None
 
     # ── 基础 ──
     def health(self) -> bool:
@@ -142,6 +143,26 @@ class TutorClient:
         r = self.s.get(f"{self.base}{path}", timeout=self.timeout)
         r.raise_for_status()
         return r.json()
+
+    def login(self, email: str | None = None, password: str | None = None) -> str:
+        """登录拿到 JWT，后续请求自动带 Bearer。
+
+        多用户改造（2026-09-06）后 /session 等路由统一 Bearer 鉴权，旧版 e2e
+        脚本不带 token 会被 401；这里补上登录（默认用引导管理员凭据）。
+        """
+        import os
+
+        email = email or os.getenv("CTA_ADMIN_EMAIL", "534629255@qq.com")
+        password = password or os.getenv("CTA_ADMIN_PASSWORD", "test123456")
+        r = self.s.post(
+            f"{self.base}/auth/login",
+            json={"email": email, "password": password},
+            timeout=30,
+        )
+        r.raise_for_status()
+        self.token = r.json()["token"]
+        self.s.headers.update({"Authorization": f"Bearer {self.token}"})
+        return self.token
 
     # ── 出题（generator 模式）──
     def create_session(self, topic: str | None, difficulty: str | None) -> str:
@@ -1010,6 +1031,11 @@ def main():
         sys.exit(1)
 
     client = TutorClient(args.base_url)
+    try:
+        client.login()
+    except requests.RequestException as e:
+        print(f"❌ 登录失败（e2e 需要鉴权）：{e}")
+        sys.exit(1)
     repo_root = Path(__file__).resolve().parent.parent
 
     if args.auto_start:

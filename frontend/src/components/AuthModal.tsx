@@ -43,7 +43,7 @@ export default function AuthModal({ open, onClose, onLoggedIn, claimMode = false
   // 注册邮箱验证码（2026-09-10）：邮件通道可用时注册需「邀请码 + 邮箱码」双确认
   const [emailVerification, setEmailVerification] = useState(false);
   const [emailCode, setEmailCode] = useState('');
-  const [sendCooldown, setSendCooldown] = useState(0); // 剩余秒数（60s 倒计时，与服务端 per-IP 1/min 对齐）
+  const [sendCooldown, setSendCooldown] = useState(0); // 剩余秒数（60s 倒计时 UX：限制单个用户重复发码；后端 per-IP 限流 SEND_REGISTER_RATE_LIMIT 当前 3/min 用于放行同 IP 下多个不同用户，防校园网/NAT 误杀）
   const cooldownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   // 忘记密码流程状态
   const [codeSent, setCodeSent] = useState(false);
@@ -57,7 +57,7 @@ export default function AuthModal({ open, onClose, onLoggedIn, claimMode = false
     return () => window.removeEventListener('keydown', onKey);
   }, [open, showTerms, onClose]);
 
-  // 60s 发送倒计时（纯 UX；真正的限频锚点在服务端 per-IP 1/min）
+  // 60s 发送倒计时（纯 UX：限制单个用户重复发码；后端 per-IP 限流 SEND_REGISTER_RATE_LIMIT 当前 3/min 才是对同 IP 多用户的放行闸）
   useEffect(() => {
     if (sendCooldown <= 0) return;
     cooldownTimer.current = setInterval(() => {
@@ -108,7 +108,7 @@ export default function AuthModal({ open, onClose, onLoggedIn, claimMode = false
     setCodeSent(false);
   };
 
-  // 注册验证码下发：前端 60s 倒计时是 UX，服务端 per-IP 1/min 才是硬限频
+  // 注册验证码下发：前端 60s 倒计时限制单个用户重复发码；后端 per-IP 限流 SEND_REGISTER_RATE_LIMIT 当前 3/min 用于放行同 IP 下多个不同用户（校园网/NAT 防误杀）
   const handleSendRegisterCode = async () => {
     if (!email.includes('@') || sendCooldown > 0 || busy) return;
     setBusy(true);
