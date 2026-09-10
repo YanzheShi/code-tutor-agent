@@ -354,7 +354,7 @@ export default function WelcomeScreen({
         {/* 标题（钉在卡片顶部，不随内容移动） */}
         <div className="relative shrink-0 text-center">
           <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
-          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 多维判题 · 轨迹分析 · 渐进辅导 · </p>
+          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 多维判题 · 渐进辅导 · 轨迹复盘 </p>
           {(onOpenSettings || onLogout) && (
             <div className="absolute right-0 top-0 flex gap-2">
               {onOpenSettings && (
@@ -386,8 +386,8 @@ export default function WelcomeScreen({
           <div className="mt-4 flex shrink-0 items-center justify-between gap-3 rounded-lg border border-ct-warn/40 bg-ct-warn-bg px-4 py-2.5">
             <div className="min-w-0">
               <p className="text-sm font-medium text-ct-text">🧪 体验模式</p>
-              <p className="truncate text-xs text-ct-muted">
-                体验账号与他人共享做题窗口配额，高峰时刻可能响应慢或者配额不足；注册后可自定义apikey，做题和问答无限制、同时方便查看个人做题记录和画像
+              <p className="text-xs text-ct-muted leading-relaxed">
+                体验账号与他人共享做题窗口配额，高峰时刻可能响应慢或者配额不足。注册后可自定义apikey，做题和问答无限制、同时方便查看个人做题记录和画像。
               </p>
             </div>
             <button

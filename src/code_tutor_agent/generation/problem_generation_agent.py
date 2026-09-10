@@ -327,7 +327,7 @@ class ProblemGenerationAgent:
         if mode:
             sink.event(GenEvent(
                 "progress",
-                f"🎲 本次出题采用方案 {mode} 注入（随机二选一，F=场景/G=维度）",
+                f"🎲 正在使用AI自主出题…",
             ))
         draft = self.llm.generate_problem(
             ctx.topic, ctx.difficulty, user_suffix=suffix or None)
