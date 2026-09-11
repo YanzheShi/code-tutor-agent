@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import random
 from typing import Callable
 
 from code_tutor_agent.agents.agent_problem import ProblemChannel
@@ -375,9 +376,23 @@ class ProblemGenerationAgent:
     def _pull_from_leetcode(
         self, ctx: GenerationContext, sink: ProgressSink,
     ) -> tuple[ProblemDraft | None, str]:
-        """PULL：LLM 失败后按主题+难度拉取 LeetCode 题。"""
+        """PULL：LLM 失败后按主题+难度拉取 LeetCode 题。
+
+        随机化选题：在整池里随机跳段 + 打乱返回顺序，避免每次都命中同一道题
+        （原实现 skip=0 固定排序，同 topic+difficulty 永远收敛到题号最小的那道）。
+        """
         sink.event(GenEvent("progress", "🔄 正在从 LeetCode 按主题拉题…"))
-        slugs = self.leetcode.list(ctx.topic, ctx.difficulty, limit=10)
+        # 随机跳段抽样：覆盖整池而非永远固定在最前面的 10 题；skip 越界（小主题）
+        # 会返回空，故空结果回退到 skip=0 拿首段。
+        limit = 50
+        skip = random.randint(0, 200)
+        slugs = self.leetcode.list(ctx.topic, ctx.difficulty, limit=limit, skip=skip)
+        if not slugs:
+            slugs = self.leetcode.list(ctx.topic, ctx.difficulty, limit=limit, skip=0)
+        if not slugs:
+            return None, ProblemChannel.LEETCODE_PULL.value
+        # 打乱顺序后取前 5 个候选，第一个能解析成功的即被选中 → 非确定性
+        random.shuffle(slugs)
         for slug in slugs[:5]:
             try:
                 data = self.leetcode.fetch(slug)

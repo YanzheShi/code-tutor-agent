@@ -58,11 +58,20 @@ _TOPIC_LC_SLUGS: dict[str, str] = {
 
 
 class LeetCodeGateway:
-    def list(self, topic: str, difficulty: str | None = None, limit: int = 10) -> list[str]:
-        """按主题+难度拉题，返回题目 slug 列表（排除付费题）。"""
+    def list(
+        self,
+        topic: str,
+        difficulty: str | None = None,
+        limit: int = 10,
+        skip: int = 0,
+    ) -> list[str]:
+        """按主题+难度拉题，返回题目 slug 列表（排除付费题）。
+
+        ``skip`` 支持随机跳段抽样（调用方用它做随机化选题，避免每次命中同一题）。
+        """
         slug = _TOPIC_LC_SLUGS.get(topic, "") or topic
         diff = difficulty.upper() if difficulty else None
-        result = fetch_problem_list(slug, difficulty=diff, limit=limit)
+        result = fetch_problem_list(slug, difficulty=diff, limit=limit, skip=skip)
         return [item.slug for item in result.items if not item.paid_only]
 
     def fetch(self, slug: str) -> dict:

@@ -20,6 +20,7 @@ from code_tutor_agent.generation.state import (  # noqa: E402
     GenerationContext,
     ProblemDraft,
 )
+from unittest.mock import patch  # noqa: E402
 
 
 def _make_lc_data() -> dict:
@@ -276,3 +277,25 @@ def test_pull_channel_reported_when_hit():
     assert result.ok
     assert result.channel == "leetcode_pull"
     assert result.draft.source_slug == "two-sum"
+
+
+def test_pull_uses_randomized_selection():
+    """PULL 不再永远取列表第一个 slug —— shuffle 后选中的顺序被打乱。
+
+    用确定性的「逆序」替换 random.shuffle，验证命中候选是逆序后的首个
+    （原列表最后一个），而非原列表第一个（two-sum），证明随机化已接入。
+    """
+    store = _RecordingStore()
+    agent = _build_agent(store, listing=["two-sum", "three-sum", "four-sum"])
+    ctx = GenerationContext(topic="数组", difficulty="easy")
+
+    with patch(
+        "code_tutor_agent.generation.problem_generation_agent.random.shuffle",
+        lambda x: x.reverse(),
+    ):
+        result = agent.run(ctx)
+
+    assert result.ok
+    assert result.channel == "leetcode_pull"
+    # 逆序后首个候选是 four-sum，证明不是永远取 two-sum
+    assert result.draft.source_slug == "four-sum"
