@@ -14,7 +14,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from code_tutor_agent.api.auth import get_current_user, require_admin, router as auth_router
@@ -225,6 +225,22 @@ async def health():
     except RuntimeError:
         pass
     return {"status": "ok", "graph_ready": ready}
+
+
+@app.get("/metrics")
+async def prometheus_metrics():
+    """Prometheus 抓取端点：返回标准 text/plain exposition 格式。
+
+    免鉴权（Prometheus 走独立 scrape 配置）；prometheus_client 未安装时返回 503。
+    生产环境应通过内网/独立 token 限制该端点可达性，避免泄露运营指标。
+    """
+    from code_tutor_agent.monitoring.metrics import PROMETHEUS_AVAILABLE
+
+    if not PROMETHEUS_AVAILABLE:
+        raise HTTPException(status_code=503, detail="prometheus_client 未安装")
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ── 后台会话 TTL 清理 ──

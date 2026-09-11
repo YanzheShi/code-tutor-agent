@@ -28,6 +28,8 @@ dependencies = [
     # API 层
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
+    # Prometheus 抓取端点依赖（GET /metrics 暴露标准 exposition 格式）
+    "prometheus-client>=0.20.0",
     ]
 
 [project.optional-dependencies]

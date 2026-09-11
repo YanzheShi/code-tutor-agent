@@ -17,6 +17,15 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
+# ── Prometheus 双写桥接：依赖可选，缺失时静默降级（见文件末尾 _init_prometheus_bridge）──
+try:
+    from prometheus_client import Counter, Gauge
+
+    PROMETHEUS_AVAILABLE = True
+except Exception:  # pragma: no cover - 依赖可选
+    Counter = Gauge = None
+    PROMETHEUS_AVAILABLE = False
+
 # 滑动窗口保留时长（秒）。规则最长看 10 分钟，多留 1 倍余量防边界抖动。
 _WINDOW_SECONDS = 1200.0
 # 单窗口明细上限（防内存膨胀；正常流量远达不到）
@@ -88,28 +97,32 @@ class MetricsRegistry:
                     win = Window()
                     self._windows[name] = win
             win.add(value)
+            _p_record(name, value)
         except Exception:  # pragma: no cover - 防御性
             logger.debug("[metrics] record(%s) failed (ignored)", name, exc_info=True)
 
     def record_streak(self, name: str, ok: bool) -> int:
         """连续失败计数：失败 streak+1 返回当前值；成功清零返回 0。"""
+        cur = 0
         try:
             with self._lock:
                 if ok:
                     self._streaks[name] = 0
-                    return 0
-                cur = self._streaks.get(name, 0) + 1
-                self._streaks[name] = cur
-                return cur
+                else:
+                    cur = self._streaks.get(name, 0) + 1
+                    self._streaks[name] = cur
         except Exception:  # pragma: no cover - 防御性
             logger.debug("[metrics] record_streak(%s) failed (ignored)", name, exc_info=True)
             return 0
+        _p_streak(name, cur)
+        return cur
 
     def set_gauge(self, name: str, value: float) -> None:
         """设置瞬时值（自检结果、磁盘使用率等）。"""
         try:
             with self._lock:
                 self._gauges[name] = value
+            _p_gauge(name, value)
         except Exception:  # pragma: no cover - 防御性
             logger.debug("[metrics] set_gauge(%s) failed (ignored)", name, exc_info=True)
 
@@ -189,6 +202,103 @@ def get_registry() -> MetricsRegistry:
             if _REGISTRY is None:
                 _REGISTRY = MetricsRegistry()
     return _REGISTRY
+
+
+# ── Prometheus 双写桥接（规范见对话确认：前缀 cta_，ok/fail 用 status label）──
+# 依赖缺失时静默降级，绝不抛异常（与现有 metrics 模块同原则）。
+def _init_prometheus_bridge():
+    """预创建规范命名的 Counter/Gauge 与 现有 name→metric 映射表。
+
+    返回 (counters, streaks, gauges, fallback)，依赖缺失时返回空结构。
+    """
+    if not PROMETHEUS_AVAILABLE:
+        return {}, {}, {}, None
+
+    c_graph = Counter("cta_graph_invocations_total", "LangGraph 主流程调用次数", ["status"])
+    c_http = Counter("cta_http_requests_total", "HTTP 请求总数")
+    c_http5xx = Counter("cta_http_5xx_total", "HTTP 5xx 响应数")
+    c_client_err = Counter("cta_client_errors_total", "前端上报错误数")
+    c_judge = Counter("cta_judge_invocations_total", "判题调用次数", ["status"])
+    c_llm_fo = Counter("cta_llm_failovers_total", "LLM 故障转移次数")
+    c_db_lock = Counter("cta_db_locked_total", "数据库锁等待次数")
+    c_db_slow = Counter("cta_db_slow_transactions_total", "慢事务次数")
+    c_fallback = Counter("cta_events_total", "未登记事件的兜底计数", ["event"])
+
+    counters = {
+        "graph_ok": (c_graph, {"status": "ok"}),
+        "graph_fail": (c_graph, {"status": "fail"}),
+        "http_total": (c_http, None),
+        "http_5xx": (c_http5xx, None),
+        "client_error": (c_client_err, None),
+        "judge_total": (c_judge, {"status": "ok"}),
+        "judge_error": (c_judge, {"status": "fail"}),
+        "llm_failover": (c_llm_fo, None),
+        "db_locked": (c_db_lock, None),
+        "db_slow_tx": (c_db_slow, None),
+    }
+
+    g_graph_streak = Gauge("cta_graph_fail_streak", "graph 连续失败计数")
+    g_judge_streak = Gauge("cta_judge_fail_streak", "judge 连续失败计数")
+    g_llm_streak = Gauge("cta_llm_fail_streak", "LLM 连续失败计数")
+    streaks = {
+        "graph_fail": g_graph_streak,
+        "judge_fail": g_judge_streak,
+        "llm_fail": g_llm_streak,
+    }
+
+    gauges = {
+        "db_write_ok": Gauge("cta_db_write_status", "DB 写入健康态(1=ok)"),
+        "graph_ready": Gauge("cta_graph_ready_status", "图编译就绪态(1=ok)"),
+        "token_sink_pending": Gauge("cta_token_sink_pending", "待发送 token 积压数"),
+        "disk_usage_pct": Gauge("cta_disk_usage_percent", "磁盘使用率(0-100)"),
+        "db_size_mb": Gauge("cta_db_size_mb", "数据库文件大小(MB)"),
+        "token_budget_pct": Gauge("cta_token_budget_percent", "token 预算使用率(0-100)"),
+        "self_check_ok": Gauge("cta_self_check_status", "自检健康态(1=ok)"),
+        "alerts_enabled": Gauge("cta_alerts_enabled", "告警开关(1=开)"),
+    }
+    return counters, streaks, gauges, c_fallback
+
+
+_P_COUNTERS, _P_STREAKS, _P_GAUGES, _P_FALLBACK = _init_prometheus_bridge()
+
+
+def _p_record(name: str, value: float) -> None:
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        entry = _P_COUNTERS.get(name)
+        if entry is not None:
+            counter, labels = entry
+            if labels:
+                counter.labels(**labels).inc(value)
+            else:
+                counter.inc(value)
+        elif _P_FALLBACK is not None:
+            _P_FALLBACK.labels(event=name).inc(value)
+    except Exception:  # pragma: no cover - 防御性
+        logger.debug("[metrics] prometheus record(%s) failed (ignored)", name, exc_info=True)
+
+
+def _p_streak(name: str, value: int) -> None:
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        g = _P_STREAKS.get(name)
+        if g is not None:
+            g.set(value)
+    except Exception:  # pragma: no cover - 防御性
+        logger.debug("[metrics] prometheus streak(%s) failed (ignored)", name, exc_info=True)
+
+
+def _p_gauge(name: str, value: float) -> None:
+    if not PROMETHEUS_AVAILABLE:
+        return
+    try:
+        g = _P_GAUGES.get(name)
+        if g is not None:
+            g.set(value)
+    except Exception:  # pragma: no cover - 防御性
+        logger.debug("[metrics] prometheus gauge(%s) failed (ignored)", name, exc_info=True)
 
 
 def record_graph_call(entry: str, ok: bool) -> None:
