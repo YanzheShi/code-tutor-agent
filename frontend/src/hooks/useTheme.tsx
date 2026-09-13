@@ -3,7 +3,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 type Theme = 'dark' | 'light';
 
 const ThemeContext = createContext<{ theme: Theme; toggle: () => void; setTheme: (t: Theme) => void }>({
-  theme: 'dark',
+  theme: 'light',
   toggle: () => {},
   setTheme: () => {},
 });
@@ -11,7 +11,7 @@ const ThemeContext = createContext<{ theme: Theme; toggle: () => void; setTheme:
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, setTheme] = useState<Theme>(() => {
     const saved = localStorage.getItem('theme');
-    return (saved === 'light' || saved === 'dark') ? saved : 'dark';
+    return (saved === 'light' || saved === 'dark') ? saved : 'light';
   });
 
   useEffect(() => {
