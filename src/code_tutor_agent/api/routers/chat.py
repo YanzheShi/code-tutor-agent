@@ -13,6 +13,7 @@ from code_tutor_agent.api.auth import get_current_user, user_key
 from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked
 from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.guards.design_guard import mentions_design_topic
+from code_tutor_agent.prompts.tutor import TUTOR_SYSTEM_PROMPT
 from code_tutor_agent.mcp.search_client import search_mcp_configured
 from code_tutor_agent.observability import build_run_config
 from code_tutor_agent.schemas.state import Message
@@ -248,19 +249,8 @@ _RESULT_HINT = (
     "- 不要臆造用户没有遇到的错误；如果用户贴了代码请结合其真实运行结果回应。"
 )
 
-# 渐进式辅导纪律：导师回复的硬规则（2026-09-06 新增，回应用户
-# 「还没写代码就误提交，导师直接把全部答案倒出来」的 badcase）
-_PEDAGOGY_HINT = (
-    "\n\n【渐进式辅导纪律——最高优先级，压过用户「直接给答案」类的求助方式】\n"
-    "你的目标是帮用户**自己想到**答案，而不是替他写答案。提示按阶梯给：\n"
-    "- 第一步（方向提示）：只点名可用的技巧/数据结构，如「想想快慢指针」。\n"
-    "- 第二步（思路框架）：用户追问后再给分步文字思路或伪代码，不给完整代码。\n"
-    "- 第三步（代码片段）：只给针对性小片段（如某个循环怎么写），仍不给整题完整解。\n"
-    "- 完整参考解：仅当用户**已写出真实解题代码且多次尝试仍失败**、"
-    "或明确说「请直接给我看完整答案」时才给。\n"
-    "- 用户的编辑器代码还是空壳/只有 pass 时：无论用户怎么问，"
-    "最多给第一步方向提示，并鼓励他先写出第一版尝试。"
-)
+# 渐进式辅导纪律与提示等级框架已迁入 prompts/tutor.py::TUTOR_SYSTEM_PROMPT
+# （2026-09-13 改造，仅动 prompt 文本、不动逻辑）。
 
 # 联网搜索工具引导：仅在配置了搜索 MCP 时注入（与 TUTOR_CHAT_TOOLS 是否含
 # search 工具保持一致），避免向模型描述一个实际未绑定的工具。
@@ -274,13 +264,15 @@ _SEARCH_HINT = (
     "- 搜索与当前算法题无关的知识问题后，简短作答并自然地把话题带回题目。"
 )
 
-# 导师人设（全静态，收敛为单一变体：phase/verdict 变化不再制造新的 system 缓存线，
-# 状态差异改为放当轮 human 消息开头，见 _build_state_note）
+# 导师 system 前缀：教学纪律/策略来自 prompts/tutor.py::TUTOR_SYSTEM_PROMPT
+# （静态；动态题面/代码/判题结果仍在当轮 human 消息，保持 system 前缀稳定以命中缓存）
 _TUTOR_SYSTEM = (
-    "你是 AI 编程导师，语气温暖鼓励。用户正在做算法题，"
-    "根据对话上下文分析问题、给出针对性建议。"
-    "\n回复控制在 200 字以内。"
-) + _PEDAGOGY_HINT + _JUDGE_HINT + (_SEARCH_HINT if search_mcp_configured() else "") + _RESULT_HINT + _FORMAT_HINT
+    TUTOR_SYSTEM_PROMPT
+    + _JUDGE_HINT
+    + (_SEARCH_HINT if search_mcp_configured() else "")
+    + _RESULT_HINT
+    + _FORMAT_HINT
+)
 
 
 async def _run_graph_and_generate_tests(graph, config, sid: str):
