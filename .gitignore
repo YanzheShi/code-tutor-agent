@@ -19,6 +19,8 @@ build/
 node_modules/
 # 视觉核对产物（npm run visual-check 截图输出）
 frontend/.visual-check/
+# Playwright 运行产物（曾误入库，2026-09-20 移出跟踪）
+frontend/test-results/
 
 # === 运行时数据 ===
 *.db
