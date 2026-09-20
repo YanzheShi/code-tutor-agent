@@ -8,6 +8,7 @@ import ReviewCard from './RightPanel/ReviewCard';
 import SubmissionHistory from './SubmissionHistory';
 import RunResults from './RunResults';
 import { TabButton, VerdictBadge } from './TabButton';
+import BetaBadge from './BetaBadge';
 import { useMemo } from 'react';
 import type { Message, ProblemMeta, RunResult, Submission, FailedCase } from '../types/session';
 import type { JudgeReport } from '../types/judge';
@@ -320,6 +321,7 @@ export default function MainLayout(props: MainLayoutProps) {
               <div className="flex border-b border-ct-border bg-ct-surface-secondary text-xs min-h-[34px]"
                 onDragOver={handleTabDragOver} onDrop={handleTabDrop('left')}>
                 <button onClick={onBackToWelcome} className="mr-1 rounded px-2 py-1 text-xs text-ct-muted hover:text-ct-text shrink-0" title="返回出题页">← 返回</button>
+                <BetaBadge />
                 {panelTabs.left.map(tid => (
                   <TabButton key={tid} label={TAB_LABELS[tid]} tabId={tid}
                     active={activeTabs.left === tid}

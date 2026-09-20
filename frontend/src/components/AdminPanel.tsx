@@ -1,14 +1,15 @@
 import { apiFetch } from '../api/client';
 /** Admin panel — password-protected management.
  *
- * Four sections:
+ * Five sections:
  *   题库管理 — CRUD problems
  *   成本中心 — token 用量 / 成本 / 缓存命中统计（只含内置 key 消耗）
  *   用户与邀请码 — 用户管理 / 邀请码生成停用
  *   公告横幅 — 主页横幅公告 CRUD（展示由 AnnouncementsBanner 负责）
+ *   用户反馈 — 用户提交的反馈**只读**列表（2026-09-20，无编辑/删除/状态流转）
  */
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
 
 // 成本中心含 ECharts(~300KB),懒加载独立 chunk,仅在打开该 Tab 时下载
@@ -34,7 +35,7 @@ interface AdminTestCase {
   explanation?: string; is_hidden?: boolean;
 }
 
-type AdminSection = 'questions' | 'cost' | 'users' | 'announcements';
+type AdminSection = 'questions' | 'cost' | 'users' | 'announcements' | 'feedback';
 type AdminTab = 'list' | 'view' | 'edit';
 
 const diffColorMap: Record<string, string> = {
@@ -114,6 +115,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
     { id: 'cost', label: '成本中心', icon: '💸' },
     { id: 'users', label: '用户与邀请码', icon: '👥' },
     { id: 'announcements', label: '公告横幅', icon: '📢' },
+    { id: 'feedback', label: '用户反馈', icon: '📥' },
   ];
 
   // ── Questions view (non-list) ──
@@ -203,8 +205,9 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
       {/* Top bar */}
       <div className="flex items-center justify-between border-b border-ct-border px-4 py-3">
         <div className="flex items-center gap-4">
-          <h2 className="text-sm font-bold text-ct-text">🛡️ 管理页面</h2>
-          <div className="flex gap-1 rounded bg-ct-input p-0.5">
+          <h2 className="shrink-0 text-sm font-bold text-ct-text">🛡️ 管理页面</h2>
+          {/* 5 个 section：窄屏允许换行，避免把「退出」按钮挤出可视区 */}
+          <div className="flex flex-wrap gap-1 rounded bg-ct-input p-0.5">
             {sectionItems.map(it => (
               <button key={it.id} onClick={() => setSection(it.id)}
                 className={`px-3 py-1 text-xs font-medium rounded transition ${section === it.id ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'}`}>
@@ -213,7 +216,7 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
             ))}
           </div>
         </div>
-        <button onClick={onClose} className="text-xs text-ct-muted hover:text-ct-error">退出</button>
+        <button onClick={onClose} className="shrink-0 text-xs text-ct-muted hover:text-ct-error">退出</button>
       </div>
 
       {/* Section content */}
@@ -272,6 +275,9 @@ export default function AdminPanel({ onClose }: { onClose: () => void }) {
 
       {/* 公告横幅管理 */}
       {section === 'announcements' && <AdminAnnouncementsView />}
+
+      {/* 用户反馈（只读） */}
+      {section === 'feedback' && <AdminFeedbackView />}
     </div>
   );
 }
@@ -783,6 +789,201 @@ function AdminAnnouncementsView() {
       </section>
 
       {msg && <div className="rounded-lg border border-ct-border bg-ct-bg px-3 py-2 text-sm text-ct-text">{msg}</div>}
+    </div>
+  );
+}
+
+
+/* ── 用户反馈（只读，2026-09-20）──
+ * 数据源 GET /admin/feedback（docs/feedback-feature-plan.md）。
+ * 口径：**只读** —— 无编辑 / 无删除 / 无状态流转；反馈落库即永久留档。
+ *
+ * ⚠️ 正文一律以纯文本渲染（React 默认转义）。**禁止 dangerouslySetInnerHTML**：
+ *    反馈是用户可控输入，走 HTML 注入就是存储型 XSS。
+ */
+
+interface AdminFeedbackRow {
+  id: number;
+  user_id: number | null;
+  user_email: string;
+  category: 'bug' | 'experience' | 'content' | 'other';
+  content: string;
+  contact: string | null;
+  screen: string | null;
+  problem_id: number | null;
+  session_id: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
+const FB_CATEGORY_STYLE: Record<string, string> = {
+  bug: 'bg-ct-error-bg text-ct-error',
+  experience: 'bg-ct-info-bg text-ct-info',
+  content: 'bg-ct-warn-bg text-ct-warn',
+  other: 'bg-ct-hover text-ct-muted',
+};
+const FB_CATEGORY_LABEL: Record<string, string> = {
+  bug: '问题', experience: '体验', content: '题目', other: '其他',
+};
+// 第一个是「全部」（id 为空串，请求时不带 category 参数）
+const FB_FILTERS: { id: string; label: string }[] = [
+  { id: '', label: '全部' },
+  { id: 'bug', label: '问题' },
+  { id: 'experience', label: '体验' },
+  { id: 'content', label: '题目' },
+  { id: 'other', label: '其他' },
+];
+const FB_PAGE_SIZE = 50;
+
+function AdminFeedbackView() {
+  const [items, setItems] = useState<AdminFeedbackRow[]>([]);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [category, setCategory] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async (cat: string, off: number) => {
+    setLoading(true);
+    setErr('');
+    try {
+      const params = new URLSearchParams({ limit: String(FB_PAGE_SIZE), offset: String(off) });
+      if (cat) params.set('category', cat);
+      const r = await apiFetch(`${API_BASE}/admin/feedback?${params.toString()}`);
+      if (r.ok) {
+        const d = await r.json();
+        setItems(Array.isArray(d?.items) ? d.items : []);
+        setTotal(typeof d?.total === 'number' ? d.total : 0);
+        setCounts(d?.counts && typeof d.counts === 'object' ? d.counts : {});
+      } else {
+        setErr('加载失败，请重试');
+      }
+    } catch {
+      setErr('网络错误');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(category, offset); }, [load, category, offset]);
+
+  const switchFilter = (id: string) => {
+    setCategory(id);
+    setOffset(0); // 换筛选必须回第一页：否则可能停在越界 offset 上看到空列表
+    setExpandedId(null);
+  };
+
+  const totalAll = FB_FILTERS.slice(1).reduce((sum, f) => sum + (counts[f.id] ?? 0), 0);
+  const countOf = (id: string) => (id ? counts[id] ?? 0 : totalAll);
+  const hasPrev = offset > 0;
+  const hasNext = offset + items.length < total;
+
+  const th = 'px-2 py-1 text-left text-xs font-medium text-ct-muted';
+  const td = 'px-2 py-1 align-top text-xs text-ct-text';
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="admin-feedback">
+      <section>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium text-ct-text">用户反馈（只读）</h3>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-ct-muted">共 {total} 条</span>
+            <button onClick={() => load(category, offset)} disabled={loading}
+              className="rounded border border-ct-border px-3 py-1 text-xs text-ct-muted hover:text-ct-text disabled:opacity-50">
+              {loading ? '刷新中…' : '刷新'}
+            </button>
+          </div>
+        </div>
+
+        {/* 分类筛选：角标取全量口径（counts 不随当前筛选变化），
+            这样切到「问题」时还能看到其他分类各有多少 */}
+        <div className="mb-3 flex flex-wrap gap-1 rounded bg-ct-input p-0.5">
+          {FB_FILTERS.map(f => (
+            <button key={f.id || 'all'} onClick={() => switchFilter(f.id)}
+              className={`px-3 py-1 text-xs font-medium rounded transition ${category === f.id ? 'bg-ct-accent text-white' : 'text-ct-muted hover:text-ct-text'}`}>
+              {f.label} {countOf(f.id)}
+            </button>
+          ))}
+        </div>
+
+        {err && <p className="mb-2 text-xs text-ct-error">{err}</p>}
+
+        {loading && items.length === 0 ? (
+          <p className="text-xs text-ct-muted">加载中…</p>
+        ) : items.length === 0 ? (
+          <p className="text-xs text-ct-muted">{category ? '该分类下还没有反馈' : '还没有收到反馈'}</p>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-ct-border">
+            <table className="w-full">
+              <thead className="bg-ct-bg">
+                <tr>
+                  <th className={th}>ID</th>
+                  <th className={th}>分类</th>
+                  <th className={th}>用户</th>
+                  <th className={th}>内容</th>
+                  <th className={th}>来源</th>
+                  <th className={th}>提交时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map(fb => (
+                  <Fragment key={fb.id}>
+                    <tr className="cursor-pointer border-t border-ct-border hover:bg-ct-hover/30"
+                      onClick={() => setExpandedId(expandedId === fb.id ? null : fb.id)}>
+                      <td className={td}>{fb.id}</td>
+                      <td className={td}>
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] ${FB_CATEGORY_STYLE[fb.category] ?? ''}`}>
+                          {FB_CATEGORY_LABEL[fb.category] ?? fb.category}
+                        </span>
+                      </td>
+                      <td className={`${td} max-w-40 truncate`}
+                        title={fb.user_email || (fb.user_id != null ? `uid ${fb.user_id}` : '匿名')}>
+                        {fb.user_email || (fb.user_id != null ? `uid ${fb.user_id}` : '匿名')}
+                      </td>
+                      <td className={`${td} max-w-72 truncate`} title={fb.content}>{fb.content}</td>
+                      <td className={`${td} whitespace-nowrap text-ct-muted`}>
+                        {fb.screen || '—'}{fb.problem_id != null ? ` #${fb.problem_id}` : ''}
+                      </td>
+                      <td className={`${td} whitespace-nowrap text-ct-muted`}>
+                        {(fb.created_at || '').slice(0, 16)}
+                      </td>
+                    </tr>
+                    {expandedId === fb.id && (
+                      <tr className="border-t border-ct-border bg-ct-bg">
+                        <td className="px-2 py-2" colSpan={6}>
+                          {/* 纯文本渲染（用户可控内容，绝不用 dangerouslySetInnerHTML） */}
+                          <pre className="whitespace-pre-wrap break-all rounded border border-ct-border bg-ct-panel p-3 text-xs text-ct-text">{fb.content}</pre>
+                          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-ct-muted">
+                            <div><dt className="inline">联系方式：</dt><dd className="inline">{fb.contact || '未留'}</dd></div>
+                            <div><dt className="inline">会话：</dt><dd className="inline">{fb.session_id || '—'}</dd></div>
+                            <div className="col-span-2 truncate"><dt className="inline">UA：</dt><dd className="inline">{fb.user_agent || '—'}</dd></div>
+                          </dl>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {(hasPrev || hasNext) && (
+          <div className="mt-2 flex items-center gap-2">
+            <button disabled={!hasPrev} onClick={() => setOffset(Math.max(0, offset - FB_PAGE_SIZE))}
+              className="rounded border border-ct-border px-3 py-1 text-xs text-ct-muted hover:text-ct-text disabled:opacity-40">
+              ← 上一页
+            </button>
+            <span className="text-xs text-ct-muted">{offset + 1}–{offset + items.length} / {total}</span>
+            <button disabled={!hasNext} onClick={() => setOffset(offset + FB_PAGE_SIZE)}
+              className="rounded border border-ct-border px-3 py-1 text-xs text-ct-muted hover:text-ct-text disabled:opacity-40">
+              下一页 →
+            </button>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

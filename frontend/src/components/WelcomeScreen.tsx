@@ -1,8 +1,10 @@
 import { isAdmin } from '../api/auth';
+import FeedbackModal from './FeedbackModal';
 import { apiFetch } from '../api/client';
 import { useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
 import AuthModal from './AuthModal';
+import BetaBadge from './BetaBadge';
 
 const BASE = API_BASE;
 
@@ -326,6 +328,8 @@ export default function WelcomeScreen({
   // 体验账号（测试用户）：顶部提示条 + 转正注册弹窗（2026-09-10 测试用户体系）
   const isTrial = user?.role === 'test';
   const [claimOpen, setClaimOpen] = useState(false);
+  // 意见反馈弹窗（2026-09-20）：入口常驻顶栏，不依赖父级回调
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   useEffect(() => {
     if (tab === 'existing') {
@@ -351,34 +355,52 @@ export default function WelcomeScreen({
     <div className="flex w-full items-center justify-center bg-ct-bg p-4">
       {/* 固定高度卡片：标题+标签栏+内容整体打包，所有 tab 共享同一卡片高度 → 切换零跳动 */}
       <div className="flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-ct-border bg-ct-surface px-6 py-6 shadow-sm max-h-[calc(100vh-6rem)] min-h-[520px] h-[760px]">
-        {/* 标题（钉在卡片顶部，不随内容移动） */}
-        <div className="relative shrink-0 text-center">
-          <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
-          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 多维判题 · 渐进辅导 · 轨迹复盘 </p>
-          {(onOpenSettings || onLogout) && (
-            <div className="absolute right-0 top-0 flex gap-2">
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  onClick={onOpenSettings}
-                  title="设置（主题 / 模型服务）"
-                  className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
-                >
-                  ⚙️ 设置
-                </button>
-              )}
-              {onLogout && (
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  title={user?.role === 'test' ? '退出登录 (体验账号)' : user?.email ? `退出登录 (${user.email})` : '退出登录'}
-                  className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
-                >
-                  退出登录
-                </button>
-              )}
-            </div>
+        {/* 顶部工具行（独占一行、靠右）—— 2026-09-20 改：
+            原先 反馈/设置/退出登录 用 absolute 钉在「居中标题」的同一行，而卡片内容宽固定
+            624px（max-w-2xl 672 − px-6×2），标题块 ≈344px 居中 + 按钮 rail ≈216px 右对齐
+            必然重叠 ≈73px，把 "CodeTutor Agent" 压住。拆成两行后按钮与标题不再争抢横向
+            空间，碰撞在结构上不可能发生（且以后加按钮也不会复发）。
+            三个按钮一律「纯文字」：曾试过 emoji（💬/⚙️/🚪），但 🚪 在本机字体环境下渲染成
+            一根没有含义的橙色竖条（详见 npm run visual-check 的 *-toolbar.png），emoji 在
+            这种小尺寸 chrome 上不可靠；纯文字更稳，rail 也从 ≈250px 收窄到 ≈178px。 */}
+        <div className="flex shrink-0 items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setFeedbackOpen(true)}
+            title="意见反馈（遇到问题 / 想加功能都可以提）"
+            className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+          >
+            反馈
+          </button>
+          {onOpenSettings && (
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              title="设置（主题 / 模型服务）"
+              className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+            >
+              设置
+            </button>
           )}
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              title={user?.role === 'test' ? '退出登录 (体验账号)' : user?.email ? `退出登录 (${user.email})` : '退出登录'}
+              className="rounded-lg border border-ct-border bg-ct-panel px-3 py-1.5 text-xs font-medium text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text"
+            >
+              退出登录
+            </button>
+          )}
+        </div>
+
+        {/* 标题（居中；与上方工具行分层，不随内容移动） */}
+        <div className="mt-2 shrink-0 text-center">
+          <div className="flex items-center justify-center gap-2">
+            <h1 className="text-3xl font-bold text-ct-text">🤖 CodeTutor Agent</h1>
+            <BetaBadge />
+          </div>
+          <p className="mt-2 text-ct-muted">AI 编程私教 · 自主出题 · 多维判题 · 渐进辅导 · 轨迹复盘 </p>
         </div>
 
         {/* 体验账号提示条（测试用户转化钩子：注册=原地转正，记录保留） */}
@@ -387,7 +409,7 @@ export default function WelcomeScreen({
             <div className="min-w-0">
               <p className="text-sm font-medium text-ct-text">🧪 体验模式</p>
               <p className="text-xs text-ct-muted leading-relaxed">
-                体验账号与他人共享做题窗口配额，高峰时刻可能响应慢或者配额不足。注册后可自定义apikey，做题和问答无限制、同时方便查看个人做题记录和画像。
+                体验账号与他人共享做题窗口配额，高峰时刻可能响应慢或者配额不足。注册后可自定义 API Key，做题和问答无限制，同时方便查看个人做题记录和画像。
               </p>
             </div>
             <button
@@ -485,6 +507,14 @@ export default function WelcomeScreen({
         onClose={() => setClaimOpen(false)}
         onLoggedIn={() => window.location.reload()}
         claimMode
+      />
+
+      {/* 意见反馈弹窗。screen 固定 'welcome'：当前唯一入口就在主页；若将来在
+          做题界面加入口，把 screen/problemId/sessionId 透传进来即可，弹窗无需改。 */}
+      <FeedbackModal
+        open={feedbackOpen}
+        onClose={() => setFeedbackOpen(false)}
+        screen="welcome"
       />
     </div>
   );

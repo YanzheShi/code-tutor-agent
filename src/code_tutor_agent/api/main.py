@@ -32,6 +32,8 @@ from code_tutor_agent.api.routers import (
 from code_tutor_agent.api.routers.monitoring import admin_router as monitoring_admin_router
 from code_tutor_agent.api.routers.monitoring import client_router as monitoring_client_router
 from code_tutor_agent.api.routers.monitoring import public_router as monitoring_public_router
+from code_tutor_agent.api.routers.feedback import admin_router as feedback_admin_router
+from code_tutor_agent.api.routers.feedback import user_router as feedback_user_router
 from code_tutor_agent.progress import _generation_progress
 
 # ── 结构化 JSON 日志（必须在所有 logger 使用之前调用）──
@@ -213,6 +215,13 @@ app.include_router(monitoring_public_router, tags=["monitoring"],
                    dependencies=[Depends(get_current_user)])
 # 前端错误上报：公开（出错时 token 可能已失效），字段白名单+限长防滥用
 app.include_router(monitoring_client_router, tags=["monitoring"])
+
+# 用户反馈（2026-09-20）：提交登录即可（含体验账号）；列表只读、要求管理员。
+# 路由路径在 feedback.py 内自带全路径（/feedback、/admin/feedback），与 problems 同风格。
+app.include_router(feedback_user_router, tags=["feedback"],
+                   dependencies=[Depends(get_current_user)])
+app.include_router(feedback_admin_router, tags=["feedback"],
+                   dependencies=[Depends(require_admin)])
 
 
 @app.get("/health")

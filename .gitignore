@@ -4,7 +4,8 @@ __pycache__/
 *.so
 *.egg-info/
 dist/
-dist_old_*/
+# 构建时被改名的旧产物（frontend/dist_old* / dist_failedbuild 等），统一忽略避免误提交
+dist_*/
 build/
 *.egg
 
@@ -16,6 +17,8 @@ build/
 
 # === Node.js ===
 node_modules/
+# 视觉核对产物（npm run visual-check 截图输出）
+frontend/.visual-check/
 
 # === 运行时数据 ===
 *.db

@@ -222,6 +222,7 @@ def _init_prometheus_bridge():
     c_llm_fo = Counter("cta_llm_failovers_total", "LLM 故障转移次数")
     c_db_lock = Counter("cta_db_locked_total", "数据库锁等待次数")
     c_db_slow = Counter("cta_db_slow_transactions_total", "慢事务次数")
+    c_feedback = Counter("cta_feedback_submitted_total", "用户反馈提交数")
     c_fallback = Counter("cta_events_total", "未登记事件的兜底计数", ["event"])
 
     counters = {
@@ -235,6 +236,7 @@ def _init_prometheus_bridge():
         "llm_failover": (c_llm_fo, None),
         "db_locked": (c_db_lock, None),
         "db_slow_tx": (c_db_slow, None),
+        "feedback_submitted": (c_feedback, None),
     }
 
     g_graph_streak = Gauge("cta_graph_fail_streak", "graph 连续失败计数")
