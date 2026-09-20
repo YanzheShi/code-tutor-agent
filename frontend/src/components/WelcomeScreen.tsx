@@ -344,7 +344,7 @@ export default function WelcomeScreen({
 
   const tabs = [
     { id: 'agent' as Tab, label: '🤖 Agent 导师' },
-    { id: 'existing' as Tab, label: '从题库选' },
+    { id: 'existing' as Tab, label: '📚 从题库选' },
     { id: 'profile' as Tab, label: '📊 我的画像' },
     { id: 'subs' as Tab, label: '📋 我的提交' },
     // 管理入口仅 admin 角色可见（多用户改造 P4）
