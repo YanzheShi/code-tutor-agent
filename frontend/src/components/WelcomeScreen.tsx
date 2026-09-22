@@ -253,9 +253,21 @@ function ProfileView() {
   if (!profile) return <p className="text-sm text-ct-muted text-center py-8">暂无画像数据，做几道题后再来看看</p>;
 
   // v2 per-tag 熟练度（按熟练度降序）
+  // practiced：后端按 stab.window 非空推导的「真实练过」白名单。
+  // 未练过的 tag 在后端会被补零成 0%，与「练过但分数低」完全不同，
+  // 必须分开展示，否则新用户一进画像就看到 32 条 0%（2026-09-22）。
   const v2Prof = profileV2?.prof as Record<string, number> | undefined;
   const tagNames = (profileV2?.tag_names ?? {}) as Record<string, string>;
-  const tagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
+  const practiced = profileV2?.practiced as string[] | undefined;
+  const hasPracticedInfo = Array.isArray(practiced);
+  const practicedSet = new Set(hasPracticedInfo ? (practiced as string[]) : []);
+  const allTagEntries = v2Prof ? Object.entries(v2Prof).sort((a, b) => b[1] - a[1]) : [];
+  const tagEntries = hasPracticedInfo
+    ? allTagEntries.filter(([tag]) => practicedSet.has(tag))
+    : allTagEntries;
+  const untouchedEntries = hasPracticedInfo
+    ? allTagEntries.filter(([tag]) => !practicedSet.has(tag))
+    : [];
 
   return (
     <section className="space-y-5">
@@ -278,27 +290,52 @@ function ProfileView() {
       </div>
 
       {/* 各知识点熟练度（v2 per-tag 画像） */}
-      {tagEntries.length > 0 && (
+      {allTagEntries.length > 0 && (
         <div className="rounded-xl border border-ct-border bg-ct-surface p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-ct-text">各知识点熟练度（{tagEntries.length} 个）</h3>
-          {tagEntries.map(([tag, prof]) => (
-            <div key={tag}>
-              <div className="mb-0.5 flex items-center justify-between text-xs">
-                <span className="text-ct-muted">{tagNames[tag] ?? tag}</span>
-                <span className="font-mono text-ct-text">{(prof * 100).toFixed(0)}%</span>
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-ct-text">各知识点熟练度</h3>
+            <span className="text-[11px] text-ct-muted">
+              已练习 {tagEntries.length} / {allTagEntries.length} 个知识点
+            </span>
+          </div>
+
+          {tagEntries.length === 0 ? (
+            <p className="text-xs text-ct-muted py-2">
+              还没有练习记录，做完第一道题后这里会显示各知识点的熟练度。
+            </p>
+          ) : (
+            tagEntries.map(([tag, prof]) => (
+              <div key={tag}>
+                <div className="mb-0.5 flex items-center justify-between text-xs">
+                  <span className="text-ct-muted">{tagNames[tag] ?? tag}</span>
+                  <span className="font-mono text-ct-text">{(prof * 100).toFixed(0)}%</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-ct-hover">
+                  <div className="h-2 rounded-full bg-ct-accent"
+                    style={{ width: `${Math.max(0, Math.min(100, Math.round(prof * 100)))}%` }} />
+                </div>
               </div>
-              <div className="h-2 w-full rounded-full bg-ct-hover">
-                <div className="h-2 rounded-full bg-ct-accent"
-                  style={{ width: `${Math.max(0, Math.min(100, Math.round(prof * 100)))}%` }} />
+            ))
+          )}
+
+          {untouchedEntries.length > 0 && (
+            <div className="border-t border-ct-border pt-3">
+              <p className="mb-1.5 text-[11px] text-ct-muted">未开始（{untouchedEntries.length} 个）</p>
+              <div className="flex flex-wrap gap-1.5">
+                {untouchedEntries.map(([tag]) => (
+                  <span key={tag} className="rounded-md bg-ct-hover px-2 py-0.5 text-[11px] text-ct-muted">
+                    {tagNames[tag] ?? tag}
+                  </span>
+                ))}
               </div>
             </div>
-          ))}
+          )}
         </div>
       )}
 
       {/* 底部提示 */}
       <p className="text-[11px] text-ct-muted text-center pt-1">
-        分数越低表示该维度越需关注 · 点击各维度标签查看具体弱项 · 画像在每次提交后自动更新
+        分数越低表示该知识点越需关注 · 「未开始」仅代表还没练过 · 画像在每次提交后自动更新
       </p>
     </section>
   );

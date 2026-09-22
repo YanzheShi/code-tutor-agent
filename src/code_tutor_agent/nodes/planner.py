@@ -88,10 +88,14 @@ def _select_topic_by_v2_profile(user_id: str = "default_v2") -> Optional[tuple[s
     综合打分取"最该练"的 tag，经 _TAG_TO_TOPIC 反查得到中文 topic；
     难度按 prof 推导（<0.3→easy，>=0.8→medium，否则随 stab）。
     无画像 / 画像为空 / tag 无法映射到 topic 时返回 None（由调用方回退旧逻辑）。
+
+    必须用 fill_missing=False 读取：补零模式会把"从未练习"判成"最该练"
+    （prof=0 分），而 32 个 tag 全部并列同分，稳定排序永远取到枚举第一个
+    array_basics → 新用户默认题恒为"数组 easy"（2026-09-22 修）。
     """
     try:
         from code_tutor_agent.db.database import get_user_profile_v2
-        profile = get_user_profile_v2(user_id)
+        profile = get_user_profile_v2(user_id, fill_missing=False)
     except Exception as e:  # noqa: BLE001
         logger.warning("v2 profile read failed: %s", e)
         return None
@@ -107,9 +111,16 @@ def _select_topic_by_v2_profile(user_id: str = "default_v2") -> Optional[tuple[s
     forget: dict[str, dict] = profile.get("forget") or {}
     stab: dict[str, dict] = profile.get("stab") or {}
 
+    # 双保险：只对真实练过的 tag 打分。空列表 = 明确一个都没练过（全过滤）；
+    # 字段缺失（旧后端）才退化为不过滤。
+    practiced = profile.get("practiced")
+    practiced_set = set(practiced) if isinstance(practiced, list) else None
+
     # 计算每个 tag 的"该练程度"（越大越优先）
     scored: list[tuple[float, str, str, float]] = []
     for tag, p in prof.items():
+        if practiced_set is not None and tag not in practiced_set:
+            continue
         try:
             p = float(p)
         except (TypeError, ValueError):

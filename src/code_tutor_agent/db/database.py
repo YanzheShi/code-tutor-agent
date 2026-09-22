@@ -2088,12 +2088,27 @@ def save_user_profile_v2(profile: dict, user_id: str = "default_v2") -> None:
         raise
 
 
-def get_user_profile_v2(user_id: str = "default_v2") -> dict:
+def get_user_profile_v2(
+    user_id: str = "default_v2",
+    *,
+    fill_missing: bool = True,
+) -> dict:
     """Read the new per-tag UserProfile from the profiles table.
 
-    Returns ALL known tags (35 from Tag enum), filling zero scores for
-    tags the user hasn't practiced yet. Also attaches ``tag_names`` for
-    frontend display.
+    ``fill_missing=True``（默认，**仅供前端展示**）：给全部已知 tag 补零分，
+    保证「我的画像」能画出完整的熟练度列表。
+
+    ⚠️ 补零后的 0 分只代表「从未练习」，**不代表练得差**。业务逻辑消费方
+    （选题 / 对话画像摘要 / 出题 hint）必须传 ``fill_missing=False``，
+    否则新用户会被判定为「32 个知识点全是弱项」（2026-09-22 修）。
+
+    ``fill_missing=False``：只返回真实练习过的 tag，不补任何 key；
+    调用方依赖各自的「画像为空 → 回退旧逻辑」分支处理新用户。
+
+    两种模式都会附带：
+    - ``practiced``: 真实练过的 tag 列表（判据 = ``stab[tag]["window"]`` 非空，
+      ``apply_delta`` 只在真练习时写入），供展示层区分「未开始」与「练过但偏低」；
+    - ``tag_names``: tag → 中文名，供前端展示。
     """
     import json as _json
     from code_tutor_agent.profile.tags import Tag
@@ -2136,43 +2151,58 @@ def get_user_profile_v2(user_id: str = "default_v2") -> dict:
 
     all_tags = Tag.all_values()
 
+    def _empty_v2() -> dict:
+        return {
+            "prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {},
+            "errors": {"_global": {}, "per_tag": {}}, "attempts": {},
+            "meta": {"schema_version": "mvp@1"},
+        }
+
+    def _finalize(profile: dict) -> dict:
+        """补 practiced / tag_names；仅在 fill_missing 时补零分。
+
+        practiced 必须在补零**之前**统计——补零会给每个 tag 塞进
+        ``{"window": []}``，之后就无法区分「练过」与「没练过」了。
+        """
+        practiced = [
+            tag for tag, s in (profile.get("stab") or {}).items()
+            if isinstance(s, dict) and s.get("window")
+        ]
+
+        if fill_missing:
+            for field in ("prof", "prof_elo_raw"):
+                profile.setdefault(field, {})
+                for tag in all_tags:
+                    profile[field].setdefault(tag, 0.0)
+            profile.setdefault("stab", {})
+            profile.setdefault("forget", {})
+            for tag in all_tags:
+                profile["stab"].setdefault(tag, {"window": [], "variance": 0.0})
+                # decay 初始 1.0 =「没遗忘」，与 scoring.apply_delta 首次练习写入的值
+                # 一致（planner docstring 同口径）；旧的 0.0 会被下游读成「遗忘到极致」。
+                profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 1.0})
+        else:
+            for field in ("prof", "prof_elo_raw", "stab", "forget"):
+                profile.setdefault(field, {})
+
+        profile["practiced"] = practiced
+        profile["tag_names"] = TAG_DISPLAY
+        return profile
+
     try:
         row = _with_conn(lambda cursor: cursor.execute(
             "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
         ).fetchone())
 
         if not row:
-            profile = {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
+            profile = _empty_v2()
         else:
             profile = _json.loads(row["profile_json"])
 
-        # 补全零分 tag
-        for field in ("prof", "prof_elo_raw"):
-            if field not in profile:
-                profile[field] = {}
-            for tag in all_tags:
-                profile[field].setdefault(tag, 0.0)
-
-        for tag in all_tags:
-            if "stab" not in profile:
-                profile["stab"] = {}
-            profile["stab"].setdefault(tag, {"window": [], "variance": 0.0})
-            if "forget" not in profile:
-                profile["forget"] = {}
-            profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 0.0})
-
-        profile["tag_names"] = TAG_DISPLAY
-        return profile
+        return _finalize(profile)
     except Exception as exc:
         logger.error("get_user_profile_v2(%s) failed: %s", user_id, exc)
-        profile = {"prof": {}, "prof_elo_raw": {}, "stab": {}, "forget": {}, "errors": {"_global": {}, "per_tag": {}}, "attempts": {}, "meta": {"schema_version": "mvp@1"}}
-        for tag in all_tags:
-            profile["prof"].setdefault(tag, 0.0)
-            profile["prof_elo_raw"].setdefault(tag, 0.0)
-            profile["stab"].setdefault(tag, {"window": [], "variance": 0.0})
-            profile["forget"].setdefault(tag, {"last_seen": 0.0, "decay": 0.0})
-        profile["tag_names"] = TAG_DISPLAY
-        return profile
+        return _finalize(_empty_v2())
 
 
 # ── Agent memory(语义抽取式用户记忆,复用 profiles 表)──

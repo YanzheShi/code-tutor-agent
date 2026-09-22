@@ -129,14 +129,33 @@ _TAG_TO_TOPIC_HINT: dict[str, str] = {
 
 
 def _profile_hint_from(state: SessionState) -> str | None:
-    """从 v2 画像提取最弱 tag 的中文 topic（HISTORY 优先级用）；无画像返回 None。"""
+    """从 v2 画像提取最弱 tag 的中文 topic（HISTORY 优先级用）；无画像返回 None。
+
+    2026-09-22 修两处叠加的 bug：
+    1. 原实现调 ``get_user_profile_v2()`` 不传 user_id → 恒定读 ``default_v2``，
+       所有用户共用一份画像（多用户串号）；
+    2. 补零模式下 32 个 tag 全是 0 分并列，``min()`` 取枚举第一个 array_basics
+       → hint 恒为"数组"。改为 ``fill_missing=False`` + practiced 白名单过滤，
+       新用户无画像时返回 None（不参与 HISTORY 优先级）。
+    """
+    user_id = getattr(state, "user_id", "") or "default"
     try:
         from code_tutor_agent.db.database import get_user_profile_v2
 
-        profile = get_user_profile_v2()
+        profile = get_user_profile_v2(f"{user_id}_v2", fill_missing=False)
         prof = profile.get("prof") or {}
         if not prof:
             return None
+
+        # 双保险：只对真实练过的 tag 取最弱。空列表 = 明确一个都没练过（全过滤）；
+        # 字段缺失（旧后端）才退化为不过滤。
+        practiced = profile.get("practiced")
+        practiced_set = set(practiced) if isinstance(practiced, list) else None
+        if practiced_set is not None:
+            prof = {t: v for t, v in prof.items() if t in practiced_set}
+            if not prof:
+                return None
+
         weakest = min(prof, key=lambda t: float(prof[t]))
         return _TAG_TO_TOPIC_HINT.get(weakest)
     except Exception as exc:  # noqa: BLE001

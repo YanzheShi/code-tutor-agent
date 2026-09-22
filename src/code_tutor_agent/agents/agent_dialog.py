@@ -184,6 +184,12 @@ def _build_profile_summary(user_id: str = "default") -> str:
     Reads the v2 per-tag profile and formats weak/forgotten/unstable tags
     for injection into dialog prompts. Returns empty string if no profile.
     user_id：多用户隔离（P2），镜像 default/default_v2 的 key 约定。
+
+    必须用 ``fill_missing=False`` 读取：补零模式会把「从未练习」的 tag
+    填成 0 分，看起来跟「练得极差」一样，会让新用户一进来就被告知
+    「你的薄弱项是数组基础、双指针、滑动窗口」（2026-09-22 修）。
+    新用户 → 判定为空 → 回落到下面 legacy 分支 → 返回 ""，
+    调用方（欢迎语 / 对话 prompt）自然走「无画像」的通用引导。
     """
     try:
         from code_tutor_agent.db.database import get_user_profile_v2, get_profile
@@ -191,9 +197,9 @@ def _build_profile_summary(user_id: str = "default") -> str:
         logger.debug("Cannot import profile functions")
         return ""
 
-    # Try v2 per-tag profile first
+    # Try v2 per-tag profile first（fill_missing=False：只读真实练习数据）
     try:
-        profile = get_user_profile_v2(f"{user_id}_v2")
+        profile = get_user_profile_v2(f"{user_id}_v2", fill_missing=False)
     except Exception:
         profile = None
 
@@ -204,9 +210,20 @@ def _build_profile_summary(user_id: str = "default") -> str:
     forget: dict = profile.get("forget") or {}
     stab: dict = profile.get("stab") or {}
 
+    # 双保险：只对「真实练过」的 tag 做弱项判定。
+    # get_user_profile_v2 已按 fill_missing=False 读取（不补零），这里再用
+    # practiced 白名单兜一层——避免哪天有人改回补零读取后，把「没练过」
+    # 当「练得差」（2026-09-22：新用户曾被判定为 32 个知识点全是弱项）。
+    # 判据用 isinstance 而非真值判断：**空列表 = 明确一个都没练过**，
+    # 必须过滤掉全部 tag；只有字段缺失（旧后端）才退化为不过滤。
+    practiced = profile.get("practiced")
+    practiced_set = set(practiced) if isinstance(practiced, list) else None
+
     # Build scored weaknesses
     weak_tags: list[tuple[str, str, str]] = []  # (tag, cn_name, reason)
     for tag, p in prof.items():
+        if practiced_set is not None and tag not in practiced_set:
+            continue
         try:
             p = float(p)
         except (TypeError, ValueError):

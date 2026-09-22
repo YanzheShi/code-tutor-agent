@@ -11,7 +11,7 @@
  *   1. vite build 单入口 → 系统 Temp 的全新目录（避开沙箱 emptyDir 的 safe-delete 拦截）
  *   2. node:http 起纯静态服务
  *   3. Playwright(chromium) 打开真实组件，截图 + `getBoundingClientRect()` 量盒模型
- *   4. 断言「顶栏工具行」与「标题块」互不重叠、且标题块未溢出卡片
+ *   4. 断言：主页 = 工具行/标题块不重叠；画像页 = 熟练度卡片无横向溢出、chip 不出卡片
  *
  * 产物：`frontend/.visual-check/<state>.png`（已 gitignore）
  * 退出码：任一态断言失败 → 1
@@ -29,12 +29,16 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..'); // frontend/
 const shotsDir = path.join(root, '.visual-check');
 
-/** 被测状态：覆盖「按钮最多」与「最窄」两个边界 */
+/** 被测状态：覆盖「按钮最多」「最窄」两个边界，外加画像页三种数据形态 */
 const STATES = [
-  { name: 'user-1280', query: '', w: 1280, h: 900 },
-  { name: 'trial-1280', query: '?trial=1', w: 1280, h: 900 },
-  { name: 'admin-1280', query: '?admin=1', w: 1280, h: 900 },
-  { name: 'trial-560', query: '?trial=1', w: 560, h: 900 },
+  { name: 'user-1280', query: '', w: 1280, h: 900, kind: 'home' },
+  { name: 'trial-1280', query: '?trial=1', w: 1280, h: 900, kind: 'home' },
+  { name: 'admin-1280', query: '?admin=1', w: 1280, h: 900, kind: 'home' },
+  { name: 'trial-560', query: '?trial=1', w: 560, h: 900, kind: 'home' },
+  // 画像页（2026-09-22 新增）：新用户零练习 / 已练习 + 未开始混排 / 窄屏换行
+  { name: 'profile-new-1280', query: '?tab=profile&state=new', w: 1280, h: 1100, kind: 'profile' },
+  { name: 'profile-some-1280', query: '?tab=profile&state=some', w: 1280, h: 1100, kind: 'profile' },
+  { name: 'profile-some-560', query: '?tab=profile&state=some', w: 560, h: 1100, kind: 'profile' },
 ];
 
 const MIME = {
@@ -49,8 +53,8 @@ const MIME = {
   '.ttf': 'font/ttf',
 };
 
-/** 在页面里量盒模型，并给出三条断言所需的事实（纯数据，判定留在 node 侧） */
-function measureInPage() {
+/** 在页面里量盒模型，并给出断言所需的事实（纯数据，判定留在 node 侧） */
+function measureInPage(kind) {
   const rect = (el) => {
     const r = el.getBoundingClientRect();
     return {
@@ -62,6 +66,46 @@ function measureInPage() {
       h: Math.round(r.height),
     };
   };
+
+  // ── 画像页：量「各知识点熟练度」卡片 ──
+  if (kind === 'profile') {
+    const h3 = [...document.querySelectorAll('h3')].find((h) =>
+      /各知识点熟练度/.test(h.textContent || ''),
+    );
+    if (!h3) return { error: 'h3「各知识点熟练度」not found（ProfileView 没渲染出来？）' };
+    const card = h3.closest('div.rounded-xl');
+    if (!card) return { error: 'profile card not found' };
+
+    // 未开始的 chip：卡片底部那排小标签（span）
+    const chips = [...card.querySelectorAll('span')]
+      .filter((s) => /^(?!.*\d+%).*$/.test(s.textContent || '') && s.className.includes('rounded-md'))
+      .map((s) => ({ label: (s.textContent || '').trim(), ...rect(s) }));
+
+    const cardRect = rect(card);
+    const overflowX = card.scrollWidth - card.clientWidth;
+    const chipsOut = chips.filter((c) => c.r > cardRect.r + 1).map((c) => c.label);
+    // 锚点：供 node 侧对卡片单独截图（整页图里它可能在滚动容器视口之外）
+    card.setAttribute('data-visual-profile-card', '');
+
+    return {
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      docH: document.documentElement.scrollHeight,
+      card: cardRect,
+      cardPad: {
+        l: Math.round(cardRect.l + parseFloat(getComputedStyle(card).paddingLeft)),
+        r: Math.round(cardRect.r - parseFloat(getComputedStyle(card).paddingRight)),
+      },
+      overflowX,
+      chipCount: chips.length,
+      chipsOut,
+      headerText: (card.querySelector('span')?.textContent || '').trim(),
+      hasEmptyHint: /还没有练习记录/.test(card.textContent || ''),
+      hasProgressPct: /%/.test(card.textContent || ''),
+      hasUntouchedLabel: /未开始/.test(card.textContent || ''),
+    };
+  }
+
+  // ── 主页：量顶栏工具行 vs 标题块 ──
   const h1 = document.querySelector('h1');
   if (!h1) return { error: 'h1 not found' };
   const feedbackBtn = [...document.querySelectorAll('button')].find((b) => /反馈/.test(b.textContent || ''));
@@ -97,6 +141,53 @@ function overlap(a, b) {
   const x = Math.max(0, Math.min(a.r, b.r) - Math.max(a.l, b.l));
   const y = Math.max(0, Math.min(a.b, b.b) - Math.max(a.t, b.t));
   return { x, y, area: x * y };
+}
+
+/** 主页态的判定：工具行与标题块分层且不重叠，标题块不溢出卡片内边距 */
+function judgeHome(m) {
+  if (m.error) return { pass: false, reason: m.error };
+  const ov = overlap(m.titleBlock, m.toolRow);
+  const stacked = m.toolRow.b <= m.titleBlock.t;
+  const inside =
+    !m.cardPadBox || (m.titleBlock.l >= m.cardPadBox.l - 1 && m.titleBlock.r <= m.cardPadBox.r + 1);
+  const pass = ov.area === 0 && stacked && inside;
+  return {
+    pass,
+    reason: pass
+      ? 'ok'
+      : [
+          ov.area > 0 ? `标题块与工具行重叠 ${ov.x}×${ov.y}px` : null,
+          !stacked ? `未分层（工具行 b=${m.toolRow.b} > 标题块 t=${m.titleBlock.t}）` : null,
+          !inside ? '标题块溢出卡片内边距' : null,
+        ]
+          .filter(Boolean)
+          .join('; '),
+    detail: `工具行 y=${m.toolRow.t}-${m.toolRow.b}｜标题块 y=${m.titleBlock.t}-${m.titleBlock.b} x=${m.titleBlock.l}-${m.titleBlock.r}｜按钮 ${m.buttons.map((b) => `${b.label}(${b.w})`).join(' ')}`,
+  };
+}
+
+/** 画像态的判定：卡片无横向溢出、chip 不出卡片、数据形态符合预期 */
+function judgeProfile(m, state) {
+  if (m.error) return { pass: false, reason: m.error };
+  const problems = [];
+  if (m.card.w <= 0 || m.card.h <= 0) problems.push('画像卡片尺寸为 0');
+  if (m.overflowX > 1) problems.push(`卡片横向溢出 ${m.overflowX}px`);
+  if (m.chipsOut.length) problems.push(`chip 超出卡片：${m.chipsOut.slice(0, 4).join('/')}`);
+  const isNew = state.includes('new');
+  if (isNew && !m.hasEmptyHint) problems.push('新用户态缺少「还没有练习记录」提示');
+  if (isNew && m.hasProgressPct === false && /%/.test(m.headerText)) {
+    problems.push('新用户态仍渲染了百分比进度条');
+  }
+  if (!isNew) {
+    if (!m.hasProgressPct) problems.push('已练习态缺少熟练度百分比');
+    if (!m.hasUntouchedLabel) problems.push('已练习态缺少「未开始」分组');
+    if (m.chipCount === 0) problems.push('已练习态未开始 chip 数为 0');
+  }
+  return {
+    pass: problems.length === 0,
+    reason: problems.length ? problems.join('; ') : 'ok',
+    detail: `卡片 ${m.card.w}×${m.card.h} @y=${m.card.t}-${m.card.b}（内宽 ${m.cardPad.r - m.cardPad.l}）｜chip ${m.chipCount} 个｜表头「${m.headerText}」｜文档高 ${m.docH}`,
+  };
 }
 
 async function assertStates() {
@@ -138,42 +229,25 @@ async function assertStates() {
       deviceScaleFactor: 2,
     });
     await page.goto(`http://127.0.0.1:${port}/visual-check.html${st.query}`, { waitUntil: 'networkidle' });
-    await page.waitForTimeout(300);
-    const m = await page.evaluate(measureInPage);
-    await page.screenshot({ path: path.join(shotsDir, `${st.name}.png`) });
+    await page.waitForTimeout(st.kind === 'profile' ? 700 : 300);
+    const m = await page.evaluate(measureInPage, st.kind);
+    await page.screenshot({ path: path.join(shotsDir, `${st.name}.png`), fullPage: st.kind === 'profile' });
     // 工具行局部放大图（deviceScaleFactor=2 → 2x 分辨率），比整页缩略图更容易看出按钮样式/边框差异
     const toolRowLoc = page.locator('[data-visual-tool-row]');
     if (await toolRowLoc.count()) {
       await toolRowLoc.screenshot({ path: path.join(shotsDir, `${st.name}-toolbar.png`), scale: 'device' });
     }
+    // 画像卡片单独截图：整页图受外层滚动容器限制，卡片常落在视口之外
+    const cardLoc = page.locator('[data-visual-profile-card]');
+    if (await cardLoc.count()) {
+      await cardLoc.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(120);
+      await cardLoc.screenshot({ path: path.join(shotsDir, `${st.name}-card.png`), scale: 'device' });
+    }
     await page.close();
 
-    if (m.error) {
-      results.push({ state: st.name, pass: false, reason: m.error });
-      continue;
-    }
-    const ov = overlap(m.titleBlock, m.toolRow);
-    const stacked = m.toolRow.b <= m.titleBlock.t;
-    const inside =
-      !m.cardPadBox ||
-      (m.titleBlock.l >= m.cardPadBox.l - 1 && m.titleBlock.r <= m.cardPadBox.r + 1);
-    const pass = ov.area === 0 && stacked && inside;
-    results.push({
-      state: st.name,
-      pass,
-      reason: pass
-        ? 'ok'
-        : [
-            ov.area > 0 ? `标题块与工具行重叠 ${ov.x}×${ov.y}px` : null,
-            !stacked ? `未分层（工具行 b=${m.toolRow.b} > 标题块 t=${m.titleBlock.t}）` : null,
-            !inside ? '标题块溢出卡片内边距' : null,
-          ]
-            .filter(Boolean)
-            .join('; '),
-      titleBlock: m.titleBlock,
-      toolRow: m.toolRow,
-      buttons: m.buttons.map((b) => `${b.label}(${b.w})`).join(' '),
-    });
+    const judged = st.kind === 'profile' ? judgeProfile(m, st.name) : judgeHome(m);
+    results.push({ state: st.name, ...judged });
   }
   await browser.close();
   server.close();
@@ -182,14 +256,8 @@ async function assertStates() {
   // 4) 汇报
   console.log('\n视觉核对结果（.visual-check/*.png）\n');
   for (const r of results) {
-    const flag = r.pass ? 'PASS' : 'FAIL';
-    console.log(`  [${flag}] ${r.state.padEnd(12)} ${r.reason}`);
-    if (r.titleBlock) {
-      console.log(
-        `         工具行 y=${r.toolRow.t}-${r.toolRow.b}｜标题块 y=${r.titleBlock.t}-${r.titleBlock.b}` +
-          ` x=${r.titleBlock.l}-${r.titleBlock.r}｜按钮宽度 ${r.buttons}`,
-      );
-    }
+    console.log(`  [${r.pass ? 'PASS' : 'FAIL'}] ${r.state.padEnd(18)} ${r.reason}`);
+    if (r.detail) console.log(`         ${r.detail}`);
   }
   const failed = results.filter((r) => !r.pass);
   console.log(`\n  ${results.length - failed.length}/${results.length} 通过\n`);
