@@ -50,6 +50,17 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 
+# 自洽校验失败后的重试提示：LLM 出题最常见的失败是「示例 Output 与最优解实际输出
+# 不一致」（2026-09-23 实测：描述要求「升序重排」、示例却给原序，参考解按描述实现
+# → 首条示例即 WA，整题作废）。把失败信号回灌进 prompt，让第二次尝试有针对性修正。
+_SELFCHECK_RETRY_HINT = (
+    "\n\n[重试] 你上一轮生成的题目未通过系统自洽校验（系统真的把 optimal_solution "
+    "跑在了 examples 上）。这次务必做到："
+    "①每个示例的 Output 与你给出的 optimal_solution 在该 Input 下的真实输出完全一致；"
+    "②description 里的规则必须能唯一推出示例的 Output，推不出来就改描述，不要改示例；"
+    "③optimal_solution 与 brute_solution 各自只含一个 class Solution。"
+)
+
 # 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃。
 # 注意 WA（detail 为 "expected=… got=…" 对拍文案）也绝不能当期望落库。
 _DROP_STATUSES = {"Runtime Error", "TLE", "Judge Error", "Wrong Answer"}
@@ -142,7 +153,12 @@ class ProblemGenerationAgent:
             # 内层：LlmGateway.generate_problem 重试一次，针对结构不对（缺字段/题解异常）；
             # 网络问题 langchain 自带重试（默认 2 次）。
             for _attempt in range(ctx.options.max_retries or MAX_RETRIES):
-                draft = self._llm_generate(ctx, sink)
+                # 第 2 轮起把「上一轮没过自洽校验」写进 prompt（_SELFCHECK_RETRY_HINT）：
+                # 光靠简单重试，模型会以同样的方式再错一遍；带上失败信号才有修正方向。
+                draft = self._llm_generate(
+                    ctx, sink,
+                    retry_hint=_SELFCHECK_RETRY_HINT if _attempt else None,
+                )
                 if not draft or not self.verifier.verify(draft)[0]:
                     draft = None
                     continue
@@ -335,7 +351,10 @@ class ProblemGenerationAgent:
         return draft
 
     # ── 通道 B：LLM 生成 ──
-    def _llm_generate(self, ctx: GenerationContext, sink: ProgressSink) -> ProblemDraft | None:
+    def _llm_generate(
+        self, ctx: GenerationContext, sink: ProgressSink, *,
+        retry_hint: str | None = None,
+    ) -> ProblemDraft | None:
         # 方案 H：每次出题随机二选一注入 F（场景）或 G（维度），二者不混用；
         # 选 G 无维度文件时 decide_injection 内部自动 fallback 到 F。
         mode, suffix = decide_injection(ctx.topic)
@@ -345,8 +364,11 @@ class ProblemGenerationAgent:
                 "progress",
                 f"🎲 正在使用AI自主出题…",
             ))
+        # retry_hint 拼进 USER prompt 末尾（与方案 H 的 suffix 共存）——刻意不用
+        # 实例属性传状态：_SUITE_AGENT 是模块级单例，多用户并发会串号。
+        user_suffix = (suffix or "") + (retry_hint or "")
         draft = self.llm.generate_problem(
-            ctx.topic, ctx.difficulty, user_suffix=suffix or None)
+            ctx.topic, ctx.difficulty, user_suffix=user_suffix or None)
         if draft is None:
             return None
         sink.event(GenEvent("progress", "🧪 正在解析示例测试用例…"))
@@ -393,17 +415,19 @@ class ProblemGenerationAgent:
     ) -> tuple[ProblemDraft | None, str]:
         """PULL：LLM 失败后按主题+难度拉取 LeetCode 题。
 
-        随机化选题：在整池里随机跳段 + 打乱返回顺序，避免每次都命中同一道题
-        （原实现 skip=0 固定排序，同 topic+difficulty 永远收敛到题号最小的那道）。
+        随机化选题：首段打底 +（池子被截断时）随机跳段补充，最后打乱顺序，
+        避免每次都命中同一道题（原实现 skip=0 固定排序，同 topic+difficulty
+        永远收敛到题号最小的那道）。
         """
         sink.event(GenEvent("progress", "🔄 正在从 LeetCode 按主题拉题…"))
-        # 随机跳段抽样：覆盖整池而非永远固定在最前面的 10 题；skip 越界（小主题）
-        # 会返回空，故空结果回退到 skip=0 拿首段。
+        # 先取首段打底（skip=0 不会越界），仅当池子被 limit 截断（说明后面还有题）
+        # 才再随机跳一段补充。旧实现固定从 random(0, 200) 起跳，且只在「返回空列表」
+        # 时回退 skip=0 —— 而列表接口越界是**抛异常**，回退条件永远进不去，于是
+        # queue@MEDIUM（仅 25 题）这类小主题随机 20 次失败 14 次（2026-09-23 实测）。
         limit = 50
-        skip = random.randint(0, 200)
-        slugs = self.leetcode.list(ctx.topic, ctx.difficulty, limit=limit, skip=skip)
-        if not slugs:
-            slugs = self.leetcode.list(ctx.topic, ctx.difficulty, limit=limit, skip=0)
+        slugs = self._list_slugs(ctx, limit=limit, skip=0)
+        if len(slugs) >= limit:
+            slugs = [*slugs, *self._list_slugs(ctx, limit=limit, skip=random.randint(0, 200))]
         if not slugs:
             return None, ProblemChannel.LEETCODE_PULL.value
         # 打乱顺序后取前 5 个候选，第一个能解析成功的即被选中 → 非确定性
@@ -427,6 +451,20 @@ class ProblemGenerationAgent:
                     draft.optimal_solution = code
             return draft, ProblemChannel.LEETCODE_PULL.value
         return None, ProblemChannel.LEETCODE_PULL.value
+
+    def _list_slugs(
+        self, ctx: GenerationContext, *, limit: int, skip: int,
+    ) -> list[str]:
+        """按主题/难度取 slug 列表；列表接口失败一律降级为空池（不阻断 PULL）。
+
+        PULL 是兜底通道，单次列表请求失败（主题非法 / 网络抖动 / skip 越界）不该把
+        整个通道判死——回退交给调用方的「首段打底 + 随机跳段补充」策略处理。
+        """
+        try:
+            return self.leetcode.list(ctx.topic, ctx.difficulty, limit=limit, skip=skip)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PULL list(skip=%d) failed: %s", skip, exc)
+            return []
 
     def _unac_from_db(
         self, ctx: GenerationContext, sink: ProgressSink,

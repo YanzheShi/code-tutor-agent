@@ -109,6 +109,11 @@ class StoreGateway:
         full = get_problem_by_id(pid)
         if full is None:
             return None
+        # 字段来源必须对得上 DBProblem（db/models.py）：problems 表不持久化
+        # examples / tags（save_problem 的 INSERT 列里没有），旧写法读
+        # full.examples / full.tags 必崩 AttributeError，db_unac 通道从未跑通
+        # （2026-09-23 修）。示例文本在 description 正文里，展示层照常渲染；
+        # tags 用 topic 兜底（tags 只用于题面标签展示，见 nodes/generator.py）。
         return flat_to_draft(
             {
                 "title": full.title,
@@ -121,8 +126,8 @@ class StoreGateway:
                 "function_signature": full.function_signature,
                 "test_cases": full.test_cases,
                 "constraints": full.constraints,
-                "examples": list(full.examples or []),
-                "tags": list(full.tags or []),
+                "examples": [],
+                "tags": [full.topic] if full.topic else [],
             },
             topic,
             difficulty,

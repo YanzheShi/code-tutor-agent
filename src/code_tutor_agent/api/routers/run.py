@@ -59,17 +59,23 @@ async def run_code(
     if not state.values or not state.values.get("session_id"):
         raise HTTPException(404, f"Session {sid} not found")
 
-    # ── 卡死兜底：会话停在终态但题已就绪（无挂起节点）时重新挂到 wait_for_submit ──
-    # 两种历史卡死：
+    # ── 卡死兜底：会话无挂起节点但题已就绪时重新挂到 wait_for_submit ──
+    # 三种历史卡死：
     #   1) dialog + problem：旧会话 graph 停在 END、无挂起中断，resume 空转；
     #   2) error + problem：判题前置失败（如无测试用例）把 status 置 error 并走到 END，
     #      此后 /run 一律 400、/submit 空转返回开场白（题目 124 事故）。
-    # 二者症状相同（next=()），统一处理：清掉错误态并带输入重跑 graph，
+    #   3) awaiting_submit + problem（2026-09-23）：出题走
+    #      `update_state(..., as_node="generator_node")` 镜像注入时，generator_node 的
+    #      出向由 Command(goto) 决定，update_state 推断不出 next → next=()，会话停在
+    #      END。症状：URL 导入出来的题一点「运行代码」就 400。
+    # 三者症状相同（next=()），统一处理：清掉错误态并带输入重跑 graph，
     # 让它真正暂停到 wait_for_submit_node 的 interrupt，再走下方正常判题。
+    # 判据必须是「**无挂起节点**」而不是「不含 wait_for_submit_node」——出题进行中
+    # next 是活跃节点（generator_node 等），放宽成后者的写法会打断生成。
     if (
-        state.values.get("status") in ("dialog", "error")
+        state.values.get("status") in ("dialog", "error", "awaiting_submit")
         and state.values.get("problem")
-        and "wait_for_submit_node" not in (state.next or ())
+        and not (state.next or ())
     ):
         logger.warning(
             "run: session %s stuck in status=%s with problem — forwarding to wait_for_submit",

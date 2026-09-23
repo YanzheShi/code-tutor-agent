@@ -35,6 +35,10 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   Output: [0,1]
   解释：因为 nums[0] + nums[1] == 9，返回 [0, 1]。
   ```
+  - ⚠️ **示例的 Output 必须是 `optimal_solution` 在该 Input 下真实跑出来的结果**，不是「你觉得应该是什么」。
+    写 Output 前先逐行心算一遍你即将给出的最优解代码；算完发现对不上，就去改示例或改解法。
+  - 系统会**真的把你的 `optimal_solution` 跑在你的 `examples` 上比对**，任何一条对不上，整道题作废重出。
+  - 示例的 Output 必须遵守你在 `description` 里写的规则。**如果按描述推导不出你写的 Output，说明描述写漏了关键步骤——改描述，不要改示例**。宁可只给 2 个示例，也不要给 3 个自相矛盾的。
 - `constraints`: 约束条件列表
   - **元素取值范围必须写成数值形式** `min <= <变量> <= max`，例如 `0 <= nums[i] <= 1000`、`-10^4 <= nums[i] <= 10^4`。
   - **二进制 / 枚举元素请写成数值上下界**：若元素只取 0 或 1，写 `0 <= nums[i] <= 1`（**不要**写「nums[i] 为 0 或 1」「由 0 和 1 组成」这类中文 / 集合描述，否则测试用例生成器无法解析取值范围）。
@@ -44,9 +48,11 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 - `optimal_solution`: **正确且高效**的最优解代码（class Solution 风格）
   - 使用最合适的算法和数据结构（如哈希表、双指针、动态规划等）
   - 必须是可运行的合法 Python 代码
-  - 方法签名必须准确（参数名、类型、返回值）
+  - 方法签名必须准确（参数名、类型、返回值），且与 `starter_code` 中的保持一致
   - 时间复杂度应为题目范围内的最优（如 O(n)、O(n log n)）
   - 算法思想要体现面试考点（如空间换时间、状态转移等）
+  - **只允许有一个 `class Solution`**：不要写 `Solution2` / `SolutionQueue` 这类额外类，也不要把多个解法拼进同一个字段
+    —— 系统只取第一个 `class Solution` 去跑你的示例，多写的类会被忽略（2026-09-23：曾有题目把「绕圈+排序」版和「队列版」塞进同一字段，取到的那版与示例矛盾）
 
 ### 3. 暴力解代码（用户不可见，用于交叉验证测试用例）
 - `brute_solution`: **正确但可能低效**的暴力解代码（class Solution 风格）
@@ -55,6 +61,9 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   - 方法签名必须与 optimal_solution 完全一致
   - 即使在大数据上会超时也没关系，测试用例生成器会用小数据验证
   - 用于和 optimal_solution 交叉验证测试用例的正确性
+  - 与 `optimal_solution` 一样：**只允许有一个 `class Solution`**，不要写 `SolutionBrute` 之类的额外类
+- `alternative_solutions`: 备选解法列表（仅展示用）。**没有就给空数组 `[]`**；
+  每写一个就必须是一段完整独立的代码，**不要用空字符串 `""` 占位凑数**
 
 ### 3. 模板代码（用户可见，编辑器初始内容）
 - `starter_code`: 一段 LeetCode 风格的类/方法定义，用户在此基础上填写实现
@@ -79,6 +88,12 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 - 使用 LeetCode 风格：`class Solution: def method(self, ...):`
 - 最优解代码必须正确、可运行，不能有语法错误
 - `optimal_solution` 要用最优算法
+
+## 输出前自检（必做，不要跳过）
+1. **示例与最优解一致**：把 `optimal_solution` 逐条套进 `examples` 的 Input，确认每个 Output 都对得上；对不上就改到对上为止。
+2. **描述与示例一致**：`description` 里的规则必须能唯一推出示例的 Output。推不出来说明描述漏了关键步骤——改描述。
+3. **签名一致**：`starter_code` / `optimal_solution` / `brute_solution` 三处的方法名与参数完全一致。
+4. **单一类**：`optimal_solution` 与 `brute_solution` 各自只含一个 `class Solution`。
 
 ## 输出限制
 - 不要生成 `test_cases`、`adversarial_spec`、`novelty_score`

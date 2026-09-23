@@ -691,8 +691,10 @@ def fetch_problem_list(
         列表结果（total 为题数，items 为摘要条目）。
 
     Raises:
-        ValueError: topic 不是合法主题标签，或 difficulty 非法；
+        ValueError: topic 不是合法主题标签（首题不含该 tag），或 difficulty 非法；
             GraphQL 层错误（含网络/429 重试耗尽）。
+            注意：skip 越界导致的**空页不报错**，返回 total 已知、items=[] 的空结果，
+            调用方据此回退 skip=0（2026-09-23 修，见下方 questions 空分支）。
     """
     if difficulty is not None and difficulty.upper() not in _PROBLEM_LIST_DIFFICULTIES:
         valid = sorted(_PROBLEM_LIST_DIFFICULTIES)
@@ -746,8 +748,20 @@ def fetch_problem_list(
         raise ValueError(f"topic '{topic}' 无查询返回")
 
     questions = payload.get("questions") or []
-    first_tags = {t["slug"] for t in (questions[0].get("topicTags") or [])} if questions else set()
-    if not questions or topic not in first_tags:
+
+    # 空页 ≠ 非法 tag（2026-09-23 修）：skip 越过结果集尾部时 LeetCode 返回空列表，
+    # 旧实现把它和「tag 非法」混成同一个 ValueError，于是「队列」这类小主题
+    # （queue@MEDIUM 仅 25 题）在随机跳段抽样下被误判成「不是合法的主题标签」，
+    # 整个 PULL 降级通道被跳过。空页改为返回空 items，让调用方回退 skip=0。
+    if not questions:
+        logger.info(
+            "topic='%s' skip=%d 越界，LeetCode 返回空页（total=%s）",
+            topic, skip, payload.get("total"),
+        )
+        return LeetCodeProblemList(total=int(payload.get("total", 0)), items=[])
+
+    first_tags = {t["slug"] for t in (questions[0].get("topicTags") or [])}
+    if topic not in first_tags:
         logger.warning(f"topic '{topic}' 未被 LeetCode 识别，过滤被忽略（返回全库）")
         raise ValueError(f"topic '{topic}' 不是合法的 LeetCode 主题标签")
 

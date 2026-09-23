@@ -382,10 +382,14 @@ async def submit_code(
     #      END（题目 124 事故：提交永远只回「来自 LeetCode 的 …」开场白）。
     # 统一处理：清掉错误态 + 置 dialog 完成，带输入重跑 graph，让它真正暂停到
     # wait_for_submit_node 的 interrupt，再走下方正常 resume 判题。
+    # 2026-09-23 补第三种（与 run.py 对称）：status=awaiting_submit 但 graph 已无挂起
+    # 节点——出题走 update_state(as_node="generator_node") 镜像注入时，generator_node
+    # 的出向由 Command(goto) 决定、update_state 推断不出 next → next=()。此时导入出来的
+    # 题直接提交会落到下方 409/空转。判据同样收紧为「**无挂起节点**」，避免打断生成中的会话。
     if (
-        state.values.get("status") in ("dialog", "error")
+        state.values.get("status") in ("dialog", "error", "awaiting_submit")
         and state.values.get("problem")
-        and "wait_for_submit_node" not in _next
+        and not _next
     ):
         logger.warning(
             "submit: session %s stuck in status=%s with problem — forwarding to wait_for_submit",

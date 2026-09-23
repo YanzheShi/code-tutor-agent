@@ -30,7 +30,10 @@ class Problem(BaseModel):
     # ── 暴力解（本地生成测试用例用）──
     brute_solution: str = Field(
         default="",
-        description="暴力解代码（class Solution 风格），仅用于跑测试用例生成预期输出",
+        description=(
+            "暴力解代码（class Solution 风格），仅用于跑测试用例生成预期输出。"
+            "只含一个 `class Solution`，不要写 SolutionBrute 之类的额外类"
+        ),
     )
 
     # ── 模板代码 ──
@@ -53,11 +56,14 @@ class Problem(BaseModel):
     )
     optimal_solution: str = Field(
         default="",
-        description="最优解代码（AC 后显示给用户）",
+        description=(
+            "最优解代码（AC 后显示给用户）。只含一个 `class Solution`；"
+            "它跑在 examples 每个 Input 上的输出必须与对应 Output 完全一致"
+        ),
     )
     alternative_solutions: list[str] = Field(
         default_factory=list,
-        description="备选解法（仅显示用，不参与判题）",
+        description="备选解法（仅显示用，不参与判题）；没有就给空数组，不要用空字符串占位",
     )
     novelty_score: float = Field(
         default=7.0, ge=0.0, le=10.0,

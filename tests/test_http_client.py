@@ -20,15 +20,34 @@ Run with:
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import uuid
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 import httpx
 import pytest
 
+try:  # 脚本直跑时自己加载 .env；pytest 下已由 tests/conftest.py 统一加载
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:  # noqa: BLE001
+    pass
+
 BASE_URL = "http://localhost:8765"
+
+# 多用户改造后 /session、/problems、/run、/submit 全部要求 Bearer 鉴权：
+# 凭据与 integration / _agent_helpers 同源（CTA_TEST_* → CTA_ADMIN_* → 默认测试账号）。
+_AUTH_EMAIL = (
+    os.getenv("CTA_TEST_EMAIL") or os.getenv("CTA_ADMIN_EMAIL") or "534629255@qq.com"
+)
+_AUTH_PASSWORD = (
+    os.getenv("CTA_TEST_PASSWORD") or os.getenv("CTA_ADMIN_PASSWORD") or "test123456"
+)
+_TOKEN: str | None = None
 
 # 需要后端服务真实在跑（localhost:8765）才能测；服务未启动会 ConnectError。
 # 归为 integration，日常用 `pytest -m "not integration"` 跳过。
@@ -37,6 +56,46 @@ pytestmark = pytest.mark.integration
 # ──────────────────────────────────────────────
 #  Helpers
 # ──────────────────────────────────────────────
+
+
+def _auth_headers(client: httpx.Client) -> dict[str, str]:
+    """登录引导管理员并返回 Bearer 头；token 进程内缓存复用。
+
+    登录失败**不在这里抛**：后端没起时应由调用方的 ConnectError 分支收编
+    （脚本模式记为 SKIP 而不是崩掉）；账号/密码不对则后续请求会 401，报错更直白。
+    """
+    global _TOKEN
+    if _TOKEN:
+        return {"Authorization": f"Bearer {_TOKEN}"}
+    try:
+        r = client.post(
+            f"{BASE_URL}/auth/login",
+            json={"email": _AUTH_EMAIL, "password": _AUTH_PASSWORD},
+        )
+    except httpx.HTTPError as exc:
+        print(f"  [!] 登录请求失败（后端未启动？）: {exc}")
+        return {}
+    if r.status_code != 200:
+        print(f"  [!] 登录失败 {r.status_code}: {r.text[:200]}")
+        return {}
+    _TOKEN = r.json()["token"]
+    return {"Authorization": f"Bearer {_TOKEN}"}
+
+
+@contextmanager
+def _new_client() -> Iterator[httpx.Client]:
+    """开一个「已带 Bearer 头」的 client：本机直连（trust_env=False 绕环境代理）。
+
+    trust_env 必须显式关掉——环境里配了 HTTP 代理时，httpx 默认会把
+    127.0.0.1/localhost 的请求也丢给代理，表现为 502 或莫名 ConnectError。
+
+    必须用 contextmanager 而不是直接返回 client：登录请求会让 client 进入
+    OPENED 状态，直接返回的话调用方再 `with client:` 会抛
+    「Cannot open a client instance more than once」（2026-09-23 实测）。
+    """
+    with httpx.Client(trust_env=False) as client:
+        client.headers.update(_auth_headers(client))
+        yield client
 
 
 def _banner(title: str) -> None:
@@ -62,7 +121,7 @@ def wait_for_session(sid: str, timeout: float = 60.0) -> dict:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with httpx.Client() as client:
+            with _new_client() as client:
                 r = client.get(f"{BASE_URL}/session/{sid}/state")
                 if r.status_code != 200:
                     time.sleep(1)
@@ -84,7 +143,7 @@ def wait_for_session(sid: str, timeout: float = 60.0) -> dict:
 def test_health() -> None:
     """Health check — is the graph ready?"""
     _banner("1. Health Check")
-    with httpx.Client() as client:
+    with _new_client() as client:
         r = client.get(f"{BASE_URL}/health")
         data = _print_resp("GET /health", r)
         assert r.status_code == 200
@@ -94,7 +153,7 @@ def test_health() -> None:
 def test_create_session_ai_generate() -> None:
     """Create a session with AI-generated problem (background)."""
     _banner("5. Create Session (AI Generate)")
-    with httpx.Client() as client:
+    with _new_client() as client:
         r = client.post(f"{BASE_URL}/session", json={
             "topic": "数组",
             "difficulty": "easy",
@@ -121,7 +180,7 @@ def test_create_session_leetcode_url() -> None:
     after polling.
     """
     _banner("6. Create Session (LeetCode URL)")
-    with httpx.Client() as client:
+    with _new_client() as client:
         create_r = client.post(f"{BASE_URL}/session", json={
             "topic": "算法",
             "difficulty": "easy",
@@ -144,7 +203,7 @@ def test_create_session_leetcode_url() -> None:
 def test_list_problems() -> None:
     """List existing problems in the database."""
     _banner("7. List Problems")
-    with httpx.Client() as client:
+    with _new_client() as client:
         r = client.get(f"{BASE_URL}/problems")
         data = _print_resp("GET /problems", r)
         problems = data.get("problems", [])
@@ -156,7 +215,7 @@ def test_list_problems() -> None:
 def test_create_session_existing_problem() -> None:
     """Create a session using an existing problem from the DB."""
     _banner("8. Create Session (Existing Problem)")
-    with httpx.Client() as client:
+    with _new_client() as client:
         # Find first problem
         r = client.get(f"{BASE_URL}/problems")
         data = r.json()
@@ -177,7 +236,7 @@ def test_create_session_existing_problem() -> None:
 def test_submit_and_run_flow() -> None:
     """Full submit → judge → run cycle on a known problem."""
     _banner("9. Submit & Run Flow")
-    with httpx.Client() as client:
+    with _new_client() as client:
         # Find a problem with test cases
         r = client.get(f"{BASE_URL}/problems")
         problems = r.json().get("problems", [])
@@ -225,7 +284,7 @@ def test_session_not_found() -> None:
     """Non-existent session should return 404."""
     _banner("10. Error Cases")
     fake_sid = str(uuid.uuid4())
-    with httpx.Client() as client:
+    with _new_client() as client:
         r = client.get(f"{BASE_URL}/session/{fake_sid}/state")
         _print_resp(f"GET /session/{fake_sid}/state (404)", r)
         assert r.status_code == 404
