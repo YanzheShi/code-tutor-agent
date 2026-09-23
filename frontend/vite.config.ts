@@ -10,7 +10,15 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    port: 5173,
+    port: 6573,
+    proxy: {
+      '/session': 'http://localhost:8765',
+      '/health': 'http://localhost:8765',
+    },
+  },
+  // 生产构建预览同样走 6573，并与 dev 一致的 API 代理
+  preview: {
+    port: 6573,
     proxy: {
       '/session': 'http://localhost:8765',
       '/health': 'http://localhost:8765',

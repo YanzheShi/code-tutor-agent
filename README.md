@@ -330,7 +330,7 @@ make all
 make server
 # 或 uv run uvicorn src.code_tutor_agent.api.main:app --host 0.0.0.0 --port 8765 --reload
 
-# 终端 2 — 前端 (port 5173, 自动代理 API)
+# 终端 2 — 前端 (port 6573, 自动代理 API)
 make frontend
 # 或 cd frontend && npm run dev
 ```

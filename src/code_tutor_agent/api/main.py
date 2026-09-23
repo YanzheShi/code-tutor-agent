@@ -96,7 +96,8 @@ _cors_origins = [
         "CORS_ORIGINS",
         "http://localhost:3000,http://127.0.0.1:3000,"
         "http://localhost:5173,http://127.0.0.1:5173,"
-        "http://localhost:5174,http://127.0.0.1:5174",
+        "http://localhost:5174,http://127.0.0.1:5174,"
+        "http://localhost:6573,http://127.0.0.1:6573",
     ).split(",")
     if o.strip()
 ]
