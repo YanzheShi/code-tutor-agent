@@ -118,7 +118,11 @@ class TestMultiQuestion:
         assert state3["phase"] == "solving"
 
     def test_next_problem_nonexistent_session(self, client):
-        """不存在的 sessionId 应返回 409（LG get_state 不抛异常，返回空 state）。
+        """不存在的 sessionId 应返回 404（LG get_state 不抛异常，返回空 state）。
+
+        2026-09-23：原先靠 normal 分支的 409「当前会话不在等待提交状态」兜住
+        （不存在 ⇒ next=() ⇒ 命中该判据）；该分支随 normal 模式删除后，端点改成
+        显式判空 values 返回 404 —— 语义上也更准确（会话不存在就是 404）。
 
         多用户改造（2026-09-06）：该端点现已统一 Bearer 鉴权，须带 token。
 
@@ -134,7 +138,7 @@ class TestMultiQuestion:
             resp = client.post(
                 f"/session/{fake_sid}/next-problem", json={}, headers=auth_headers(client),
             )
-            assert resp.status_code == 409
+            assert resp.status_code == 404
         finally:
             # 清掉 touch_session 为假 sid 落库的行，避免污染库
             from code_tutor_agent.db.database import _with_conn

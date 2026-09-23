@@ -149,13 +149,14 @@ class TestSerializationEdgeCases:
             self.client = c
             self.headers = _auth_headers(c)
 
-    def test_create_session_returns_generating(self):
+    def test_create_session_returns_dialog(self):
         resp = self.client.post(
             "/session", headers=self.headers, json={"topic": "数组", "difficulty": "easy", "mode": "practice"})
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
-        assert data["status"] == "generating"
+        # agent 模式：建会话即进导师对话态（normal 直出题模式已删除），不再是 "generating"
+        assert data["status"] == "dialog"
 
     def test_create_session_empty_body(self):
         resp = self.client.post(

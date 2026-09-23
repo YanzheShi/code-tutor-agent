@@ -1,10 +1,10 @@
 """Regression tests for LeetCode import + session creation flow.
 
 Covers:
-  - POST /session (with leetcode_url)  →  background generation, status=generating
+  - POST /session (with leetcode_url)  →  只建会话，返回 status="dialog"（agent 模式不直接出题）
   - GET  /session/{id}/state  →  polls to awaiting_submit, problem loaded, test cases visible
   - POST /session/{id}/run  →  run user code against visible test cases
-  - Frontend stale closure guard: session must leave 'generating' and reach
+  - Frontend stale closure guard: session must leave the dialog state and reach
     'awaiting_submit' (otherwise the frontend poll loop would spin forever).
 
 Note: parsing/fetching is now consolidated in the generation package
@@ -175,17 +175,19 @@ def _run_code(c, sid: str, code: str, headers: dict, retries: int = 4):
 
 @pytest.mark.integration
 class TestSessionLeetCodeUrlImport:
-    """POST /session + leetcode_url — import path goes through background generation.
+    """POST /session + leetcode_url — 建会话后必须经对话推送才出题（agent-only）。
 
-    Parsing/fetching is now consolidated in generator_node (generation pkg);
-    the session starts in 'generating' and reaches 'awaiting_submit' after the
-    imported problem is loaded (network permitting).
+    Parsing/fetching is consolidated in generator_node (generation pkg)；
+    会话建出来是 "dialog"，把 URL 发进 chat/stream 后才进入导入、最终到达
+    'awaiting_submit'（网络允许时）。
     """
 
     LEETCODE_URL = "https://leetcode.cn/problems/reverse-integer/"
 
-    def test_url_import_returns_generating(self, client, auth):
-        """POST /session with leetcode_url must return status=generating + session_id."""
+    def test_url_import_returns_dialog(self, client, auth):
+        """POST /session 带 leetcode_url 只建会话 → 返回 status="dialog" + session_id。"""
+        # agent 模式下 POST /session 一律进导师对话态（带 URL 也不再直接触发导入；
+        # 导入入口在 chat/stream 的消息里，见 _drive_until_problem）。
         resp = client.post("/session", headers=auth, json={
             "topic": "整数反转",
             "difficulty": "medium",
@@ -194,16 +196,16 @@ class TestSessionLeetCodeUrlImport:
         })
         assert resp.status_code == 200, resp.text
         data = resp.json()
-        # New contract: import path also runs background generation (no fast-path).
-        assert data["status"] == "generating"
+        assert data["status"] == "dialog"
         assert data["session_id"]
 
     def test_url_import_polls_to_awaiting_submit(self, client, auth):
         """在对话里发 URL → 必须轮询到 awaiting_submit，且题目来自导入内容。
 
         This is the critical guard against the stale closure bug: the frontend
-        polls until status != 'generating' — the session MUST leave 'generating'
-        and load the imported problem, otherwise the frontend loops forever.
+        polls until the session leaves the dialog state — the session MUST reach
+        'awaiting_submit' with the imported problem loaded, otherwise the
+        frontend loops forever.
         """
         resp = client.post("/session", headers=auth, json={
             "topic": "整数反转",
@@ -250,7 +252,7 @@ class TestSessionLeetCodeUrlImport:
         assert r["all_passed"] is True
 
     def test_missing_leetcode_url_falls_back_to_normal(self, client, auth):
-        """POST /session without leetcode_url should return generating (background task)."""
+        """POST /session 不带 leetcode_url 同样只建会话 → status="dialog"。"""
         resp = client.post(
             "/session",
             headers=auth,
@@ -258,7 +260,7 @@ class TestSessionLeetCodeUrlImport:
         )
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "generating"  # background task
+        assert data["status"] == "dialog"  # 建会话即进对话态，出题靠后续 chat
         assert data["session_id"] is not None
 
 

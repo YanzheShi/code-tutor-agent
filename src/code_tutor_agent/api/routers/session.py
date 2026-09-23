@@ -17,7 +17,6 @@ from code_tutor_agent.api.auth import get_current_user, require_admin, user_key
 from code_tutor_agent.api.deps import (
     get_graph,
     invoke_graph_tracked,
-    run_with_concurrency_limit,
 )
 from code_tutor_agent.api.serializers import empty_state, serialize_state
 from code_tutor_agent.api.services.generation import (
@@ -175,7 +174,13 @@ async def create_session(
     # 客户端断开也不会被取消（比 asyncio.create_task 更稳）；立即返回 session_id，
     # 前端进入 loading 用 SSE 收进度。
     background_tasks.add_task(run_generation, sid, initial_dict)
-    return {"session_id": sid, "status": "generating"}
+    # 2026-09-23 修语义：normal 模式已删除、mode 在 API 层被硬编码成 "agent"
+    # （见上方 config 与 initial_dict），graph 从 __start__ 直接进 agent_dialog_node，
+    # 会话注定停在对话态 —— 所以这里返回 "dialog"（= 已建会话、进入导师对话），
+    # 而不是旧的 "generating"（normal 直出题时代的语义，如实返回会误导调用方）。
+    # 前端本来就没读过这个字段（useSession 建会话后直接 setPhase('dialog')），
+    # 真实状态一律以 GET /session/{sid}/state 为准。
+    return {"session_id": sid, "status": "dialog"}
 
 
 # ── 会话列表 / 删除 ──
@@ -984,6 +989,13 @@ async def next_problem(
     except Exception:
         raise HTTPException(404, f"Session {sid} not found")
 
+    # 不存在的会话：LG 的 get_state 不抛错、而是返回空 values（与 run.py 同款判据），
+    # 必须显式 404 —— 否则会一路走到下面「重入导师对话」分支，给不存在的会话返回 200。
+    # 2026-09-23：原先这里靠 normal 分支的 409「当前会话不在等待提交状态」误打误撞兜住
+    # （不存在 ⇒ next=() ⇒ 命中该判据），那条分支随 normal 模式删除后补上这个显式检查。
+    if not state.values or not state.values.get("session_id"):
+        raise HTTPException(404, f"Session {sid} not found")
+
     # 记录活跃时间
     try:
         touch_session(sid, _uid)
@@ -991,7 +1003,14 @@ async def next_problem(
         logger.warning("touch_session failed for %s: %s", sid, exc)
 
     vals = state.values
-    mode = vals.get("mode", "practice")
+    mode = vals.get("mode", "agent")
+    # 2026-09-23 清理：normal 模式（practice / interview / debug_theatre）已删除，
+    # 「重入导师对话」是唯一路径（原 critic→planner→generator 直接出题的分支已删除）。
+    # 历史 checkpoint 里若仍是旧 mode 值，在此就地归一到 agent —— 让下方条件恒成立。
+    # 判据：库里 60/60 会话均为 agent；前端只传 preference='continue_dialog'。
+    if mode != "agent":
+        logger.info("next-problem: 历史 mode=%s → 按 agent 语义重入导师对话", mode)
+        mode = "agent"
 
     # 富化 metadata（topic/difficulty/mode/problem_id）供 LangSmith 按会话筛查
     config = build_run_config(
@@ -1150,41 +1169,7 @@ async def next_problem(
             tutor_messages=[_ser(m) for m in history],
         )
 
-    # ── Normal modes: critic flush → planner → generator ──
-    # 2026-08-04 修复：旧实现用 update_state(as_node="critic_node") + invoke(None)，
-    # 但 graph 此刻停在 wait_for_submit 的 interrupt 上——暂停期 update_state 会丢失
-    # 挂起的中断，且 critic_node 根本不会运行，导致永远不出新题（原样返回旧题）。
-    # 新实现：以 abandon 载荷 resume 该 interrupt，wait_for_submit_node 携带
-    # pending_abandon/next_preference，wait_for_submit_router 路由到 critic_node，
-    # 走 critic(ABANDON) → planner → generator → wait 完成换题。
-
-    # Set up progress messages (frontend polls /state during generation)
-    _generation_progress[sid] = ["正在准备下一题…"]
-
-    if "wait_for_submit_node" not in (state.next or ()):
-        logger.warning("next-problem: session %s not paused at wait_for_submit (next=%s)",
-                       sid, state.next)
-        raise HTTPException(409, "当前会话不在等待提交状态，无法换题")
-
-    await run_with_concurrency_limit(
-        invoke_graph_tracked,
-        graph,
-        Command(resume={"abandon": True, "preference": body.preference}),
-        config,
-        "next_problem",
-    )
-
-    # Read new state
-    new_state = graph.get_state(config)
-    new_vals = new_state.values
-
-    problem = new_vals.get("problem")
-    if not problem:
-        raise HTTPException(500, "Next problem generation failed")
-
-    return NextProblemResp(
-        session_id=sid,
-        problem=problem.model_dump() if hasattr(problem, "model_dump") else problem,
-        phase=new_vals.get("phase", "solving"),
-        hint_level=0,
-    )
+    # 2026-09-23 清理：此处原有「Normal modes: critic flush → planner → generator」
+    # 直接出下一题的分支（含 409「当前会话不在等待提交状态，无法换题」判据 +
+    # 以 abandon 载荷 resume interrupt），随 normal 模式一并删除 ——
+    # 上面「重入导师对话」现在是 next-problem 的唯一路径。

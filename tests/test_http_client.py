@@ -174,10 +174,9 @@ def test_create_session_ai_generate() -> None:
 def test_create_session_leetcode_url() -> None:
     """Create a session from a LeetCode URL (import path).
 
-    The URL is passed through; parsing/fetching is consolidated in the
-    generation package (generator_node), so the session starts in the
-    background ``generating`` state and the imported problem shows up
-    after polling.
+    导入入口现在在对话消息里（``POST /session/{sid}/chat/stream`` 的消息内含 URL），
+    POST /session 只建会话并返回 ``status="dialog"``；URL 存进会话状态，等对话判定
+    就绪后由 generator_node 抓取。题目是否就绪靠轮询 ``/state``。
     """
     _banner("6. Create Session (LeetCode URL)")
     with _new_client() as client:
@@ -189,8 +188,8 @@ def test_create_session_leetcode_url() -> None:
         })
         create_data = _print_resp("POST /session (leetcode_url)", create_r)
         assert create_r.status_code == 200
-        # New contract: import path also goes through background generation.
-        assert create_data.get("status") == "generating"
+        # agent 模式：建会话即进导师对话态；带 leetcode_url 不再直接触发导入。
+        assert create_data.get("status") == "dialog"
 
         sid = create_data.get("session_id")
         if sid:

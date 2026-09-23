@@ -34,12 +34,12 @@ class TestJudgeFlow:
     """判题流程集成测试。"""
 
     def test_session_creation_sets_correct_status(self, client):
-        """创建 session 后状态为 generating。"""
+        """创建 session 后状态为 dialog（agent 模式建会话即进导师对话，见 POST /session）。"""
         resp = client.post("/session", json={"topic": "数组", "difficulty": "easy"}, headers=auth_headers(client))
         assert resp.status_code == 200
         data = resp.json()
         assert "session_id" in data
-        assert data["status"] == "generating"
+        assert data["status"] == "dialog"
 
     def test_session_has_unique_id(self, client):
         """两次创建 session 得到不同 id。"""

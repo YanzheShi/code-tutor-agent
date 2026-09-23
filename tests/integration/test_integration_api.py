@@ -49,7 +49,7 @@ class TestSessionCreation:
         assert resp.status_code == 200, resp.text
         data = resp.json()
         assert "session_id" in data
-        assert data["status"] == "generating"
+        assert data["status"] == "dialog"
 
     def test_create_session_with_type(self, client):
         """指定 problem_type 创建。"""
@@ -59,7 +59,7 @@ class TestSessionCreation:
             }, headers=auth_headers(client))
             assert resp.status_code == 200, f"Failed for type {ptype}: {resp.text}"
             data = resp.json()
-            assert data["status"] == "generating"
+            assert data["status"] == "dialog"
 
     def test_create_session_empty_body(self, client):
         """空 body 也能创建（用默认值）。"""
