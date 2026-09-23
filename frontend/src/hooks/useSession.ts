@@ -235,9 +235,23 @@ export function useSession() {
         setScreen('main');
       },
       onError: (msg) => {
-        reportError('sse_error', msg, { sessionId: sid });
-        setErrorMsg(msg);
-        setScreen('error');
+        // SSE 报错先别急着判死：出题可能已在后台完成（超时类误报的兜底，2026-09-22）。
+        // 先查一次 state，题目已就绪就直接进做题页，不再把用户丢到错误卡片。
+        (async () => {
+          try {
+            const st = await getState(sid);
+            if (st?.problem) {
+              applySessionState(st, true);
+              setActiveTabs({ left: 'desc', right: 'code' });
+              setProgressMsgs([]);
+              setScreen('main');
+              return;
+            }
+          } catch { /* 查不到就走原错误路径 */ }
+          reportError('sse_error', msg, { sessionId: sid });
+          setErrorMsg(msg);
+          setScreen('error');
+        })();
       },
     });
   }, [subscribeProgress, applySessionState]);

@@ -89,8 +89,20 @@ class ProblemGenerationAgent:
         self.sandbox = sandbox or SandboxGateway()
         self.verifier = verifier or CodeVerifier()
 
-    def run(self, ctx: GenerationContext, sink: ProgressSink | None = None) -> GenerationResult:
-        """执行决策树，返回 GenerationResult（纯数据）。"""
+    def run(
+        self,
+        ctx: GenerationContext,
+        sink: ProgressSink | None = None,
+        *,
+        force_fallback: bool = False,
+    ) -> GenerationResult:
+        """执行决策树，返回 GenerationResult（纯数据）。
+
+        force_fallback（2026-09-23）：跳过 LLM 原创通道，直接进入
+        ``_FALLBACK_CHAIN``（PULL → HISTORY → STATIC）。供 API 层在
+        ``graph.invoke`` 被掐断/超时后带外续跑降级链使用——否则整段 invoke
+        中断时链也一起没了，用户会卡在 awaiting_problem。
+        """
         sink = sink or NullSink()
         draft: ProblemDraft | None = None
         attempted_chain: list[str] = []
@@ -118,7 +130,10 @@ class ProblemGenerationAgent:
         # ── 通道 B：LLM 生成 + 校验 + 落库 + 重试（仅未贴 LeetCode 时）──
         llm_saved_pid: int | None = None
         llm_saved_reused = False
-        if draft is None and not ctx.lc_url:
+        if draft is None and not ctx.lc_url and force_fallback:
+            sink.event(GenEvent("progress", "⏭️ 跳过 LLM 通道，直接走降级链…"))
+            logger.info("force_fallback=True — 跳过 LLM 原创通道，直接进入降级链")
+        elif draft is None and not ctx.lc_url:
             sink.event(GenEvent("progress", "正在调用大模型生成题目…"))
             # 重试源统一收口在外层循环：
             # 1. 题目自身不能自洽（题解跑不通自身示例）；

@@ -20,7 +20,11 @@ from code_tutor_agent.api.deps import (
     run_with_concurrency_limit,
 )
 from code_tutor_agent.api.serializers import empty_state, serialize_state
-from code_tutor_agent.api.services.generation import GENERATION_TIMEOUT, run_generation
+from code_tutor_agent.api.services.generation import (
+    SSE_HARD_TIMEOUT,
+    SSE_STALL_TIMEOUT,
+    run_generation,
+)
 from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
 from code_tutor_agent.db.database import (
     delete_session_activity,
@@ -707,14 +711,28 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
     graph = get_graph()
     config = build_run_config(sid, run_name="stream_progress")
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + GENERATION_TIMEOUT + 30
+    # 「停顿超时」而非「绝对超时」（2026-09-22 修线上/测试环境误报）：
+    # 出题链路（planner + generator + 示例解析/双解对拍 + 降级链）在 LLM 慢时
+    # 常常超过 GENERATION_TIMEOUT+30。旧的绝对 deadline 会在出题仍正常推进时推 error
+    # 「出题比预期慢了些」→ 前端错误卡片，而后台其实成功（日志里题目/用例都生成好了）。
+    # 现改为：只要还有新进度消息、或状态在推进（dialog→awaiting_problem→awaiting_submit），
+    # 就续期；连续无活动超过 stall_timeout 才判定卡死。
+    # 阈值关系：invoke 上限（CHAT_GENERATION_TIMEOUT）< stall < hard，
+    # 保证「LLM 挂住」先由 invoke 超时触发降级链兜底（有进度 → 续期），前端不会先弹错。
+    stall_timeout = SSE_STALL_TIMEOUT
+    hard_deadline = loop.time() + SSE_HARD_TIMEOUT
+    deadline = loop.time() + stall_timeout
+    last_status: str | None = None
 
     # 终态错误标记：出现这些字样说明降级也已失败，可安全判定为生成失败。
-    # 注意「LLM 生成失败…正在从备用题库选题…」是过渡消息，紧接着 _fallback_static_problem
+    # 注意「生成超时…正在按降级链选题…」是过渡消息，紧接着 _fallback_problem
     # 很可能成功，不能据此误报错误（否则会把本可成功的题目判成失败）。
     TERMINAL_ERROR_MARKERS = ("请稍后重试", "请联系老师")
 
     async def event_gen():
+        # deadline / last_status 在外层初始化、在生成器内续期 → 必须显式 nonlocal
+        # （缺了会 UnboundLocalError：SSE 直接断流、前端拿不到任何事件）。
+        nonlocal deadline, last_status
         # 初始时记录已有消息数量，不推送初始快照，只靠轮询收新消息。
         # 初始出题时 _generation_progress 为空，last_idx=0 正常收新消息；
         # 继续出题时 _generation_progress 有旧消息，last_idx 跳过旧消息。
@@ -731,6 +749,7 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
                 for m in msgs[last_idx:]:
                     yield f"event: progress\ndata: {json.dumps({'message': m}, ensure_ascii=False)}\n\n"
                 last_idx = len(msgs)
+                deadline = loop.time() + stall_timeout  # 有新进度 = 生成仍在推进，续期
 
             # 检测完成 / 失败
             state = None
@@ -745,6 +764,9 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
             mode = (state or {}).get("mode")
             problem = (state or {}).get("problem")
             tutor_msgs = (state or {}).get("tutor_messages") or (state or {}).get("agent_dialog_history")
+            if status != last_status:
+                last_status = status
+                deadline = loop.time() + stall_timeout  # 状态推进 = 生成仍在推进，续期
             if problem and status != "dialog":
                 # 微小延迟，让 React 先处理完 progress 事件的 re-render，再收 done
                 await asyncio.sleep(0.05)
@@ -770,7 +792,7 @@ async def stream_progress(sid: str, current: dict = Depends(get_current_user)):
                 yield f"event: error\ndata: {json.dumps({'message': _emsg}, ensure_ascii=False)}\n\n"
                 return
 
-            if loop.time() > deadline:
+            if loop.time() > deadline or loop.time() > hard_deadline:
                 if problem:
                     await asyncio.sleep(0.05)
                     yield f"event: done\ndata: {json.dumps(serialize_state(state), ensure_ascii=False)}\n\n"

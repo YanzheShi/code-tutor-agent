@@ -1,7 +1,6 @@
 """Chat router — streaming + non-streaming chat endpoints."""
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -10,7 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from starlette.responses import StreamingResponse
 
 from code_tutor_agent.api.auth import get_current_user, user_key
-from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked
+from code_tutor_agent.api.deps import get_graph
 from code_tutor_agent.db.database import get_session_owner
 from code_tutor_agent.guards.design_guard import mentions_design_topic
 from code_tutor_agent.prompts.tutor import TUTOR_SYSTEM_PROMPT
@@ -276,31 +275,21 @@ _TUTOR_SYSTEM = (
 
 
 async def _run_graph_and_generate_tests(graph, config, sid: str):
-    """graph.invoke 出题后，再在后台生成完整测试套件（随机 + 边界）。
+    """对话出题链（薄封装）：出题 + 兜底 + 完整测试用例调度。
 
     与 session.py 的 fast-path / run_generation 对齐：agent 对话（贴 LeetCode
     链接或普通 topic/difficulty）出的题也要有完整用例，而不只是 1~2 个可见示例。
-    LeetCode 路径 A 的 optimal_solution 已在 graph.invoke 内同步落库，可直接复用。
+
+    实现统一收口在 ``api/services/generation.py::run_chat_generation``
+    （invoke 超时上限 + 超时/异常走降级链兜底 + 用例调度），本路由只做转发，
+    不再持有出题/兜底逻辑 —— 避免降级链出现第二份实现（2026-09-23 重构）。
 
     注意：不直接复用 run_generation，因为它内部 SessionState(**initial_dict)
     会重建状态、清掉本路由已 update_state 的 leetcode / tutor_messages 数据。
     """
-    cur = graph.get_state(config)
-    await asyncio.to_thread(invoke_graph_tracked, graph, dict(cur.values), config, "leetcode_generation")
-    from code_tutor_agent.api.services.generation import _run_suite_safe
-    try:
-        state = graph.get_state(config)
-        problem = state.values.get("problem")
-        if problem:
-            pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
-            reused = problem.reused if hasattr(problem, "reused") else (problem.get("reused") if isinstance(problem, dict) else False)
-            if pid and not reused:
-                logger.info("为 pid=%d 后台生成完整测试用例 (新题)", pid)
-                await _run_suite_safe(pid, sid)
-            else:
-                logger.info("pid=%s 为复用题/无 pid，跳过测试生成", pid)
-    except Exception as e:
-        logger.error("Background complex test generation failed for %s: %s", sid, e, exc_info=True)
+    from code_tutor_agent.api.services.generation import run_chat_generation
+
+    await run_chat_generation(graph, config, sid)
 
 
 @router.post("/{sid}/chat/stream")
