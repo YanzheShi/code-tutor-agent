@@ -41,16 +41,23 @@ export default function RunResults({ results, running }: { results: RunResult[] 
             {r.memory_kb > 0 && <span className="text-ct-muted text-[10px] ml-1">| {r.memory_kb.toFixed(0)}KB</span>}
           </div>
           {r.input_args && r.input_args.length > 0 && (
-            <div className="text-ct-muted mb-1">输入: {r.input_args.join('  ')}</div>
+            <div className="text-ct-muted mb-1">输入: {r.input_args.join(', ')}</div>
           )}
           {r.explanation && <div className="text-ct-muted mb-1">{r.explanation}</div>}
-          {/* 编译错误：结构化 payload 优先（<pre> 指针），detail 仅作降级兜底 */}
+          {/* 编译错误：结构化 payload 优先（<pre> 指针）；其余 detail（RE 栈 / TLE 等）
+              仅在「期望/实际」两行都缺时兜底展示——WA 的 expected=got= 文本与下行重复 */}
           {r.compile_error ? (
             <CompileErrorPanel r={r} />
           ) : (
-            r.detail && <div className="text-ct-muted mb-1 whitespace-pre-wrap">{r.detail}</div>
+            r.detail && !r.expected && !r.actual && (
+              <div className="text-ct-muted mb-1 whitespace-pre-wrap">{r.detail}</div>
+            )
           )}
-          <div className="text-ct-muted">期望: {r.expected}</div>
+          {/* 实际/期望红绿对比：提交判题映射的失败用例（带 actual）固定展示 */}
+          {r.actual !== undefined && (
+            <div className="text-ct-muted">实际: <span className="text-ct-error">{r.actual || '—'}</span></div>
+          )}
+          <div className="text-ct-muted">期望: <span className="text-ct-success">{r.expected || '—'}</span></div>
         </div>
       ))}
     </div>

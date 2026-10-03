@@ -250,13 +250,17 @@ for idx, tc in enumerate(test_cases):
             print('RESULT: ' + json.dumps({{
                 "test_case_id": idx, "status": "Wrong Answer",
                 "detail": "expected=" + repr(expected_fmt) + " got=" + repr(actual),
-                "runtime_ms": round(elapsed, 2)
+                "runtime_ms": round(elapsed, 2),
+                "input_args": tc.get('input_args', []),
+                "expected_output": expected_fmt, "actual_output": actual
             }}))
     except Exception as exc:
         elapsed = (time.perf_counter() - start) * 1000
         print('RESULT: ' + json.dumps({{
             "test_case_id": idx, "status": "Runtime Error",
-            "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2)
+            "detail": str(exc)[:200], "runtime_ms": round(elapsed, 2),
+            "input_args": tc.get('input_args', []),
+            "expected_output": "", "actual_output": ""
         }}))
         """
 

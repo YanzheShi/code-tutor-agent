@@ -358,6 +358,31 @@ export function useSession() {
       } else {
         dispatchCompileError(null);
       }
+      // 非 CE 失败提交：把判题里的失败用例映射进「运行结果」tab（2026-10-03 产品决策）。
+      // 此前只有 CE 会写 runResults，WA/RE/TLE 时运行 tab 还停留在上次「运行」的旧数据。
+      // Skipped（空 expected）不参与判定，必须过滤掉；页面仍切导师页讲评，详情留给运行 tab。
+      if (resp.verdict && resp.verdict !== 'AC' && resp.verdict !== 'CE') {
+        const subs = (full.submissions || []) as Submission[];
+        const lastSub = subs[subs.length - 1];
+        const failed = (lastSub?.judge_results || []).filter(
+          j => j.status !== 'Passed' && j.status !== 'Skipped' && !j.compile_error
+        );
+          if (failed.length > 0) {
+            setRunResults(failed.map((j, idx) => ({
+              test_case_id: idx + 1,
+              passed: false,
+              status: j.status,
+              detail: j.detail || '',
+              input_args: j.input_args || [],
+              expected: j.expected_output || '',
+              actual: j.actual_output,
+              // explanation（用例说明）刻意不带：失败用例「输入/期望/实际」三行已够，
+              // 长说明文字是噪音（2026-10-03 用户反馈）
+              runtime_ms: j.runtime_ms || 0,
+              memory_kb: 0,
+            })));
+          }
+      }
       setSubmissions((full.submissions || []) as Submission[]);
       // 同步后端 phase：AC 后后端 critic 会置 phase=reviewing，
       // 让 isDone (= phase==='reviewing' && verdict==='AC') 成立，从而显示「下一题」按钮
@@ -427,7 +452,8 @@ export function useSession() {
           }
         }
         setTutorMessages(prev => [...prev, { role: 'tutor', content: summary }]);
-        setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
+        // 运行完留在「运行结果」tab：逐用例 ✓/✗ 详情比对话摘要更直观（2026-10-03 产品决策）；
+        // 摘要仍写入对话流，切去导师页还能看到，信息不丢。
       }
     } catch (e) {
       const runErr = e instanceof ApiError ? e.message : String(e);

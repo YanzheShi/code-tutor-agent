@@ -58,11 +58,65 @@ def _m_judge_ok() -> None:
     except Exception:
         pass
 
+
+def _param_names(func_sig: str) -> list[str]:
+    """从函数签名提取参数名列表（跳过 self）。解析失败返回 []，调用方回退原始入参。
+
+    兼容两种形态：``def f(self, nums: List[int], k: int) -> ...``（从 optimal_solution
+    提取的 def 全文）与 ``(nums: List[int], k: int)``。类型注解里的逗号
+    （List[List[int]]、Dict[str, int]）按括号深度跳过，不会切碎注解。
+    """
+    import re
+
+    try:
+        m = re.search(r"\(([^)]*)\)", func_sig or "")
+        if not m:
+            return []
+        parts: list[str] = []
+        depth = 0
+        cur: list[str] = []
+        for ch in m.group(1):
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth -= 1
+            if ch == "," and depth == 0:
+                parts.append("".join(cur))
+                cur = []
+            else:
+                cur.append(ch)
+        if cur:
+            parts.append("".join(cur))
+        names: list[str] = []
+        for p in parts:
+            p = p.strip()
+            if not p or p == "self":
+                continue
+            name = p.split(":", 1)[0].split("=", 1)[0].strip()
+            if re.fullmatch(r"[A-Za-z_]\w*", name):
+                names.append(name)
+        return names
+    except Exception:
+        return []
+
+
+def _named_input_args(func_sig: str, input_args: list | None) -> list[str]:
+    """入参展示格式化：参数名与入参个数对齐时输出 ``nums = [1,3], k = 3`` 命名形态。
+
+    个数不齐或解析失败时原样返回——宁可不命名，不给错位的「参数名 = 值」误导。
+    仅用于展示边界（judge_results / last_run_results），不影响判题入参
+    （harness 直读 DB 原始 test_cases）。"""
+    args = [str(a) for a in (input_args or [])]
+    names = _param_names(func_sig)
+    if names and len(names) == len(args):
+        return [f"{n} = {a}" for n, a in zip(names, args)]
+    return args
+
 # Timeout per test case during agent judging
 AGENT_JUDGE_TIMEOUT = 5.0
 
 
-def _to_run_results(results: list, test_cases: list) -> list[dict]:
+def _to_run_results(results: list, test_cases: list, func_sig: str = "") -> list[dict]:
     """Convert RunnerResult list → RunCodeResponse-shaped dicts (mirrors old run.py)."""
     run_results: list[dict] = []
     for r in results:
@@ -76,9 +130,16 @@ def _to_run_results(results: list, test_cases: list) -> list[dict]:
             "detail": r.detail[:200] if r.detail else "",
             # RunnerResult 自身已带 input_args（执行时用到的真实输入），优先用它，
             # 避免依赖 test_cases[_vi] 索引错位或 tc 非 dict 时把 input 丢成空列表。
-            "input_args": list(getattr(r, "input_args", None)
-                               or (tc.get("input_args", []) if isinstance(tc, dict) else [])),
+            # 展示层做命名格式化（nums = [...], k = 3），判题入参不受影响。
+            "input_args": _named_input_args(
+                func_sig,
+                list(getattr(r, "input_args", None)
+                     or (tc.get("input_args", []) if isinstance(tc, dict) else [])),
+            ),
             "expected": tc.get("expected_output", "") if isinstance(tc, dict) else "",
+            # 实际输出：本地 runner 一直带；Judge0 harness 2026-10-03 起 WA/RE 行也回传。
+            # 运行 tab 失败用例的「实际 vs 期望」对比靠它，不再依赖 detail 里的 got= 文本。
+            "actual": getattr(r, "actual_output", "") or "",
             "explanation": tc.get("explanation", "") if isinstance(tc, dict) else "",
             "runtime_ms": r.runtime_ms,
             "memory_kb": r.memory_kb,
@@ -163,7 +224,7 @@ def _resolve_function_signature(problem_dict: Any) -> str:
     return func_sig
 
 
-def _build_base_result(raw_results: list, test_cases: list | None = None) -> JudgeResult:
+def _build_base_result(raw_results: list, test_cases: list | None = None, func_sig: str = "") -> JudgeResult:
     """由执行结果构造 base JudgeResult：首个失败用例（结构化）或 AC 汇总文案。"""
     _status_map = {
         "Passed": "AC",
@@ -182,7 +243,7 @@ def _build_base_result(raw_results: list, test_cases: list | None = None) -> Jud
             detail=first_fail.detail or "",
             runtime_ms=first_fail.runtime_ms,
             memory_kb=first_fail.memory_kb,
-            input_args=list(first_fail.input_args or []),
+            input_args=_named_input_args(func_sig, list(first_fail.input_args or [])),
             expected_output=first_fail.expected_output or "",
             actual_output=first_fail.actual_output or "",
             explanation=_tc.get("explanation", "") if isinstance(_tc, dict) else "",
@@ -246,6 +307,7 @@ def _apply_side_effects(
     feedback_msg: str,
     update: dict,
     code: str = "",
+    func_sig: str = "",
 ) -> None:
     """应用画像写入、sample 诊断与路由 status，原地修改 ``update``。
 
@@ -298,7 +360,7 @@ def _apply_side_effects(
 
     # ── 运行（sample scope）：写诊断 last_run_results，必要时给轻提示 ──
     if state.judge_scope == "sample":
-        update["last_run_results"] = _to_run_results(raw_results, test_cases)
+        update["last_run_results"] = _to_run_results(raw_results, test_cases, func_sig)
         if analysis.verdict == "AC":
             # 微决策 3：样例全过 → 鼓励提交完整用例
             hint = "\n\n💡 样例都过了，点「提交」跑完整用例试试吧！"
@@ -382,7 +444,7 @@ def agent_judge_node(state: SessionState) -> dict:
     # （get_state 从 checkpoint 重建，2026-09-07 实测 judge_results 全丢）。
     submissions_update: list = []
     if state.submissions and not is_run:
-        state.submissions[-1].judge_results.append(_build_base_result(raw_results, test_cases))
+        state.submissions[-1].judge_results.append(_build_base_result(raw_results, test_cases, func_sig))
         submissions_update = [state.submissions[-1]]
 
     # ── 判题分析（sample 跳过 LLM / full 走 LLM）──
@@ -409,5 +471,5 @@ def agent_judge_node(state: SessionState) -> dict:
     if submissions_update:
         update["submissions"] = submissions_update
 
-    _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update, code=code)
+    _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update, code=code, func_sig=func_sig)
     return update

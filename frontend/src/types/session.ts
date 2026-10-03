@@ -78,6 +78,8 @@ export type RunResult = {
   detail: string;
   input_args: string[];
   expected: string;
+  /** 实际输出：只有「提交」判题映射的失败用例才有（运行走 Judge0 时不带） */
+  actual?: string;
   explanation?: string;
   runtime_ms: number;
   memory_kb: number;
