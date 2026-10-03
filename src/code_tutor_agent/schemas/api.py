@@ -101,6 +101,10 @@ class RunResult(BaseModel):
     detail: str = ""
     input_args: list[str] = Field(default_factory=list)
     expected: str = ""
+    # 实际输出（2026-10-03）：_to_run_results / _build_base_result 均产出。
+    # 必须显式声明——pydantic v2 会静默丢弃未声明的键（同下方 compile_error 的坑），
+    # 不声明则 /run 响应里 actual 凭空消失，前端「实际 vs 期望」对比永远空。
+    actual: str = ""
     explanation: str = ""
     runtime_ms: float = 0.0
     memory_kb: float = 0.0

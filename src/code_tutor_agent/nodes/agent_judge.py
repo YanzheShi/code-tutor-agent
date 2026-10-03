@@ -62,20 +62,31 @@ def _m_judge_ok() -> None:
 def _param_names(func_sig: str) -> list[str]:
     """从函数签名提取参数名列表（跳过 self）。解析失败返回 []，调用方回退原始入参。
 
-    兼容两种形态：``def f(self, nums: List[int], k: int) -> ...``（从 optimal_solution
-    提取的 def 全文）与 ``(nums: List[int], k: int)``。类型注解里的逗号
-    （List[List[int]]、Dict[str, int]）按括号深度跳过，不会切碎注解。
+    兼容三种形态：
+      1. ``def f(self, nums: List[int], k: int) -> ...``（optimal_solution 提取的 def 全文）
+      2. ``(nums: List[int], k: int)``（仅参数段）
+      3. ``nums: List[int], k: int -> List[int]``（LLM 直填的无括号形态，DB 里真实存在）
+    类型注解里的逗号（List[List[int]]、Dict[str, int]）按括号深度跳过，不会切碎注解。
     """
     import re
 
     try:
-        m = re.search(r"\(([^)]*)\)", func_sig or "")
-        if not m:
-            return []
+        sig = (func_sig or "").strip()
+        # 无括号形态：按 -> 切掉返回类型，把参数段当「伪括号内文」处理
+        if "(" not in sig:
+            sig = sig.split("->", 1)[0].strip()
+            if not sig:
+                return []
+            inner = sig
+        else:
+            m = re.search(r"\(([^)]*)\)", sig)
+            if not m:
+                return []
+            inner = m.group(1)
         parts: list[str] = []
         depth = 0
         cur: list[str] = []
-        for ch in m.group(1):
+        for ch in inner:
             if ch in "([{":
                 depth += 1
             elif ch in ")]}":
