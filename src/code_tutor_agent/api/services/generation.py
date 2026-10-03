@@ -7,7 +7,7 @@ import os
 import re
 import uuid
 
-from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked
+from code_tutor_agent.api.deps import get_graph, invoke_graph_tracked, write_as_node
 from code_tutor_agent.generation import ProblemGenerationAgent
 from code_tutor_agent.generation.state import GenEvent
 from code_tutor_agent.generation.suite import build_suite
@@ -39,6 +39,34 @@ SSE_HARD_TIMEOUT = float(os.getenv("CTA_SSE_HARD_SECONDS", "900"))
 
 # 后台套件生成的统一执行器（graph.invoke 后由 API 层调度，设计 §13）
 _SUITE_AGENT = ProblemGenerationAgent()
+
+
+def mirror_state(graph, config: dict, values: dict) -> None:
+    """把 scratch 线程的终态镜像回真实会话，并让会话落在正确的挂起态。
+
+    ⚠️ 为什么不能沿用 ``update_state(..., as_node="generator_node")``
+    （2026-10-01 做题「运行」永久 400 事故）：
+      - ``generator_node`` 的出向全在 ``Command(goto)`` 里，``update_state``
+        推不出 next → 镜像后真实会话停在 **``next=()``** 的退化态；
+      - 更糟的是这是真实 thread 的**第一个** checkpoint（真实 thread 从没真正
+        跑过图），``versions_seen`` 里只有一条空记录。此后做题界面只要发一条
+        对话消息，``pause_safe_update`` 的 ``update_state`` 就会把 as_node 推断成
+        ``__start__``（= input_channels）并**真的执行 start_router**，把 next 钉成
+        ``('agent_dialog_node',)``：``/run`` 400「会话未在等待提交」，且 run.py /
+        session.py 的卡死兜底（判据是 ``not state.next``）同时失效 → 永久卡死。
+
+    改为按「有没有题」显式选 as_node（见 api/deps.py::write_as_node）：
+      - 有题 → 静态边指向 ``wait_for_submit_node`` 的节点，镜像完会话**直接就是**
+        「等待提交」态（``next=('wait_for_submit_node',)``），/run、/submit 走正常链路；
+      - 无题（对话态 / 出题失败）→ 无出边节点，``next`` 保持 ``()``，不伪造等待态。
+    """
+    values = values or {}
+    problem = (
+        values.get("problem")
+        if isinstance(values, dict)
+        else getattr(values, "problem", None)
+    )
+    graph.update_state(config, values, as_node=write_as_node(bool(problem)))
 
 
 class _ProgressSink:
@@ -93,7 +121,7 @@ async def run_generation(sid: str, initial_dict: dict):
             timeout=GENERATION_TIMEOUT,
         )
         # 成功：把隔离命名空间的终态镜像回真实会话（孤儿线程已结束，无竞态）
-        graph.update_state(config, final_state, as_node="generator_node")
+        mirror_state(graph, config, final_state)
         _delete_scratch(graph, scratch_id)
         _emit(sid, "\u2705 题目已就绪，正在后台生成完整测试用例...")
         await _schedule_suite(graph, config, sid)
@@ -206,7 +234,7 @@ async def run_chat_generation(graph, config: dict, sid: str) -> None:
             timeout=CHAT_GENERATION_TIMEOUT,
         )
         # 成功：把隔离命名空间的终态镜像回真实会话（孤儿线程已结束，无竞态）
-        graph.update_state(config, final_state, as_node="generator_node")
+        mirror_state(graph, config, final_state)
         _delete_scratch(graph, scratch_id)
         _emit(sid, "✅ 题目已就绪，正在后台生成完整测试用例...")
     except asyncio.TimeoutError:
@@ -293,7 +321,7 @@ async def _fallback_problem(sid: str, config: dict, values: dict) -> None:
     try:
         # 注入交给节点内权威实现（ProblemMeta/欢迎语/status/phase 一次性对齐）
         cmd = _translate_to_command(state, result)
-        get_graph().update_state(config, getattr(cmd, "update", None) or {}, as_node="generator_node")
+        mirror_state(get_graph(), config, getattr(cmd, "update", None) or {})
         _emit(sid, f"✅ 已按降级链选取 **{result.draft.title}**（通道 {result.channel}）")
         logger.info(
             "Fallback chain loaded problem %s via %s for session %s",

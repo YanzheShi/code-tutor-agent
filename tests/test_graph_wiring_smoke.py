@@ -38,9 +38,22 @@ from langgraph.store.memory import InMemoryStore
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
+from code_tutor_agent.api.deps import (
+    AS_NODE_AWAITING_SUBMIT,
+    AS_NODE_NEUTRAL,
+    pause_safe_update,
+    write_as_node,
+)
+from code_tutor_agent.api.services.generation import mirror_state
 from code_tutor_agent.graph.graph import _build_graph, compile_graph
 from code_tutor_agent.profile.node import update_profile_node
-from code_tutor_agent.schemas.state import SessionPhase, SessionState, last_phase, last_wins_list
+from code_tutor_agent.schemas.state import (
+    ProblemMeta,
+    SessionPhase,
+    SessionState,
+    last_phase,
+    last_wins_list,
+)
 
 
 def _make_state(mode: str) -> SessionState:
@@ -276,3 +289,130 @@ def test_last_wins_list_tolerates_repeated_pause_safe_writes():
 
     final = app.get_state(config).values.get("tutor_messages", [])
     assert final == ["u0", "t0", "u1", "t1", "u2", "t2"], f"消息丢失/重复: {final}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-10-01 做题界面「运行」永久 400 事故
+#
+# 症状：出题成功后点「运行」→ `POST /run` 400「当前不可运行：会话未在等待提交」，
+#       重试、改代码都无效；只要中途**发过一条对话消息**就必然中招。
+#
+# 根因链（本地纯 langgraph 复现确认）：
+#   1. 出题结果靠 `update_state(..., as_node="generator_node")` 从 scratch 线程
+#      镜像回真实会话 —— generator_node 只有 Command(goto) 出边，推不出 next →
+#      会话停在 `next=()`；且这是真实 thread 的**第一个** checkpoint，
+#      `versions_seen` 里只有空记录。
+#   2. 做题界面发一条对话 → `pause_safe_update` 见 next 为空 → 走 update_state
+#      分支；旧代码**省略 as_node**，langgraph 在 versions_seen 全空时把它推断成
+#      `self.input_channels == "__start__"`。
+#   3. `__start__` 的 writer 就是 `start_router` 那条条件边 → 写状态顺带执行了
+#      router，把 `branch:to:agent_dialog_node` 写进 checkpoint → `next` 被钉成
+#      `('agent_dialog_node',)`：既不含 wait_for_submit_node（/run 400），又不为空
+#      （run.py / session.py 的卡死兜底判据 `not state.next` 失效）→ 永久卡死。
+#
+# 本组用例把「写状态之后 next 必须仍然指向 wait_for_submit_node」钉死，
+# 全部离线可跑（InMemorySaver，无 LLM、无 DB）。
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _problem_meta() -> ProblemMeta:
+    return ProblemMeta(
+        problem_id=1,
+        title="两数之和",
+        topic="数组",
+        difficulty="easy",
+        description="给定数组与目标值，返回和为目标的两个下标。",
+    )
+
+
+def _degraded_session(thread_id: str, *, with_problem: bool):
+    """造出事故里的**退化会话**：真实 thread 的首个 checkpoint 由镜像注入产生。
+
+    （真实 thread 从没真正跑过图 → `next=()` 且 `versions_seen` 内层全空，
+      这正是 langgraph 会把 as_node 推断成 `__start__` 的前提条件。）
+    """
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    graph = _build_graph().compile(checkpointer=InMemorySaver())
+    cfg = {"configurable": {"thread_id": thread_id}}
+    values: dict = {
+        "session_id": thread_id,
+        "mode": "agent",
+        "status": "awaiting_submit" if with_problem else "dialog",
+    }
+    if with_problem:
+        values["problem"] = _problem_meta()
+    graph.update_state(cfg, values, as_node="generator_node")
+    return graph, cfg
+
+
+def test_write_as_node_choices_are_wired_as_documented():
+    """锁定 write_as_node 的两个取值：都必须真实存在，且「等待提交」那个必须
+    真的有一条静态边指向 wait_for_submit_node —— 这正是它能自愈的原因。"""
+    b = _build_graph()
+    edges = [tuple(e) for e in b.edges]
+    assert write_as_node(True) == AS_NODE_AWAITING_SUBMIT
+    assert write_as_node(False) == AS_NODE_NEUTRAL
+
+    compiled = compile_graph()
+    for node in (AS_NODE_AWAITING_SUBMIT, AS_NODE_NEUTRAL):
+        assert node in compiled.nodes, f"as_node 候选 {node} 不在图里（节点被改名了？）"
+    assert (AS_NODE_AWAITING_SUBMIT, "wait_for_submit_node") in edges, (
+        f"{AS_NODE_AWAITING_SUBMIT} 必须静态边指向 wait_for_submit_node，"
+        "否则写完状态推不出 next=('wait_for_submit_node',)"
+    )
+
+
+def test_generation_mirror_leaves_session_armed_for_run():
+    """镜像注入后，有题的会话必须直接处于「等待提交」（next=wait_for_submit_node）。
+
+    旧实现用 as_node="generator_node" 会留下 next=()，把整条链路押在 API 层兜底上。
+    """
+    graph, cfg = _degraded_session("mirror-armed", with_problem=False)
+    graph.update_state(
+        cfg,
+        {"status": "awaiting_submit", "problem": _problem_meta()},
+        as_node="generator_node",
+    )
+    mirror_state(
+        graph,
+        cfg,
+        {"status": "awaiting_submit", "problem": _problem_meta(), "tutor_messages": []},
+    )
+    assert graph.get_state(cfg).next == ("wait_for_submit_node",)
+
+
+def test_generation_mirror_does_not_fake_waiting_state_without_problem():
+    """对话态（还没题）镜像注入后 next 必须保持 ()，不能伪造「等待提交」态。"""
+    graph, cfg = _degraded_session("mirror-dialog", with_problem=False)
+    mirror_state(graph, cfg, {"status": "dialog", "mode": "agent"})
+    assert graph.get_state(cfg).next == ()
+
+
+def test_pause_safe_update_after_mirror_keeps_run_alive():
+    """事故核心回归：镜像注入后发一条对话，会话必须仍可 /run。
+
+    旧代码此处省略 as_node → langgraph 推断成 `__start__` → 真的跑了一遍
+    start_router → next 被钉成 ('agent_dialog_node',) → /run 永久 400。
+    """
+    graph, cfg = _degraded_session("mirror-then-chat", with_problem=True)
+    assert graph.get_state(cfg).next == ()   # 出题镜像注入后的退化态
+
+    pause_safe_update(graph, cfg, {"tutor_messages": []})   # 用户发一条对话消息
+
+    nxt = graph.get_state(cfg).next
+    assert "wait_for_submit_node" in nxt, (
+        f"写对话历史后 next={nxt}：必须仍挂在 wait_for_submit_node 上，"
+        "否则 /run 报 400「会话未在等待提交」，且卡死兜底（要求 next 为空）也救不回"
+    )
+    assert "agent_dialog_node" not in nxt, (
+        "next 被 start_router 写成了 agent_dialog_node —— 说明写状态时又让 "
+        "langgraph 自行推断了 as_node（推断成 __start__ 并执行了条件边）"
+    )
+
+
+def test_pause_safe_update_without_problem_keeps_next_empty():
+    """对话阶段（无题）写状态不应把会话推进「等待提交」，否则 /run 语义错乱。"""
+    graph, cfg = _degraded_session("dialog-chat", with_problem=False)
+    pause_safe_update(graph, cfg, {"tutor_messages": []})
+    assert graph.get_state(cfg).next == ()
