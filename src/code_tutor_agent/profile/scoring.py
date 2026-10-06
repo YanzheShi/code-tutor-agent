@@ -42,6 +42,10 @@ def apply_delta(
         更新后的 UserProfile。
     """
     tag = delta["tag_primary"]
+    # S 仅 AC 取 1：现行门控保证 delta 只由 full+AC 产生（agent_judge._apply_side_effects），
+    # 故 S=0 分支目前是「预留能力」而非现行路径——失败不扣 ELO 是「最终能力证明」语义，
+    # 完整 tradeoff 见 agent_judge.py 门控注释。未来放开失败写入时本函数零改动
+    # （S=0 → ELO 自然下降、stab 窗口记 0，test_profile_scoring 已有 WA 掉分用例）。
     S = 1 if delta["outcome"] == "AC" else 0
 
     # ════════════════════════════════════════

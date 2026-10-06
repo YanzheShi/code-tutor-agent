@@ -38,6 +38,10 @@ def agent_judge_router(state: SessionState) -> str:
         AC 且 真实提交（full + 非运行）                 → update_profile_node（写 v2 画像 → critic）
         status == "error"（判题前置条件缺失，如无用例）  → wait_for_submit_node（保活，见下）
 
+    非 AC 不写 v2 画像是「ELO 只记终态」的刻意设计（完整 tradeoff 见 agent_judge.py
+    ::_apply_side_effects 的门控注释）；若要改成失败也写画像，需同步改本路由与
+    update_profile_node 的出边（静态边 → 按 status 分流的条件边）。
+
     ⚠️ error 分支原为 END（2026-09-03 修复）：判题一旦走到 error，graph 直接终止、
     会话失去挂起节点（next=()），此后 /run 一律 400「当前不可运行」、/submit 的
     Command(resume) 找不到 interrupt 空转返回开场白——整道题永久判不了，

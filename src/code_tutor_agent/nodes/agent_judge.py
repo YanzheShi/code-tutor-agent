@@ -382,6 +382,25 @@ def _apply_side_effects(
 
     # ── 分 tag 画像（v2）：仅在 full + AC 经 update_profile_node 单写者通道落库 ──
     # 运行（is_run）或 sample 一律不写画像（微决策 1，解读 X）。
+    #
+    # 【设计 tradeoff：ELO 为什么只在 AC 时更新 ?】
+    # 语义：ELO = 最终能力证明，不是逐次计分。AC 前的 WA→辅导→重试是学习过程本身，
+    #   惩罚重试＝惩罚学习行为；本产品是 tutoring 而非竞技排名（逐次计分是 Codeforces 式诉求）。
+    # 失败信号没有丢，只是分流到别的通道：
+    #   - v1 全局画像：每次真实提交都写，WA/TLE/RE 均降 proficiency（db.update_profile_on_result）
+    #   - error-mode 画像：每次真实提交都跑（见下方 fire-and-forget 块），失败额外加权
+    #   - 编辑轨迹：过程挣扎走 edit_trace 通道
+    # 不会刷分通胀：期望分项 E 使低于自身水平的题 AC 增益趋近 0，重复刷简单题自动饱和。
+    #
+    # 已知边界（有意接受）：
+    #   - stab/attempts 与 ELO 同门控：stab 窗口恒 [1,...]、方差恒 0，「稳定性」维度退化；
+    #   - tag 从未 AC 则恒 1500 初始分，planner 分不清「没练过」vs「练了不行」
+    #     （便宜的补法：planner 消费 errors/attempts，不动 ELO）。
+    # 若未来要「失败也更新 ELO」：本分支对非 AC full 也挂 delta（outcome=真实 verdict；注意
+    #   "CE" 不在 ProfileDelta.outcome 的 Literal 内，需扩 schema）+ graph.py 路由改为
+    #   非 AC full → update_profile_node、静态边 update_profile_node → critic_node 改条件边
+    #   按 status 分流；生产代码约 25 行，需同步改 wiring smoke / judge 节点测试断言。
+    #   scoring.apply_delta 的 S=0 分支零改动（S=0 → ELO 自然下降、stab 记 0）。
     if analysis.verdict == "AC" and not is_run and state.judge_scope != "sample":
         update["profile_delta"] = {
             "tag_primary": state.problem.tag_primary,
@@ -391,7 +410,7 @@ def _apply_side_effects(
         }
         # AC 收尾状态在这里一次写齐：后续链路为 update_profile_node → critic_node
         # （AC 分支：flush problem_history + phase=reviewing + 暂停在 wait_for_submit）。
-        # 与常规 judge 保持一致：只有最终 AC 才记录（WA 重试不写画像）。
+        # 与常规 judge 保持一致：只有最终 AC 才记录（WA 重试不写画像，tradeoff 见上）。
         update["status"] = "done"
         logger.info("full+AC — routing to update_profile_node → critic_node")
     elif analysis.verdict != "AC":
