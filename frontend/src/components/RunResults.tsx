@@ -45,17 +45,19 @@ export default function RunResults({ results, running }: { results: RunResult[] 
           )}
           {r.explanation && <div className="text-ct-muted mb-1">{r.explanation}</div>}
           {/* 编译错误：结构化 payload 优先（<pre> 指针）；其余 detail（RE 栈 / TLE 等）
-              仅在「期望/实际」两行都缺时兜底展示——WA 的 expected=got= 文本与下行重复 */}
+              在非 WA 且无实际输出时展示——WA 的 expected=got= 文本与红绿对比重复，
+              Passed 的 detail 与 actual 重复，均跳过 */}
           {r.compile_error ? (
             <CompileErrorPanel r={r} />
           ) : (
-            r.detail && !r.expected && !r.actual && (
+            r.detail && r.status !== 'Wrong Answer' && !r.actual && (
               <div className="text-ct-muted mb-1 whitespace-pre-wrap">{r.detail}</div>
             )
           )}
-          {/* 实际/期望红绿对比：提交判题映射的失败用例（带 actual）固定展示 */}
-          {r.actual !== undefined && (
-            <div className="text-ct-muted">实际: <span className="text-ct-error">{r.actual || '—'}</span></div>
+          {/* 实际/期望红绿对比：有实际输出才渲染（Passed 绿 / 失败红）。
+              RE/TLE 等无实际输出的场景隐藏整行，避免「实际: —」空占位 */}
+          {r.actual && (
+            <div className="text-ct-muted">实际: <span className={r.passed ? 'text-ct-success' : 'text-ct-error'}>{r.actual}</span></div>
           )}
           <div className="text-ct-muted">期望: <span className="text-ct-success">{r.expected || '—'}</span></div>
         </div>

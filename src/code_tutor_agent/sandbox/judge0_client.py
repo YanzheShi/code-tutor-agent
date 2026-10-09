@@ -242,9 +242,14 @@ for idx, tc in enumerate(test_cases):
         except (json.JSONDecodeError, TypeError, ValueError):
             expected_fmt = _fmt(exp_raw)
         if actual == expected_fmt:
+            # Passed 行也必须带全结构化字段（input_args/expected_output/actual_output）：
+            # 与本地 runner 的 Passed 行对齐。缺 actual_output 时 _to_run_results 的
+            # actual 为空串 → 前端 Passed 用例渲染「实际: —」。
             print('RESULT: ' + json.dumps({{
                 "test_case_id": idx, "status": "Passed",
-                "detail": actual, "runtime_ms": round(elapsed, 2)
+                "detail": actual, "runtime_ms": round(elapsed, 2),
+                "input_args": tc.get('input_args', []),
+                "expected_output": expected_fmt, "actual_output": actual
             }}))
         else:
             print('RESULT: ' + json.dumps({{
