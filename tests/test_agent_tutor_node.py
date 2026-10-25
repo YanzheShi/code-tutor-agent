@@ -1,87 +1,192 @@
-"""Tests for the Agent Tutor node — post-judge routing.
+"""Tests for the Agent Tutor node — 判题非 AC 后的辅导文案生成。
 
-架构变更（agent-only 重构，2026-08-13）：
-    agent_tutor_node 不再 return Command(goto)，改为返回纯 dict
+架构变更：
+    2026-10-13 agent-only 重构：不再 return Command(goto)，改为返回纯 dict
     ``{"status": "awaiting_submit"}``；图通过静态边
     ``agent_tutor_node → wait_for_submit_node`` 路由（确定性单出口，改静态边
     可避免与 Command 并存导致的双执行历史坑，见 2026-08-04）。
 
-    因此本节点**不再按 verdict 分支**（AC 不走此节点 —— 由 agent_judge_router
-    直接路由到 update_profile_node / wait_for_submit_node）。本测试只验证：
-    1. 返回纯 dict（非 Command）
-    2. 任意 verdict 都返回 status=awaiting_submit
-    3. 只写 status 一个键，不污染其它 state 字段
-    4. judge_cycle 不被改动
+    2026-10-25 职责归位：本节点成为**非 AC 辅导文案的唯一宿主**——
+    判题只写 last_exec_results 交棒客观执行结果，文案（warm_feedback /
+    repair_suggestion / tutor_messages）在这里生成。verdict 权威仍属于判题，
+    本节点只把它当 forced_verdict 锁死 LLM。
+
+    AC 线不经过本节点（由 agent_judge_router 直接路由到 update_profile_node /
+    wait_for_submit_node），故 AC 的祝贺文案仍由判题节点生成，本测试不涉及。
 """
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
+from code_tutor_agent.agents.agent_judge import JudgeAnalysis
 from code_tutor_agent.nodes.agent_tutor import agent_tutor_node
-from code_tutor_agent.schemas.state import SessionState
+from code_tutor_agent.schemas.state import ProblemMeta, SessionState, Submission
+
+_EXEC_RESULTS = [
+    {
+        "test_case_id": 0,
+        "status": "Wrong Answer",
+        "detail": "expected=[0,1] got=[0,0]",
+        "runtime_ms": 5.0,
+        "memory_kb": 1024.0,
+        "expected_output": "[0,1]",
+        "actual_output": "[0,0]",
+    },
+    {
+        "test_case_id": 1,
+        "status": "Passed",
+        "detail": "",
+        "runtime_ms": 3.0,
+        "memory_kb": 512.0,
+        "expected_output": "[1,2]",
+        "actual_output": "[1,2]",
+    },
+]
 
 
-def _make_state(verdict: str = "", cycle: int = 1) -> SessionState:
-    """Helper: build a minimal state with judge results."""
+def _make_state(
+    verdict: str = "WA",
+    cycle: int = 1,
+    scope: str = "full",
+    exec_results: list | None = None,
+) -> SessionState:
+    """Helper: build a state as agent_judge_node would leave it after a non-AC cycle."""
     return SessionState(
         session_id="test-tutor",
         mode="agent",
         status="tutoring",
         last_verdict=verdict or None,
         judge_cycle=cycle,
-        warm_feedback="反馈消息",
-        repair_suggestion="修复建议",
+        judge_scope=scope,
+        topic="数组",
+        difficulty="easy",
+        problem=ProblemMeta(
+            problem_id=1,
+            title="测试题",
+            topic="数组",
+            difficulty="easy",
+            description="测试描述",
+        ),
+        submissions=[Submission(index=1, code="class Solution:\n    pass", timestamp="")],
+        last_exec_results=exec_results if exec_results is not None else _EXEC_RESULTS,
     )
 
 
-class TestAgentTutorNode:
-    """Verify the node returns a plain dict awaiting_submit for any verdict."""
+def _last_tutor_text(result: dict) -> str:
+    msgs = result["tutor_messages"]
+    return str(msgs[-1].content if hasattr(msgs[-1], "content") else msgs[-1]["content"])
 
-    def test_returns_plain_dict_not_command(self):
-        """节点应返回纯 dict，而非 langgraph Command。"""
-        state = _make_state(verdict="WA", cycle=1)
-        result = agent_tutor_node(state)
 
-        assert isinstance(result, dict), f"应返回 dict，实际: {result!r}"
-        assert "goto" not in result, "不应再含 goto（已由静态边路由）"
+class TestAgentTutorFullScope:
+    """提交（full）非 AC：调 LLM 生成针对性指导。"""
 
-    def test_returns_awaiting_submit_for_wa(self):
-        """WA → status=awaiting_submit（经静态边回 wait_for_submit）。"""
-        state = _make_state(verdict="WA", cycle=1)
-        result = agent_tutor_node(state)
+    def test_writes_feedback_and_appends_tutor_message(self):
+        state = _make_state(verdict="WA")
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            mock_analyze.return_value = JudgeAnalysis(
+                verdict="WA",
+                warm_feedback="大部分对了，继续加油！",
+                repair_suggestion="检查双指针的移动逻辑",
+                should_retry=True,
+            )
+
+            result = agent_tutor_node(state)
+
+        assert isinstance(result, dict) and "goto" not in result
+        assert result["status"] == "awaiting_submit"
+        assert result["warm_feedback"] == "大部分对了，继续加油！"
+        assert result["repair_suggestion"] == "检查双指针的移动逻辑"
+        assert "检查双指针" in _last_tutor_text(result)
+        assert "**修复建议**" in _last_tutor_text(result)
+
+    def test_forced_verdict_locks_the_llm(self):
+        """verdict 权威属于判题：必须作为 forced_verdict 传给 LLM，且本节点不改判。"""
+        state = _make_state(verdict="TLE")
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            mock_analyze.return_value = JudgeAnalysis(
+                verdict="AC", warm_feedback="乱判的", repair_suggestion="", should_retry=False,
+            )
+            result = agent_tutor_node(state)
+
+            assert mock_analyze.call_args.kwargs["forced_verdict"] == "TLE"
+            # 交棒载荷被还原成逐用例结果（含期望/实际输出，防 LLM 臆造）
+            passed_results = mock_analyze.call_args.kwargs["results"]
+            assert passed_results[0].expected_output == "[0,1]"
+            assert passed_results[0].actual_output == "[0,0]"
+
+        assert "last_verdict" not in result
+
+    def test_llm_failure_degrades_to_deterministic_text(self):
+        """LLM 彻底不可用只降文案质量，绝不击穿 invoke（否则会话失去挂起节点）。"""
+        state = _make_state(verdict="RE")
+
+        with patch(
+            "code_tutor_agent.nodes.agent_tutor.analyze_judge_results",
+            side_effect=RuntimeError("gateway down"),
+        ):
+            result = agent_tutor_node(state)
+
+        assert result["status"] == "awaiting_submit"
+        assert result["warm_feedback"]
+        assert result["tutor_messages"]
+
+    def test_missing_handoff_payload_skips_llm(self):
+        """交棒载荷为空（老会话/异常）：不调 LLM，给确定性重试提示。"""
+        state = _make_state(verdict="WA", exec_results=[])
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            result = agent_tutor_node(state)
+
+        mock_analyze.assert_not_called()
+        assert "重新提交" in _last_tutor_text(result)
         assert result["status"] == "awaiting_submit"
 
-    def test_returns_awaiting_submit_for_re(self):
-        """RE → 同样回 awaiting_submit。"""
-        state = _make_state(verdict="RE", cycle=3)
-        result = agent_tutor_node(state)
+
+class TestAgentTutorSampleScope:
+    """运行（sample）非 AC：绝不为一句反馈等 LLM。"""
+
+    def test_uses_local_counts_and_never_calls_llm(self):
+        state = _make_state(verdict="WA", scope="sample")
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            result = agent_tutor_node(state)
+
+        mock_analyze.assert_not_called()
+        assert "样例用例 1/2" in result["warm_feedback"]
+        assert result["repair_suggestion"] == ""
         assert result["status"] == "awaiting_submit"
 
-    def test_returns_awaiting_submit_for_tle(self):
-        """TLE → 同样回 awaiting_submit。"""
-        state = _make_state(verdict="TLE", cycle=1)
-        result = agent_tutor_node(state)
-        assert result["status"] == "awaiting_submit"
 
-    def test_returns_awaiting_submit_for_empty_verdict(self):
-        """空 verdict（兜底）→ 同样回 awaiting_submit。"""
-        state = _make_state(verdict="", cycle=1)
-        result = agent_tutor_node(state)
-        assert result["status"] == "awaiting_submit"
+class TestAgentTutorStateHygiene:
+    """节点出口的 state 纪律。"""
 
-    def test_only_writes_status_key(self):
-        """节点只写 status，不应覆盖 warm_feedback / repair_suggestion 等字段。
-
-        （LangGraph 运行时未显式返回的键会被保留，不会清掉。）
-        """
-        state = _make_state(verdict="WA", cycle=2)
-        result = agent_tutor_node(state)
-
-        assert result == {"status": "awaiting_submit"}, (
-            f"节点只应返回 {{status: awaiting_submit}}，实际: {result!r}"
-        )
-
-    def test_judge_cycle_preserved(self):
-        """节点不改 judge_cycle（由 agent_judge_node 负责 +1）。"""
+    def test_does_not_touch_judge_cycle(self):
+        """judge_cycle 由判题节点 +1，本节点不得回写。"""
         state = _make_state(verdict="WA", cycle=5)
-        result = agent_tutor_node(state)
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            mock_analyze.return_value = JudgeAnalysis(
+                verdict="WA", warm_feedback="继续加油", repair_suggestion="", should_retry=True,
+            )
+            result = agent_tutor_node(state)
+
         assert "judge_cycle" not in result
+
+    def test_appends_to_existing_transcript(self):
+        """追加而非覆盖：历史 tutor_messages 必须原样保留。"""
+        state = _make_state(verdict="WA")
+        state.tutor_messages = []
+        from code_tutor_agent.schemas.state import Message
+        state.tutor_messages = [Message(role="user", content="我哪里错了？")]
+
+        with patch("code_tutor_agent.nodes.agent_tutor.analyze_judge_results") as mock_analyze:
+            mock_analyze.return_value = JudgeAnalysis(
+                verdict="WA", warm_feedback="看第二个用例", repair_suggestion="", should_retry=True,
+            )
+            result = agent_tutor_node(state)
+
+        assert len(result["tutor_messages"]) == 2
+        assert result["tutor_messages"][0].content == "我哪里错了？"

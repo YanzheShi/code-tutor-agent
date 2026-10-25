@@ -154,13 +154,13 @@ flowchart TB
 > ⚠️ **上图是概念角色图，不是代码拓扑**。StateGraph 实际注册 **8 个节点**（`graph/graph.py`），比上图多出的三个是：
 > - `wait_for_submit_node` —— 全图**唯一**调用 `interrupt()` 的地方，做题期间图在此挂起等用户提交；
 > - `update_profile_node` —— v2 画像的单 writer（定义在 `profile/node.py`，不在 `nodes/` 目录下）；
-> - `agent_tutor_node` —— 判题非 AC 后的辅导路由节点（真正的导师回复**不走**它，见下条调用契约）。
+> - `agent_tutor_node` —— 判题非 AC 后的**辅导节点**：读判题交棒的 `last_exec_results` 生成重试指导（`warm_feedback` / `repair_suggestion` / `tutor_messages`）。做题期间的对话式辅导仍不走它，见下条调用契约。
 
 **调用契约（产品态）**：
 
 - 规划 → 可下调出题（下发选题偏好）
-- 判题 ↛ 辅导（只能**交棒**，由 LG 图的 conditional edge 走，不是函数调用）
-- **辅导回复 ↛ 评审**：做题阶段的导师回复由 `api/routers/chat.py` 的 `_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，随后 `pause_safe_update` 落库——**全程不进 StateGraph**，因此图上不存在任何能看到这条回复的节点。
+- 判题 ↛ 辅导（只能**交棒**，由 LG 图的 conditional edge 走，不是函数调用）：判题把客观执行结果写进 `state.last_exec_results`，`agent_tutor_node` 读它生成非 AC 的重试指导——判题侧不再调 LLM 写文案、辅导侧不得改判 `last_verdict`。
+- **辅导回复 ↛ 评审**：**做题期间的对话式**导师回复由 `api/routers/chat.py` 的 `_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，随后 `pause_safe_update` 落库——**全程不进 StateGraph**，因此这条回复在图上无节点可见（防泄露闸门只能加在 yield 之前）。判题非 AC 的指导文案已进图（`agent_tutor_node`）；AC 线反馈仍由判题节点生成（该分支不经辅导节点）。
 - 评审 **无任何主动调用**，仅在一题终结时被触发（flush 历史 + 情绪检测 + 路由）
 - **画像写入是三轨，不是单一入口**，务必分清：
   - **v2 per-tag 知识点画像**：判题 / 辅导想改画像只能挂 `state["profile_delta"]`，由 `update_profile_node`（`profile/node.py`）作为**唯一 writer** 写 `store`；
@@ -202,7 +202,7 @@ flowchart TB
 - **用户画像（v2）尚未持久化**：存画像的 `store` 当前是 `InMemoryStore`，**进程重启即丢**。`graph/graph.py::compile_graph()` 已给 `checkpointer` 配 `PostgresSaver`（2026-09-07 迁移后，会话状态随业务库统一落 PostgreSQL）。换 `PostgresStore` / RedisStore 对业务代码零改动（LG 的 `store.list/put/get` 接口统一），但尚未实施。
 
 - **导师输出无后置守门（Critic 的 R01/R04 是死逻辑）**：`nodes/critic.py` 里的代码泄露过滤（R01）**从未生效过**——它原地改写 pydantic state 不被 LangGraph 采纳、只检查最后一条消息、且 `hint_level` 全仓库从未递增恒为 0；挫败情绪检测（R04）只 `logger.info`，无后续动作。历史上的 `constitutional_guard` 节点已随 normal 模式一并删除。
-  - **根因**：做题阶段的导师回复由 `api/routers/chat.py::_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，**全程不进 StateGraph**——因此图内根本不存在任何能看到这条回复的节点，在图里改连线永远修不好。
+  - **根因**：做题**期间**的导师回复由 `api/routers/chat.py::_handle_normal_chat_stream` 直接调 LLM 并流式吐给前端，**全程不进 StateGraph**——图内没有节点能看到这条回复，在图里改连线永远修不好。（判题非 AC 的重试指导已于 2026-10-25 归位到 `agent_tutor_node`，那一条在图内、可被守门。）
   - **正确修法**：闸门必须加在 `chat.py` 的回复通路上（yield 之前），而不是图内节点。
 
 - **暂不支持设计类题目**：判题引擎（本地沙箱 / Judge0）目前按 LeetCode「单方法 `class Solution`」契约执行用例——即实例化 `Solution` 后单次调用其方法比对结果。需要实现**带多个方法的类并按操作序列多次调用**的设计类题目（如 LRU 缓存、最小栈、实现前缀树）无法被正确执行。因此出题侧已主动拦截此类题目：

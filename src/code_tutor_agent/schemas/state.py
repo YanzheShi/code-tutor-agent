@@ -182,7 +182,7 @@ class SessionPhase(str, Enum):
     clarifying = "clarifying"   # V0.1 不写，V0.2 才用
     dialog = "dialog"           # Agent 模式：导师对话确定需求（出题前）
     solving = "solving"         # 用户正在写代码
-    reviewing = "reviewing"     # 辅导态（WA 线 tutor / AC 线 agent_tutor）
+    reviewing = "reviewing"     # 复盘态（AC 后；AC 文案在 agent_judge、WA 辅导文案在 agent_tutor）
     done = "done"               # 换题前短暂过渡
 
 
@@ -349,6 +349,15 @@ class SessionState(BaseModel):
     last_run_results: list = Field(
         default_factory=list,
         description="Diagnostic results of the latest 运行 (sample scope). Replaced each run; never written to profile.",
+    )
+
+    # ── 判题 → 辅导 交棒载荷 ──
+    # 判题↛辅导只能是「交棒」（见 README 调用契约）：判题节点把客观执行结果写进
+    # 本字段，辅导节点读它生成文案，不重跑用例、也不得改判 last_verdict。
+    last_exec_results: list[dict] = Field(
+        default_factory=list,
+        description="Per-case 客观执行结果（RunnerResult 平面化，detail 截 200 字符），"
+                    "agent_judge_node 每轮整体替换，agent_tutor_node 消费。",
     )
 
     # ── Profile module delta ──

@@ -132,7 +132,11 @@ class TestAgentJudgeNode:
             assert "恭喜" in result["warm_feedback"]
 
     def test_wa_path(self):
-        """Some tests fail → verdict=WA, status=tutoring (router → agent_tutor)."""
+        """Some tests fail → verdict=WA, status=tutoring (router → agent_tutor).
+
+        职责归位（2026-10-25）：非 AC 时判题节点**不再调 LLM 生成反馈**，
+        只写 last_exec_results 交棒给 agent_tutor_node。
+        """
         state = _make_state()
 
         with (
@@ -151,13 +155,6 @@ class TestAgentJudgeNode:
             mock_run.return_value = [
                 RunnerResult(0, "Wrong Answer", "expected=[0,1] got=[0,0]", runtime_ms=5.0),
             ]
-            from code_tutor_agent.agents.agent_judge import JudgeAnalysis
-            mock_analyze.return_value = JudgeAnalysis(
-                verdict="WA",
-                warm_feedback="大部分对了，继续加油！",
-                repair_suggestion="检查双指针的移动逻辑",
-                should_retry=True,
-            )
 
             result = agent_judge_node(state)
 
@@ -165,9 +162,13 @@ class TestAgentJudgeNode:
             assert result["last_verdict"] == "WA"
             assert result["judge_cycle"] == 1
             assert result["status"] == "tutoring"
-            # should_retry is inside JudgeAnalysis; repair suggestion flows into tutor_messages
-            msgs = result.get("tutor_messages", [])
-            assert any("检查双指针" in str(m) for m in msgs)
+            # 文案职责已交棒：判题不碰 LLM、不写 tutor_messages
+            mock_analyze.assert_not_called()
+            assert "tutor_messages" not in result
+            assert "warm_feedback" not in result
+            # 交棒载荷齐备（辅导节点靠它逐用例展示期望/实际输出）
+            assert result["last_exec_results"][0]["status"] == "Wrong Answer"
+            assert result["last_exec_results"][0]["test_case_id"] == 0
 
     def test_judge_cycle_increments(self):
         """judge_cycle should increment on each judge call."""
@@ -246,10 +247,11 @@ class TestAgentJudgeNode:
             # 微决策 3：样例全过 → 鼓励提交完整用例
             assert "💡" in result["warm_feedback"]
 
-    def test_sample_scope_skips_llm_wa_uses_local_feedback(self):
-        """运行（sample）+ WA：同样跳过 LLM，本地 verdict 来自执行引擎客观结果。
+    def test_sample_scope_skips_llm_wa_no_feedback_text(self):
+        """运行（sample）+ WA：判题跳过 LLM，且**不再产出反馈文案**。
 
-        证明方案 A 对 WA 也生效——运行遇到失败用例不会再等 LLM 推理。
+        两点合起来证明职责归位生效：运行遇到失败用例既不会等 LLM 推理
+        （方案 A），文案也确实交棒给了 agent_tutor_node。
         """
         state = _make_state()
         state.judge_scope = "sample"
@@ -275,11 +277,14 @@ class TestAgentJudgeNode:
 
             # LLM 必须被跳过
             mock_analyze.assert_not_called()
-            # verdict 来自执行引擎（WA），本地反馈
+            # verdict 仍来自执行引擎（客观、权威）
             assert result["last_verdict"] == "WA"
-            assert "样例用例" in result["warm_feedback"]
-            # 非 AC → 路由到 agent_tutor_node
+            # 非 AC → 路由到 agent_tutor_node，文案在那边写
             assert result["status"] == "tutoring"
+            assert "warm_feedback" not in result
+            assert "tutor_messages" not in result
+            # 但诊断载荷必须备好
+            assert result["last_exec_results"][0]["status"] == "Wrong Answer"
 
 
 class TestAgentJudgeRouter:

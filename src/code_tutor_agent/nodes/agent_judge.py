@@ -1,16 +1,20 @@
-"""Agent 判题节点 — 通过 Judge0 进行 LLM 驱动的判题 LangGraph 节点。
+"""Agent 判题节点 — 通过 Judge0 进行客观执行的 LangGraph 节点。
 
-该节点在 agent 模式下替代传统的机械判题节点 judge_node。
-它不直接比较期望输出与实际输出，而是：
-  1. 通过 Judge0 对测试用例执行用户代码
-  2. 将原始结果传给 LLM 进行解读
+职责边界（2026-10-25 职责归位）：本节点只做「执行 + 归约权威 verdict + 落库
+结构化结果 + 画像/路由标记」。**非 AC 的辅导文案不再在这里生成** —— 判题对辅导
+只能交棒（写 ``state.last_exec_results``，由 ``agent_tutor_node`` 读它产出反馈）。
+
+已知残留：AC 线的反馈（祝贺 + 复杂度分析 + 优化建议）仍由本节点调 LLM 生成，
+因为 AC 分支在图上不经 ``agent_tutor_node``（full→update_profile、sample→wait_for_submit）。
+若要连它一起归位，需把 tutor 改成多出口条件边，会冲击 ``deps.AS_NODE_AWAITING_SUBMIT``
+锚点（2026-10-01「/run 永久 400」事故的支点），故暂缓。
 
 运行/提交统一收口到本节点：
   - scope="sample"（运行按钮）→ 只跑 visible_test_cases，写诊断 last_run_results，不写画像
   - scope="full"（提交按钮）→ 跑全量用例（含边界），AC 写 v2 画像并 done
 
 节点流转（由 graph.agent_judge_router 路由，本节点只返回 state 更新）：
-  WA               → agent_tutor_node
+  WA               → agent_tutor_node（交棒客观结果，辅导文案在那里生成）
   full + AC        → update_profile_node → critic_node
   sample + AC / 运行 → wait_for_submit_node（不写画像、不 done，保持循环）
 """
@@ -160,6 +164,31 @@ def _to_run_results(results: list, test_cases: list, func_sig: str = "") -> list
     return run_results
 
 
+def _to_plain_results(results: list) -> list[dict]:
+    """RunnerResult → 可进 checkpoint 的平面 dict（判题→辅导的交棒载荷）。
+
+    只保留辅导节点生成文案要读的字段；``detail`` 截到 200 字符，与
+    ``format_results_for_prompt`` 展示给 LLM 的长度完全一致——截更短会丢信息，
+    截更长只会白白撑大 checkpoint。
+
+    用 getattr 取值：本地 runner 与 Judge0 适配层返回的结果对象字段并不完全齐平
+    （``_to_run_results`` 同样靠 getattr 兜），而本函数在节点里执行，抛异常会击穿
+    整次 invoke → /submit 500、会话失去挂起节点（2026-09-04 同类事故）。
+    """
+    return [
+        {
+            "test_case_id": getattr(r, "test_case_id", 0) or 0,
+            "status": getattr(r, "status", "") or "",
+            "detail": (getattr(r, "detail", "") or "")[:200],
+            "runtime_ms": getattr(r, "runtime_ms", 0.0) or 0.0,
+            "memory_kb": getattr(r, "memory_kb", 0.0) or 0.0,
+            "expected_output": getattr(r, "expected_output", "") or "",
+            "actual_output": getattr(r, "actual_output", "") or "",
+        }
+        for r in results
+    ]
+
+
 def _resolve_inputs(state: SessionState) -> "dict | tuple":
     """校验输入并加载 problem + 测试用例。
 
@@ -280,6 +309,8 @@ def _run_analysis(
 
     两种路径 verdict 都永远以执行引擎客观结果为准，不信任 LLM 主观判断。
 
+    2026-10-25 起只在 **AC** 时被调用（非 AC 的反馈文案归 ``agent_tutor_node``）。
+
     - 提交(full)：走 LLM 生成 warm_feedback + repair_suggestion（面试官式诊断）。
     - 运行(sample)：跳过 LLM，直接用执行引擎客观结果拼简短诊断反馈——
       运行=快速自测，不该等 LLM（重构前 run.py 纯执行约 1~2s；统一收口后误入 LLM 致 14~85s）。
@@ -311,12 +342,12 @@ def _run_analysis(
 
 def _apply_side_effects(
     state: SessionState,
-    analysis: JudgeAnalysis,
+    verdict: str,
     raw_results: list,
     test_cases: list,
     is_run: bool,
-    feedback_msg: str,
     update: dict,
+    feedback_msg: str = "",
     code: str = "",
     func_sig: str = "",
 ) -> None:
@@ -326,13 +357,16 @@ def _apply_side_effects(
     - sample 诊断：写 last_run_results，样例全过时追加鼓励提交提示。
     - 路由：full+AC→done（交由 update_profile_node 落 v2 画像）；非 AC→tutoring；
       sample+AC→awaiting_submit（不写画像、不 done，保持运行循环）。
+
+    ``verdict`` 是执行引擎的权威结果，不再取自 LLM 的 ``analysis``；
+    ``feedback_msg`` 仅在 AC 线有值（非 AC 的文案由 agent_tutor_node 生成）。
     """
     # ── 兼容旧版 v1 全局画像（综合熟练度/做题数等顶部指标）──
     if not is_run:
         try:
             from code_tutor_agent.db.database import update_profile_on_result
             topic = state.problem.topic if state.problem else "未知"
-            update_profile_on_result(topic=topic, verdict=analysis.verdict,
+            update_profile_on_result(topic=topic, verdict=verdict,
                                      user_id=getattr(state, "user_id", "default"))
         except Exception:
             logger.warning("Agent v1 profile update failed (non-fatal)", exc_info=True)
@@ -352,7 +386,6 @@ def _apply_side_effects(
             else:
                 topic = getattr(prob, "topic", "") or "未知"
                 description = getattr(prob, "description", "") or ""
-            verdict = analysis.verdict
             judge_tags = None
             if verdict != "AC":
                 # 画像用户画像和error_mode 指标
@@ -372,13 +405,14 @@ def _apply_side_effects(
     # ── 运行（sample scope）：写诊断 last_run_results，必要时给轻提示 ──
     if state.judge_scope == "sample":
         update["last_run_results"] = _to_run_results(raw_results, test_cases, func_sig)
-        if analysis.verdict == "AC":
+        if verdict == "AC":
             # 微决策 3：样例全过 → 鼓励提交完整用例
             hint = "\n\n💡 样例都过了，点「提交」跑完整用例试试吧！"
-            update["warm_feedback"] = analysis.warm_feedback + hint
-            update["tutor_messages"] = update["tutor_messages"][:-1] + [
-                {"role": "tutor", "content": feedback_msg + hint}
-            ]
+            update["warm_feedback"] = update.get("warm_feedback", "") + hint
+            if feedback_msg:
+                update["tutor_messages"] = update["tutor_messages"][:-1] + [
+                    {"role": "tutor", "content": feedback_msg + hint}
+                ]
 
     # ── 分 tag 画像（v2）：仅在 full + AC 经 update_profile_node 单写者通道落库 ──
     # 运行（is_run）或 sample 一律不写画像（微决策 1，解读 X）。
@@ -401,11 +435,11 @@ def _apply_side_effects(
     #   非 AC full → update_profile_node、静态边 update_profile_node → critic_node 改条件边
     #   按 status 分流；生产代码约 25 行，需同步改 wiring smoke / judge 节点测试断言。
     #   scoring.apply_delta 的 S=0 分支零改动（S=0 → ELO 自然下降、stab 记 0）。
-    if analysis.verdict == "AC" and not is_run and state.judge_scope != "sample":
+    if verdict == "AC" and not is_run and state.judge_scope != "sample":
         update["profile_delta"] = {
             "tag_primary": state.problem.tag_primary,
             "prob_elo": state.problem.prob_elo,
-            "outcome": analysis.verdict,
+            "outcome": verdict,
             "fingerprints": [],
         }
         # AC 收尾状态在这里一次写齐：后续链路为 update_profile_node → critic_node
@@ -413,8 +447,8 @@ def _apply_side_effects(
         # 与常规 judge 保持一致：只有最终 AC 才记录（WA 重试不写画像，tradeoff 见上）。
         update["status"] = "done"
         logger.info("full+AC — routing to update_profile_node → critic_node")
-    elif analysis.verdict != "AC":
-        # ── WA：直接回 agent_tutor_node 给重试指导（不写画像）──
+    elif verdict != "AC":
+        # ── WA：直接回 agent_tutor_node 给重试指导（不写画像，文案也在那里生成）──
         update["status"] = "tutoring"
         logger.info("Not AC — routing to agent_tutor_node for retry guidance")
     else:
@@ -424,13 +458,15 @@ def _apply_side_effects(
 
 
 def agent_judge_node(state: SessionState) -> dict:
-    """LangGraph node: LLM-driven judging via Judge0.
+    """LangGraph node: execute the user's code and record the authoritative verdict.
 
     Reads ``state.judge_scope`` ('sample' for 运行, 'full' for 提交) to pick
     visible vs full test cases. On sample scope, writes diagnostic
-    ``last_run_results`` only — never writes profile. Routes via the graph
-    conditional edge ``agent_judge_router``:
-      - WA                 → agent_tutor_node
+    ``last_run_results`` only — never writes profile. Non-AC 文案不在此生成，
+    改为写 ``last_exec_results`` 交棒给 ``agent_tutor_node``；AC 线的反馈仍在
+    本节点生成（AC 分支在图上不经辅导节点）。Routes via the graph conditional
+    edge ``agent_judge_router``:
+      - WA                 → agent_tutor_node（交棒客观结果）
       - full + AC          → update_profile_node (writes v2 profile, then done)
       - sample + AC / 运行 → wait_for_submit_node (no profile, no done)
 
@@ -477,29 +513,35 @@ def agent_judge_node(state: SessionState) -> dict:
         state.submissions[-1].judge_results.append(_build_base_result(raw_results, test_cases, func_sig))
         submissions_update = [state.submissions[-1]]
 
-    # ── 判题分析（sample 跳过 LLM / full 走 LLM）──
-    analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
-    logger.info("Verdict: %s | should_retry=%s", analysis.verdict, analysis.should_retry)
+    # ── 判题分析：仅 AC 线在本节点出文案（祝贺 + 复杂度/优化建议）──
+    # 非 AC 不再调 LLM 生成反馈：那是辅导节点的职责，判题只把客观结果交棒过去。
+    feedback_msg = ""
+    update: dict[str, Any] = {
+        "last_verdict": deterministic_verdict,
+        "judge_cycle": state.judge_cycle + 1,
+        # 交棒载荷：agent_tutor_node 读它生成辅导文案（不重跑用例、不改判 verdict）
+        "last_exec_results": _to_plain_results(raw_results),
+    }
+    if deterministic_verdict == "AC":
+        analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
+        logger.info("Verdict: %s (AC 线在本节点生成反馈)", deterministic_verdict)
+        feedback_msg = analysis.warm_feedback
+        if analysis.repair_suggestion:
+            feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
+        update["warm_feedback"] = analysis.warm_feedback
+        update["repair_suggestion"] = analysis.repair_suggestion
+        update["tutor_messages"] = state.tutor_messages + [
+            {"role": "tutor", "content": feedback_msg}
+        ]
+    else:
+        logger.info("Verdict: %s — 文案交棒 agent_tutor_node", deterministic_verdict)
     _m_judge_ok()
-
-    # ── Build the tutor message with warm feedback ──
-    feedback_msg = analysis.warm_feedback
-    if analysis.repair_suggestion:
-        feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
 
     # ── Update state ──
     # submissions 用 merge_submissions reducer（按 index 替换）：只返回变更的那一条，
     # 未变更时不带该 key（不要返回全量列表以外的写法，index 重复会被覆盖）。
-    update: dict[str, Any] = {
-        "last_verdict": analysis.verdict,
-        "warm_feedback": analysis.warm_feedback,
-        "repair_suggestion": analysis.repair_suggestion,
-        "judge_cycle": state.judge_cycle + 1,
-        "tutor_messages": state.tutor_messages
-        + [{"role": "tutor", "content": feedback_msg}],
-    }
     if submissions_update:
         update["submissions"] = submissions_update
 
-    _apply_side_effects(state, analysis, raw_results, test_cases, is_run, feedback_msg, update, code=code, func_sig=func_sig)
+    _apply_side_effects(state, deterministic_verdict, raw_results, test_cases, is_run, update, feedback_msg, code=code, func_sig=func_sig)
     return update

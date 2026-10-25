@@ -33,10 +33,14 @@ def agent_judge_router(state: SessionState) -> str:
     """路由 agent 判题节点的出口（agent_judge_node 已不再 return Command(goto)）。
 
     规则：
-        last_verdict != "AC"（WA/RE/TLE/CE）            → agent_tutor_node（给重试指导）
+        last_verdict != "AC"（WA/RE/TLE/CE）            → agent_tutor_node（生成重试指导）
         AC 且（运行 is_run 或 sample scope）            → wait_for_submit_node（不写画像、不 done）
         AC 且 真实提交（full + 非运行）                 → update_profile_node（写 v2 画像 → critic）
         status == "error"（判题前置条件缺失，如无用例）  → wait_for_submit_node（保活，见下）
+
+    ⚠️ 两条 AC 分支都不经过 agent_tutor_node，所以 AC 的反馈文案仍由判题节点生成
+    （2026-10-25 职责归位的已知残留；要让它也归位，需把辅导节点改成条件边出口，
+    会冲击 api/deps.py::AS_NODE_AWAITING_SUBMIT 这个静态边锚点）。
 
     非 AC 不写 v2 画像是「ELO 只记终态」的刻意设计（完整 tradeoff 见 agent_judge.py
     ::_apply_side_effects 的门控注释）；若要改成失败也写画像，需同步改本路由与
@@ -66,6 +70,12 @@ def agent_judge_router(state: SessionState) -> str:
 
 
 def _build_graph() -> StateGraph:
+    """装配 StateGraph。
+
+    ⚠️ 全图 8 个节点都必须是**同步**函数：做题期间每次 /run、/submit 都由
+    ``asyncio.to_thread(graph.invoke, ...)`` 驱动（配 PostgresSaver 的同步 checkpointer）。
+    因此辅导节点里的 LLM 调用也必须保持同步 .invoke，不要改成 async 节点。
+    """
     builder = StateGraph(SessionState)
 
     # ── Register all nodes ──
@@ -76,10 +86,15 @@ def _build_graph() -> StateGraph:
     builder.add_node("update_profile_node", update_profile_node)
 
     # agent 模式节点（normal 模式的 judge/tutor/constitutional_guard 已删除）
-    # ⚠️ 删除 constitutional_guard 后，本图已**不存在任何能看到导师回复文本的节点**：
-    #    做题阶段的回复由 api/routers/chat.py::_handle_normal_chat_stream 直出并落库，
-    #    不经过 graph。critic_node 虽保留 R01 代码，但只在一题终结时被触发且改写不落库。
-    #    → 结论：答案泄露无法在本文件的重连线上修，须在 chat.py 的 yield 之前设闸。
+    # 2026-10-25 职责归位后：判题非 AC 的重试指导**已进图**（agent_tutor_node 生成
+    # warm_feedback / repair_suggestion / tutor_messages），所以「图上没有任何节点
+    # 能看到导师回复」这条已不成立。
+    # ⚠️ 仍然绕图的部分：**做题期间的对话式辅导**由 api/routers/chat.py::
+    #    _handle_normal_chat_stream 直出并落库，不经过 graph；AC 线的反馈也仍在
+    #    agent_judge_node 生成（AC 分支不经辅导节点）。critic_node 虽保留 R01 代码，
+    #    但只在一题终结时被触发且改写不落库。
+    #    → 结论：答案泄露闸门仍必须在 chat.py 的 yield 之前设闸（流式已吐出的内容
+    #    收不回），连辅导节点也覆盖不了它。
     builder.add_node("agent_dialog_node", agent_dialog_node)
     builder.add_node("agent_judge_node", agent_judge_node)
     builder.add_node("agent_tutor_node", agent_tutor_node)
