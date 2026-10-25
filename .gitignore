@@ -39,6 +39,21 @@ logs/
 models/
 eval/results/
 
+# === 评估框架产物（docs/eval-framework-design.md）===
+# 评估侧零侵入：evaluation/ 目录是新增的独立包，不入 wheel
+# 评估报告输出（默认带时间戳）
+data/eval_report_*.json
+# 本地测试用的嵌入式 PG 数据目录（tests/eval_fixtures.py 手工起实例时产生）
+data/_pg_test/
+# judge 校准产物（docs §5.2）
+data/judge_calibration_*.json
+data/judge_cache_*.json
+# 评估报告（除门禁自检用的固定合成报告外，都带时间戳 → gitignore）
+data/eval_report_*.json
+!data/eval_report_gate_selftest.json
+# 金标集（人工标注产物，按需入库；v2 为主力集）
+# data/gold/eval_gold_v2.json
+
 # === 运行时状态文件 ===
 current_problem.json
 awaiting_problem

@@ -55,7 +55,9 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "." 让测试能 import 仓库根的 `evaluation` 包（零侵入评估侧，不入 wheel）
+# "src" 让测试能 import 业务包 `code_tutor_agent`
+pythonpath = [".", "src"]
 markers = [
     "integration: 真实端到端集成测试（真调 LLM / 沙箱，慢）。日常用 `pytest -m \"not integration\"` 跳过，CI 或需要时再全量跑。",
 ]

@@ -11,7 +11,7 @@
 #    help             显示本帮助
 # ──────────────────────────────────────────────────────────
 
-.PHONY: server frontend all server-bg test test-failed db clean install docker docker-prod docker-down help
+.PHONY: server frontend all server-bg test test-failed db clean install docker docker-prod docker-down help eval eval-outcome eval-trace eval-judge eval-judge-full eval-gate eval-regression eval-baseline-rebuild eval-test
 
 # ── 默认目标 ──
 help:
@@ -23,6 +23,13 @@ help:
 	@echo "  make test        运行 pytest"
 	@echo "  make db          初始化数据库"
 	@echo "  make install     安装全部依赖"
+	@echo "  make eval        Agent 回复质量评估 (零侵入·只读) → data/eval_report_*.json"
+	@echo "  make eval-outcome  只跑 outcome 轨 (结果正确率, 最快)"
+	@echo "  make eval-trace    只跑下轨 (链路分析准确率)"
+	@echo "  make eval-judge  judge 自校准 (P/R/F1 + 门禁判定, 需 LLM 网关)"
+	@echo "  make eval-gate   质量门禁判定 (致命幻觉>0 失败)"
+	@echo "  make eval-regression  规则层基线回归 (防检测器被改坏)"
+	@echo "  make eval-test   评估框架自身测试 (起真 PG, 168 项)"
 	@echo "  make clean       清理 __pycache__ / .pytest_cache"
 
 # ── 后端 ──
@@ -73,6 +80,48 @@ test-failed:
 # ── 数据库 ──
 db:
 	uv run python -c "from code_tutor_agent.db.database import init_db; init_db(); print('DB ready ✓')"
+
+# ── Agent 回复质量评估（零侵入·只读；docs/eval-framework-design.md）──
+# 连接串来源：EVAL_DATABASE_URL 优先，回退 DATABASE_URL（.env）
+eval:
+	uv run python scripts/eval_reply_quality.py --limit 50
+
+# 只跑 outcome 轨（结果正确率，纯 SQL，最快）
+eval-outcome:
+	uv run python scripts/eval_reply_quality.py --mode outcome --limit 200
+
+# 只跑下轨（链路分析准确率）
+eval-trace:
+	uv run python scripts/eval_reply_quality.py --mode trace --limit 100
+
+# judge 自校准（docs §5.2）—— 需 LLM 网关；40 条金标约 3-5 分钟
+eval-judge:
+	uv run python scripts/eval_judge_calibration.py --gold data/gold/eval_gold_v2.json
+
+# judge 自校准 + 双模型 Kappa + 位置偏置（更久）
+eval-judge-full:
+	uv run python scripts/eval_judge_calibration.py --gold data/gold/eval_gold_v2.json \
+		--with-kappa --with-position
+
+# 质量门禁判定（docs §8.1）—— 致命幻觉 > 0 → 失败；相对基线恶化 → 告警
+eval-gate:
+	uv run python scripts/eval_gate.py --report data/eval_report_*.json
+
+# 规则层基线回归（防「检测器被改坏」；零 PG、零 LLM、零网络）
+eval-regression:
+	uv run python scripts/eval_regression.py
+
+# 重建基线样本（改了检测器后跑，人工复核 expected_types）
+eval-baseline-rebuild:
+	uv run python scripts/build_regression_baseline.py
+
+# 评估框架自身测试（pgserver 起真 PostgreSQL 16，无需 docker）
+eval-test:
+	uv run pytest tests/test_eval_outcome.py tests/test_reply_quality.py \
+		tests/test_eval_e2e.py tests/test_eval_cli.py \
+		tests/test_eval_trace.py tests/test_eval_trace_e2e.py \
+		tests/test_eval_judge.py tests/test_eval_struct.py \
+		tests/test_eval_gate.py -v --tb=short
 
 # ── Docker ──
 docker:
