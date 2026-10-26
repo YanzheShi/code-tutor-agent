@@ -32,6 +32,58 @@ _RANGE_RE = re.compile(
 # 也匹配 "length == 0" 或 "n > 0" 等简单约束
 _SINGLE_BOUND_RE = re.compile(r"(?P<op>>=|<=|>|<|=)\s*(?P<val>-?\d+(?:\^\d+)?)")
 
+# ── 签名字符串（str 参数）的合法字符集推断 ──
+# 题面/约束里的「字符域」声明。首选「枚举式」（把合法字符逐个列出来）：
+#   s 仅由括号 '()[]{}' 组成 / 只包括 '('，')'，'{'，'}'，'['，']' / 由 '0' 和 '1' 组成
+# 枚举式没命中时回退关键词式声明。
+_BRACKET_ORDER = "()[]{}"
+_DOMAIN_DECL_RE = re.compile(
+    r"仅由|只由|只包括|只包含|仅包含|只含|由\s*.{0,20}?组成"
+    r"|consists of|contains? only|made up of",
+    re.IGNORECASE,
+)
+_QUOTED_CHARS_RE = re.compile(r"'([^']{1,8})'")
+# 混合字符域声明（「仅由数字和英文字母组成」）：不能当成纯数字域，
+# 否则会把这类题的随机用例全部判成越界而丢弃（题目 35 最长回文子串即此误报）。
+_MIXED_DOMAIN_RE = re.compile(
+    r"(?:数字|digits)[^。，,.\n]{0,12}(?:和|与|、|\band\b)[^。，,.\n]{0,12}(?:字母|letters?)"
+    r"|(?:字母|letters?)[^。，,.\n]{0,12}(?:和|与|、|\band\b)[^。，,.\n]{0,12}(?:数字|digits)"
+)
+
+# (触发正则, 允许字符集)；顺序敏感：更具体的圆括号要排在泛化括号之前。
+_CHAR_DOMAIN_RULES: tuple[tuple[re.Pattern, str], ...] = (
+    (re.compile(r"仅由.{0,10}圆括号|只包含.{0,10}圆括号"
+                r"|characters?\s*'\('\s*(?:and|,)\s*'\)'"), "()"),
+    (re.compile(r"括号.{0,6}组成|仅由括号|只由括号|只包含.{0,6}括号|只包括.{0,6}括号"
+                r"|consists of brackets|contains? only brackets|bracket characters"), "()[]{}"),
+    (re.compile(r"二值|binary string|只包含\s*0\s*和\s*1|仅由\s*0\s*和\s*1"), "01"),
+    (re.compile(r"仅由数字|只包含数字|由数字组成|仅包含数字"
+                r"|consists of digits|contains? only digits"), "0123456789"),
+)
+
+
+def _domain_from_enumeration(line: str) -> str | None:
+    """从一行声明里取出被枚举的合法字符，非纯括号/数字域时返回 None。
+
+    要求「本行列出的字符全部落在同一字符类里」，否则不动原行为——例如计算器类
+    题面 ``s 由数字、' '、'+'、'-'、'('、')' 组成`` 混了运算符，收紧成括号集反而错。
+    """
+    tokens = _QUOTED_CHARS_RE.findall(line)
+    if not tokens:
+        return None
+    chars: set[str] = set()
+    for tok in tokens:
+        if tok.strip() in ("和", "and", "或", "or", "、"):
+            continue
+        chars.update(tok)
+    if not chars:
+        return None
+    if chars <= set(_BRACKET_ORDER):
+        return "".join(c for c in _BRACKET_ORDER if c in chars)
+    if chars <= set("0123456789"):
+        return "".join(sorted(chars))
+    return None
+
 
 def _eval_power(s: str) -> int:
     """处理 10^4 这样的幂记法为整数 10000；正确处理一元负号（-10^4 = -(10^4)）。"""
@@ -105,8 +157,39 @@ def _parse_constraint_ranges(constraints: list[str] | None) -> tuple[int, int, i
     return min_val, max_val, min_len, max_len
 
 
+def _normalize_type(t: str) -> str:
+    """把签名单元类型归一到生成器认识的写法。
+
+    LLM 写的 starter_code 常是 Python 3.9+ 风格（``list[int]``、``TreeNode | None``、
+    前向引用 ``'ListNode'``），而 ``_generate_param_value`` 历史上只认
+    ``List[...]`` / ``Optional[...]`` / 裸结构名。不认识时它会「回退成随机整数」
+    （见该函数末尾的 Unknown type 分支），于是树/链表/数组题的随机用例
+    输入变成 ``846`` 这类标量，判题拿到的期望退化成 ``[]``（题目 179 即如此）。
+    归一化放在 ``parse_signature`` 这个唯一入口，生成/sanitize/harness 三路共享。
+    """
+    s = (t or "").strip()
+    # 前向引用引号：``'ListNode'`` / "ListNode"
+    if len(s) >= 2 and s[0] in "'\"" and s[-1] == s[0]:
+        s = s[1:-1].strip()
+    # PEP 604 联合：``X | None`` / ``None | X`` → ``Optional[X]``
+    if "|" in s and "[" not in s:
+        parts = [p.strip() for p in s.split("|") if p.strip()]
+        rest = [p for p in parts if p not in ("None", "NoneType")]
+        if len(rest) == 1 and len(rest) < len(parts):
+            s = f"Optional[{rest[0]}]"
+    # 内置泛型小写：``list[int]`` → ``List[int]``；裸 ``list`` → ``List[int]``
+    s = re.sub(r"\blist\[", "List[", s)
+    if s == "list":
+        s = "List[int]"
+    return s
+
+
 def parse_signature(sig: str) -> tuple[list[tuple[str, str]], str]:
     """Parse a function signature into parameter types and return type.
+
+    Type strings are normalized (see ``_normalize_type``) so that every
+    consumer — random input generator, ``sanitize_test_case`` and the
+    execution harness — sees the same canonical spelling.
 
     Args:
         sig: e.g. "nums: List[int], target: int -> List[int]"
@@ -120,10 +203,59 @@ def parse_signature(sig: str) -> tuple[list[tuple[str, str]], str]:
         return [], ""
 
     params_str = m.group(1).strip()
-    return_type = m.group(2).strip()
+    return_type = _normalize_type(m.group(2).strip())
 
-    params = _PARAM_RE.findall(params_str)
+    params = [(name, _normalize_type(t)) for name, t in _PARAM_RE.findall(params_str)]
     return params, return_type
+
+
+_STRUCT_TYPES = ("ListNode", "TreeNode", "Node", "GraphNode")
+
+
+def _unwrap_optional(type_str: str) -> str:
+    t = (type_str or "").strip()
+    m = re.match(r"^Optional\[(.*)\]$", t)
+    return m.group(1).strip() if m else t
+
+
+def _is_struct_type(type_str: str) -> bool:
+    """是否为链表/树/图结构体参数（含结构体数组，如 ``List[Optional[ListNode]]``）。"""
+    return any(k in (type_str or "") for k in _STRUCT_TYPES)
+
+
+def _normalize_domain_text(text: str) -> str:
+    """全角引号/括号统一成半角，便于字符域正则命中。"""
+    table = str.maketrans("‘’“”（）", "''\"\"()")
+    return (text or "").translate(table)
+
+
+def infer_char_domain(*texts: str) -> str | None:
+    """从 constraints + 题面推断 str 参数的合法字符集，推断不出返回 None。
+
+    没这条推断时 ``_random_str`` 只会生成随机小写字母，括号题因此拿到
+    ``"chhdxk"`` 这类域外输入，参考解恒 False，整套随机用例失去区分度
+    （题目 174「有效的括号」/ 90 即如此）。
+    不命中时返回 None，``_random_str`` 保持原有的随机小写字母行为。
+    """
+    for raw in texts:
+        blob = _normalize_domain_text(raw or "")
+        if not blob:
+            continue
+        lines = re.split(r"[\n。]", blob)
+        for line in lines:
+            if _MIXED_DOMAIN_RE.search(line):
+                continue
+            if _DOMAIN_DECL_RE.search(line):
+                domain = _domain_from_enumeration(line)
+                if domain:
+                    return domain
+        for pattern, alphabet in _CHAR_DOMAIN_RULES:
+            for line in lines:
+                if _MIXED_DOMAIN_RE.search(line):
+                    continue
+                if pattern.search(line):
+                    return alphabet
+    return None
 
 
 def _random_list_int(min_len=2, max_len=8, min_val=-100, max_val=100) -> str:
@@ -141,9 +273,37 @@ def _random_float(min_val=-1000.0, max_val=1000.0) -> str:
     return f"{random.uniform(min_val, max_val):.2f}"
 
 
-def _random_str(max_len=8) -> str:
+_BRACKET_PAIRS = {"(": ")", "[": "]", "{": "}"}
+
+
+def _random_valid_bracket_string(alphabet: str) -> str:
+    """按 LIFO 闭合规则构造一个合法括号串（字符集限定在 alphabet 内）。
+
+    纯随机取字符时合法串占比只有百分之几（长度 8 约 1.9%），12 条随机用例
+    的期望会全落在 False 上——判题失去区分度。因此一半概率构造合法串。
+    """
+    pairs = {k: v for k, v in _BRACKET_PAIRS.items() if k in alphabet and v in alphabet}
+    if not pairs:
+        return ""
+    to_open = random.randint(1, 4)
+    out: list[str] = []
+    stack: list[str] = []
+    while to_open or stack:
+        if stack and (not to_open or random.random() < 0.4):
+            out.append(stack.pop())
+        else:
+            op = random.choice(list(pairs))
+            out.append(op)
+            stack.append(pairs[op])
+            to_open -= 1
+    return "".join(out)
+
+
+def _random_str(max_len=8, alphabet: str | None = None) -> str:
+    chars = alphabet or "abcdefghijklmnopqrstuvwxyz"
     n = random.randint(1, max_len)
-    chars = "abcdefghijklmnopqrstuvwxyz"
+    if alphabet and set(alphabet) <= set("()[]{}") and random.random() < 0.5:
+        return '"' + _random_valid_bracket_string(alphabet) + '"'
     return '"' + "".join(random.choice(chars) for _ in range(n)) + '"'
 
 
@@ -192,6 +352,7 @@ def _generate_param_value(
     max_val: int | None = None,
     min_len: int | None = None,
     max_len: int | None = None,
+    char_domain: str | None = None,
 ) -> str:
     """Generate a random Python literal string for a given type.
 
@@ -200,6 +361,7 @@ def _generate_param_value(
             "ListNode", "Optional[ListNode]", "TreeNode"
         min_val, max_val: P2: value range for int/list elements (from constraints).
         min_len, max_len: P2: length range for lists (from constraints).
+        char_domain: 题面声明的合法字符集（见 ``infer_char_domain``），仅作用于 str。
 
     Returns:
         String representation of a random value, e.g. "42", "[1,2,3]"
@@ -238,7 +400,10 @@ def _generate_param_value(
     if m1:
         inner = m1.group(1).strip()
         n = random.randint(min_len or 1, max_len or 6)
-        items = [_generate_param_value(inner, min_val, max_val, min_len, max_len) for _ in range(n)]
+        items = [
+            _generate_param_value(inner, min_val, max_val, min_len, max_len, char_domain)
+            for _ in range(n)
+        ]
         return "[" + ",".join(items) + "]"
 
     # Handle basic types
@@ -247,6 +412,8 @@ def _generate_param_value(
             min_val if min_val is not None else -1000,
             max_val if max_val is not None else 1000,
         )
+    if type_str == "str" and char_domain:
+        return _random_str(alphabet=char_domain)
     gen = _TYPE_GENERATORS.get(type_str)
     if gen:
         return gen()
@@ -304,12 +471,15 @@ def generate_random_inputs(
 
     # 综合 constraints + description 判断是否为「有序输入」类题目。
     sort_inputs = _needs_sorted_inputs(*(constraints or []), description or "")
+    # 题面声明的合法字符集（括号题 / 01 串 / 数字串），推断不出为 None
+    char_domain = infer_char_domain(*(constraints or []), description or "")
 
     logger.info(
         "▶ generate_random_inputs() — sig=%s, count=%d, sort_inputs=%s, params=%s, "
-        "val=[%d,%d] len=[%d,%d]",
+        "val=[%d,%d] len=[%d,%d] char_domain=%s",
         function_sig, count, sort_inputs, [p[0] for p in params],
         _parsed_min_val, _parsed_max_val, _parsed_min_len, _parsed_max_len,
+        char_domain,
     )
 
     results = []
@@ -321,7 +491,7 @@ def generate_random_inputs(
             t = type_str.strip()
             # 位置/倒数索引类参数（如「倒数第 k 个」的 k）：若前一个参数是
             # 结构类型（链表/树），则把 k 约束在 [1, len(结构)]，避免生成非法负值。
-            if t == "int" and prev_type in ("ListNode", "TreeNode", "Node", "GraphNode") and prev_val:
+            if t == "int" and prev_type and _is_struct_type(prev_type) and prev_val:
                 try:
                     _lst = ast.literal_eval(prev_val)
                     _n = len(_lst) if isinstance(_lst, list) else 1
@@ -345,7 +515,9 @@ def generate_random_inputs(
                 _is_int_like = (t == "int" or _is_list_type(t))
                 _rmin = _parsed_min_val if _is_int_like else None
                 _rmax = _parsed_max_val if _is_int_like else None
-                val = _generate_param_value(type_str, _rmin, _rmax, _parsed_min_len, _parsed_max_len)
+                val = _generate_param_value(
+                    type_str, _rmin, _rmax, _parsed_min_len, _parsed_max_len, char_domain,
+                )
             args.append(val)
             prev_type = t
             prev_val = val
@@ -358,6 +530,53 @@ def generate_random_inputs(
 
     logger.debug("Generated %d random input sets", len(results))
     return results
+
+
+_UNPARSEABLE = object()
+
+
+def parse_arg_value(raw):
+    """把一个 ``input_args`` 元素解析成 Python 值：先 JSON 再 Python 字面量。
+
+    顺序必须与 harness 的 ``_eval_arg`` 一致：LeetCode 的树/链表示例用 ``null``
+    表示空子树，只有 ``json.loads`` 认得；若只用 ``ast.literal_eval``，
+    ``[3,9,20,null,null,15,7]`` 会解析失败 → 整条官方示例被当成 malformed 丢弃
+    （题目 179 丢示例 1、132 丢示例 2 即此因）。
+    """
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            return parser(raw)
+        except Exception:
+            continue
+    return _UNPARSEABLE
+
+
+def check_input_domain(func_sig: str, input_args: list, char_domain: str | None = None) -> bool:
+    """用例输入是否落在题目声明的域内（拦生成器自己造的越界输入）。
+
+    只查两类实际踩过、且校验层（参考解跑通≠输入合法）发现不了的：
+
+    - **结构体参数拿到标量**：harness 会把非 list 的 TreeNode 参数当成 p/q 节点引用，
+      查不到就传 ``None``，参考解「正常」返回 ``[]``，于是垃圾用例带着
+      一个看似合法的期望落库（pid 179 的 12 条 ``846 -> []``、pid 110 同理）；
+    - **str 参数拿到域外字符**：括号题生成 ``"chhdxk"``，参考解恒 False，
+      整套随机用例失去区分度（pid 174 / 90 / 119）。
+    """
+    params, _ = parse_signature(func_sig)
+    if len(input_args) != len(params):
+        return False
+    for (name, type_str), raw in zip(params, input_args):
+        t = (type_str or "").strip()
+        value = raw if not isinstance(raw, str) else parse_arg_value(raw)
+        if value is _UNPARSEABLE:
+            return False
+        if _is_struct_type(_unwrap_optional(t)):
+            if value is not None and not isinstance(value, list):
+                return False
+        elif t == "str" and char_domain:
+            if not isinstance(value, str) or not set(value) <= set(char_domain):
+                return False
+    return True
 
 
 def _extract_code(text: str) -> str:
@@ -452,7 +671,10 @@ def sort_sorted_inputs(func_sig: str, input_args: list[str]) -> list[str]:
                 if params[j][1].strip() == "int" and _looks_like_length(params[j][0]):
                     pairs.append((i, j))
                     break
-    values = [ast.literal_eval(a) for a in input_args]
+    values = []
+    for a in input_args:
+        v = parse_arg_value(a)
+        values.append(a if v is _UNPARSEABLE else v)
     used = set()
     for li, ln in pairs:
         used.add(li)
@@ -469,9 +691,10 @@ def sort_sorted_inputs(func_sig: str, input_args: list[str]) -> list[str]:
     for i, (name, t) in enumerate(params):
         if _is_struct_array_type(t) and isinstance(values[i], list):
             values[i] = _sort_struct_array(values[i])
-    # 还原成与 input_args 同格式（同 _to_arg_str）的字符串，保持列表带空格分隔
-    return [json.dumps(v, ensure_ascii=False) if isinstance(v, list) else str(v)
-            for v in values]
+    # 还原成与 input_args 同格式的字符串。必须走 _to_arg_str：
+    # 旧的 ``str(v)`` 会把 str 参数的引号剥掉（``"qk"`` → ``qk``），
+    # 于是排序类题面（描述里有「非递减/有序」等关键词）的随机用例变成无法解析的字面量。
+    return [_to_arg_str(v) for v in values]
 
 
 def _to_arg_str(v: Any) -> str:
@@ -540,21 +763,19 @@ def sanitize_test_case(func_sig: str, tc: dict, sort_inputs: bool = False) -> di
         if not isinstance(a, str):
             a = json.dumps(a, ensure_ascii=False)
             rewrote = True
-        try:
-            values.append(ast.literal_eval(a))
+        v = parse_arg_value(a)
+        if v is not _UNPARSEABLE:
+            values.append(v)
             continue
-        except Exception:
-            pass
         # 兜底：整体无法解析时，尝试剥掉 "name = "/ "name:" 前缀再解析
         # （LeetCode 格式示例： "nums = [1,2,3]"）。
         stripped = _strip_kw_prefix(a)
         if stripped != a:
-            try:
-                values.append(ast.literal_eval(stripped))
+            v = parse_arg_value(stripped)
+            if v is not _UNPARSEABLE:
+                values.append(v)
                 rewrote = True
                 continue
-            except Exception:
-                pass
         return None
 
     # 找出 (List 参数下标, 紧随的长度参数下标) 对

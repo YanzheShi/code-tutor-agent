@@ -58,6 +58,20 @@ class SandboxGateway:
 
         return sanitize_test_case(func_sig, tc, sort_inputs=sort_inputs)
 
+    def char_domain(self, constraints: list[str] | None, description: str = "") -> str | None:
+        """题面声明的 str 合法字符集（括号 / 01 / 数字），推断不出返回 None。"""
+        from code_tutor_agent.sandbox.input_generator import infer_char_domain
+
+        return infer_char_domain(*(constraints or []), description or "")
+
+    def input_in_domain(
+        self, func_sig: str, input_args: list, char_domain: str | None = None
+    ) -> bool:
+        """用例输入是否落在题目声明的域内（结构体参数非标量、str 字符集合规）。"""
+        from code_tutor_agent.sandbox.input_generator import check_input_domain
+
+        return check_input_domain(func_sig, input_args, char_domain)
+
     def needs_sorted_inputs(self, *texts: str) -> bool:
         """「有序」类题目（合并有序数组 / 有序数组二分等）需对输入数组排序。"""
         from code_tutor_agent.sandbox.input_generator import _needs_sorted_inputs

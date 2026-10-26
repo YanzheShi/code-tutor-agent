@@ -77,6 +77,9 @@ def _html_to_text(html: str) -> str:
     html = re.sub(r"<br\s*/?>", "\n", html)  # 换行
     html = re.sub(r"</p>", "\n\n", html)  # 段落换行
     html = re.sub(r"</li>", "\n", html)  # 列表项换行
+    # </pre> 也要断行：LeetCode 把示例放 <pre> 里，紧跟其后的 <p><strong>提示：</strong>
+    # 若不断行会粘成 "输出：[[3]]提示："，导致按行定位的约束小节解析不到。
+    html = re.sub(r"</pre>", "\n", html, flags=re.IGNORECASE)
 
     # 2. 提取 <pre> 标签内容并保留换行（用于示例解析）
     # 将 <pre> 内的标签先清空，但保留内容
@@ -217,16 +220,29 @@ def fetch_problem(slug: str, domain: str = "leetcode.cn") -> LeetCodeProblem:
         examples = [e.strip() for e in raw_examples.split("\n") if e.strip()]
 
     # ── 解析 Constraints ──
+    # leetcode.cn 的中文题面把约束写在「约束条件：」或「提示：」下，没有英文
+    # "Constraints:" 小节。只认英文会让 constraints 恒为空，随机输入的取值范围
+    # 于是退回默认区间（见题目 174「s 仅由括号 '()[]{}' 组成」/ 179「-1000 <= Node.val <= 1000」
+    # 落库 constraints_json = []）。
     constraints = []
-    match_const = re.search(r"Constraints:\s*", full_text)
+    match_const = re.search(
+        r"^\s*(?:Constraints?|约束条件|提示)\s*[:：]\s*$", full_text, re.MULTILINE
+    )
     if match_const:
         const_start = match_const.end()
-        # 约束条件一直持续到 "Follow up:" 或字符串末尾
-        match_fu = re.search(r"Follow\s*up:", full_text[const_start:])
+        # 约束条件一直持续到 "Follow up:" / "进阶：" 或字符串末尾
+        match_fu = re.search(r"Follow\s*up:|进阶\s*[:：]", full_text[const_start:])
         const_end = const_start + match_fu.start() if match_fu else len(full_text)
         const_str = full_text[const_start:const_end].strip()
-        # 按换行符拆分成列表，并去除多余的项目符号
-        constraints = [c.strip("- *").strip() for c in const_str.split("\n") if c.strip()]
+        # 按换行符拆分成列表，并去除项目符号。
+        # 只剥「符号 + 空格」形式的 bullet：旧的 ``c.strip("- *")`` 会把
+        # "-1000 <= Node.val <= 1000" 的前导负号也吃掉，落库变成 "1000 <= ..."，
+        # 于是随机输入的数值下界被解析成正数。
+        constraints = [
+            c.strip() for c in (
+                re.sub(r"^(?:[-*•·]\s+)+", "", line) for line in const_str.split("\n")
+            ) if c.strip()
+        ]
 
     # ── 解析 Follow-up ──
     follow_up = ""

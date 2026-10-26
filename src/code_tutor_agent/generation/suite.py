@@ -169,11 +169,13 @@ def _generate_random_cases(
     brute_code: str,
     ref_code: str,
     random_inputs: list,
+    char_domain: str | None,
     problem_id: int,
 ) -> tuple[list[dict], int]:
     """随机生成分支：对沙箱随机输入逐个对齐签名并验证，返回 ``(用例列表, 交叉丢弃数)``。"""
     sink.event(GenEvent("progress", f"🔧 正在运行参考解验证 {len(random_inputs)} 个用例..."))
     all_tcs: list[dict] = []
+    dropped_domain = 0
     dropped_cross = 0
     for idx, inp in enumerate(random_inputs):
         if func_sig:
@@ -186,6 +188,16 @@ def _generate_random_cases(
                 )
                 continue
             inp = san["input_args"]
+        # 域校验必须先于参考解验证：越界输入往往能"跑通"参考解并产出一个
+        # 看似合法的期望（树参数被 harness 当节点引用 → None → []），
+        # 只靠 status 判断拦不住（pid 179 的 12 条 846 -> [] 即此）。
+        if func_sig and not agent.sandbox.input_in_domain(func_sig, inp, char_domain):
+            dropped_domain += 1
+            logger.warning(
+                "Random case input out of problem domain, dropping (pid=%d idx=%d) %s",
+                problem_id, idx, inp,
+            )
+            continue
         tc = {
             "input_args": inp,
             "expected_output": "",
@@ -204,6 +216,20 @@ def _generate_random_cases(
             continue
         tc["expected_output"] = expected
         all_tcs.append(tc)
+
+    # 退化保护：整批随机用例期望恒同 ⇒ 对判题零区分度（写 `return False`
+    # 的空壳也能全过）。保留为隐藏用例，但不再占用可见槽位。
+    expected_set = {str(t["expected_output"]) for t in all_tcs}
+    if len(all_tcs) >= 4 and len(expected_set) == 1:
+        for t in all_tcs:
+            t["is_hidden"] = True
+        sink.event(GenEvent(
+            "warning",
+            f"⚠️ {len(all_tcs)} 个随机用例期望输出恒为 {expected_set.pop()}，"
+            "已转为隐藏用例（对判题无区分度）",
+        ))
+    if dropped_domain:
+        sink.event(GenEvent("warning", f"⚠️ {dropped_domain} 个随机输入不符合题面约束，已丢弃"))
     return all_tcs, dropped_cross
 
 
@@ -219,6 +245,7 @@ def _generate_llm_boundary_cases(
     ref_code: str,
     full,
     random_visible_examples: list,
+    char_domain: str | None,
     problem_id: int,
 ) -> tuple[list[dict], int]:
     """LM 生成分支：调用 LLM 生成边界用例并逐个验证，返回 ``(用例列表, 交叉丢弃数)``。"""
@@ -246,6 +273,14 @@ def _generate_llm_boundary_cases(
                         bc.get("explanation", ""),
                     )
                     continue
+            if func_sig and not agent.sandbox.input_in_domain(
+                func_sig, bc.get("input_args") or [], char_domain
+            ):
+                logger.warning(
+                    "Boundary case input out of problem domain, dropping: %s",
+                    bc.get("explanation", ""),
+                )
+                continue
             _tc = {"input_args": bc.get("input_args", []), "expected_output": ""}
             expected, cross_mismatch = _validate_against_reference(
                 agent, _tc,
@@ -316,6 +351,15 @@ def _verify_visible_cases(
                 tc.get("explanation", ""),
             )
             continue
+        # 形态校验（故意不传 char_domain）：只挡「结构体参数拿到标量」这类必错输入。
+        # 库里已有的坏数据（pid 179 落库的 ``846 -> []``）正是从这条既有可见用例通道
+        # 被原样带回来的；字符集推断则不给官方示例设卡，避免误判丢掉权威示例。
+        if func_sig and not agent.sandbox.input_in_domain(func_sig, san["input_args"], None):
+            logger.warning(
+                "Visible case input malformed for its param type, dropping: %s %s",
+                san.get("input_args"), tc.get("explanation", ""),
+            )
+            continue
         _tc = {"input_args": san["input_args"], "expected_output": ""}
         expected, cross_mismatch = _validate_against_reference(
             agent, _tc,
@@ -359,6 +403,7 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
     constraints = getattr(full, "constraints", None) or []
     description = getattr(full, "description", "") or ""
     sort_inputs = agent.sandbox.needs_sorted_inputs(*constraints, description)
+    char_domain = agent.sandbox.char_domain(constraints, description)
 
     sink.event(GenEvent("progress", "🧪 正在生成更多测试用例..."))
     # 根据提示和参数情况生成随机测试用例
@@ -376,7 +421,7 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
         func_sig=func_sig, sort_inputs=sort_inputs,
         use_cross_validation=use_cross_validation,
         optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
-        random_inputs=random_inputs, problem_id=problem_id,
+        random_inputs=random_inputs, char_domain=char_domain, problem_id=problem_id,
     )
 
     # ── LM 生成分支（边界用例）──
@@ -385,7 +430,8 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
         func_sig=func_sig, sort_inputs=sort_inputs,
         use_cross_validation=use_cross_validation,
         optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
-        full=full, random_visible_examples=random_cases[:4], problem_id=problem_id,
+        full=full, random_visible_examples=random_cases[:4],
+        char_domain=char_domain, problem_id=problem_id,
     )
 
     # ── 既有可见用例校验 ──
