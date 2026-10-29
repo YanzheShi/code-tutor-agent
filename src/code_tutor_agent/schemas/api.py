@@ -68,15 +68,25 @@ class SessionStateResponse(BaseModel):
     last_verdict: Optional[str] = None
     last_review_payload: Optional[dict] = None
     progress_messages: list[str] = Field(default_factory=list)
+    # 以下四项 serialize_state 一直在算，但没在本模型里声明过 → 被 response_model
+    # 静默滤掉，前端一直以为拿得到（types/session.ts 里就写着 warm_feedback）。
+    # 补上：/submit 拆链路后前端要靠 warm_feedback 轮询「后台文案是否已落库」。
+    error_message: str = ""
+    repair_suggestion: str = ""
+    warm_feedback: str = ""
+    judge_cycle: int = 0
 
 
 class SubmitResponse(BaseModel):
-    """Response after a submit -> judge -> tutor round."""
+    """Response after a submit -> judge round (tutor text may still be pending)."""
 
     session_id: str
     status: str
     verdict: Optional[str] = None
     tutor_message: Optional[str] = None
+    # True = 判题已回但辅导文案仍在后台生成，前端应轮询 /state 取 tutor_messages
+    # （2026-10-27 拆链路：一次同步 POST 里等 LLM 会让用户白屏到分钟级）
+    tutor_pending: bool = False
     hint_level: int = 0
 
 

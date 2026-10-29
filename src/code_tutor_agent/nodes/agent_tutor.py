@@ -6,7 +6,8 @@ verdict 的权威永远属于执行引擎与判题节点——本节点只读 ``
 ``forced_verdict`` 锁死 LLM，绝不改判、绝不重跑用例。
 
 AC 线不经过本节点（``agent_judge_router`` 直接路由到 update_profile_node /
-wait_for_submit_node），所以 AC 的「祝贺 + 复杂度分析」目前仍由判题节点生成。
+wait_for_submit_node）。但文案生成已抽成 ``build_tutor_update``，AC 与 /submit 的
+后台延迟路径都复用它，所以「祝贺 + 复杂度分析」不再必须由判题节点同步生成。
 
 节点出口仍是确定性单跳：返回纯 dict，靠静态边
 ``agent_tutor_node → wait_for_submit_node`` 回到等待提交（改 Command(goto) 会与
@@ -46,24 +47,16 @@ def _rebuild_results(plain: list[dict]) -> list[RunnerResult]:
     ]
 
 
-def agent_tutor_node(state: SessionState) -> dict:
-    """Generate retry guidance after a non-AC judge cycle, then await resubmission.
+def build_tutor_update(state: SessionState) -> dict:
+    """生成「辅导文案」对应的状态更新（不含 ``status``）。
 
-    Args:
-        state: Session state carrying ``last_verdict`` and ``last_exec_results``
-            written by ``agent_judge_node``.
-
-    Returns:
-        Plain state update (no Command); graph routes via the static
-        edge ``agent_tutor_node → wait_for_submit_node``.
+    图内节点与 /submit 的后台延迟路径**共用这一份**，避免两条路的文案口径漂移
+    （2026-10-27 拆链路：判题先回、LLM 点评改后台补写）。
     """
     verdict = state.last_verdict or ""
-    cycle = state.judge_cycle
     logger.info(
-        "▶ agent_tutor_node() — verdict=%s cycle=%d scope=%s",
-        verdict, cycle, state.judge_scope,
+        "build_tutor_update() — verdict=%s scope=%s", verdict, state.judge_scope,
     )
-
     results = _rebuild_results(state.last_exec_results)
     code = state.submissions[-1].code if state.submissions else ""
     problem = state.problem
@@ -79,7 +72,7 @@ def agent_tutor_node(state: SessionState) -> dict:
         )
         repair = ""
     elif not results:
-        logger.warning("agent_tutor_node — 交棒载荷为空，降级为确定性提示")
+        logger.warning("agent_tutor — 交棒载荷为空，降级为确定性提示")
         warm = "没取到判题结果，麻烦重新提交一次试试。"
         repair = ""
     else:
@@ -108,10 +101,38 @@ def agent_tutor_node(state: SessionState) -> dict:
         feedback_msg += f"\n\n**修复建议**\n{repair}"
 
     return {
-        # 未通过 → 循环等待用户修改（AC 不在此分支）
-        "status": "awaiting_submit",
         "warm_feedback": warm,
         "repair_suggestion": repair,
         "tutor_messages": list(state.tutor_messages)
         + [{"role": "tutor", "content": feedback_msg}],
     }
+
+
+def agent_tutor_node(state: SessionState) -> dict:
+    """Generate retry guidance after a non-AC judge cycle, then await resubmission.
+
+    Args:
+        state: Session state carrying ``last_verdict`` and ``last_exec_results``
+            written by ``agent_judge_node``.
+
+    Returns:
+        Plain state update (no Command); graph routes via the static
+        edge ``agent_tutor_node → wait_for_submit_node``.
+    """
+    logger.info(
+        "▶ agent_tutor_node() — verdict=%s cycle=%d scope=%s",
+        state.last_verdict or "", state.judge_cycle, state.judge_scope,
+    )
+
+    if state.tutor_deferred and state.judge_scope != "sample":
+        # /submit 拆链路：LLM 点评交后台补写（api/services/tutor_feedback.py）。
+        # 本节点仍要落 status，否则会话卡在 judging；同时清空上一轮的 warm/repair，
+        # 免得前端在文案到达前读到**上一轮**的陈旧点评。
+        # sample（运行）不进这个分支：它的文案是本地拼的、不花钱，没有任何理由延迟。
+        logger.info("agent_tutor_node — 文案延迟后台生成，本轮只落 status")
+        return {"status": "awaiting_submit", "warm_feedback": "", "repair_suggestion": ""}
+
+    update = build_tutor_update(state)
+    # 未通过 → 循环等待用户修改（AC 不在此分支）
+    update["status"] = "awaiting_submit"
+    return update

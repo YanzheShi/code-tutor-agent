@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any, Optional
 
@@ -17,6 +18,7 @@ from code_tutor_agent.api.auth import get_current_user, require_admin, user_key
 from code_tutor_agent.api.deps import (
     get_graph,
     invoke_graph_tracked,
+    run_with_concurrency_limit,
 )
 from code_tutor_agent.api.serializers import empty_state, serialize_state
 from code_tutor_agent.api.services.generation import (
@@ -24,6 +26,7 @@ from code_tutor_agent.api.services.generation import (
     SSE_STALL_TIMEOUT,
     run_generation,
 )
+from code_tutor_agent.api.services.tutor_feedback import schedule_tutor_feedback
 from code_tutor_agent.context_manager import build_cross_problem_context, generate_summary
 from code_tutor_agent.db.database import (
     delete_session_activity,
@@ -64,6 +67,12 @@ router = APIRouter()
 # 提示深度阈值：hint_level_reached ≥ 此值视为"靠较深提示才拿下/没拿下"（R2 规则）。
 # 提示等级 0–4，≥3 表示已给到 L3/L4 仍吃力，掌握度不牢。
 HINT_DEEP_THRESHOLD = 3
+
+# /submit 判题段的总超时（对齐出题侧 GENERATION_TIMEOUT 的做法——此前 submit 是唯一
+# 没有上界的那条链路）。判题成本上界约 20s：Judge0 socket 15s + 本地整批回退 7s，
+# 留一倍余量给 DB/排队。辅导文案已移出本请求（见 api/services/tutor_feedback.py），
+# 所以这个超时只约束「执行引擎判题」，不再被 LLM 牵着走。
+SUBMIT_TIMEOUT = float(os.getenv("SUBMIT_TIMEOUT_SECONDS", "60"))
 
 # ── checkpointer 辅助（PG 版：PostgresSaver + ConnectionPool，直查借池化连接）──
 
@@ -422,7 +431,14 @@ async def submit_code(
     if state.values.get("status") == "error":
         from code_tutor_agent.api.deps import pause_safe_update
 
-        pause_safe_update(graph, config, {"status": "awaiting_submit", "error_message": ""})
+        # pause_safe_update 内部是阻塞的 graph.invoke —— 直接写在 async handler 里
+        # 会把整个事件循环占住（同进程所有请求与 SSE 推流一起卡），必须进线程池。
+        await asyncio.to_thread(
+            pause_safe_update,
+            graph,
+            config,
+            {"status": "awaiting_submit", "error_message": ""},
+        )
 
     # 记录活跃时间（TTL 清理用；冲突时只刷新时间，不会覆盖归属）
     try:
@@ -433,12 +449,19 @@ async def submit_code(
     logger.info("POST /session/%s/submit → code=%d chars", sid, len(body.code))
 
     def _do_judge() -> str | None:
-        # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，
-        # 避免独占事件循环、拖垮同进程的其它请求与 SSE 推流。
+        # 判题（执行引擎）是同步阻塞的，丢线程池执行，避免独占事件循环、拖垮同进程
+        # 的其它请求与 SSE 推流。
+        # defer_tutor=True：图内不再调 LLM 生成点评（辅导节点与 AC 线各自短路），
+        # 文案改由本请求返回后的后台任务补写 —— 这是「判题先回、辅导异步补」的拆点。
         with collect_runs() as runs:
             invoke_graph_tracked(
                 graph,
-                Command(resume={"code": body.code, "language": body.language, "scope": "full"}),
+                Command(resume={
+                    "code": body.code,
+                    "language": body.language,
+                    "scope": "full",
+                    "defer_tutor": True,
+                }),
                 config,
                 entry="submit_judge",
             )
@@ -446,7 +469,20 @@ async def submit_code(
             traced = runs.traced_runs if runs else []
             return traced[-1].id if traced else None
 
-    run_id = await asyncio.to_thread(_do_judge)
+    # 并发护栏：与 /run 同口径。此前 submit 走裸 asyncio.to_thread，只靠默认线程池
+    # 隐性排队，会连带排 checkpointer 连接池（max 8）的队 —— 一个人的慢判题拖慢一批人。
+    try:
+        run_id = await asyncio.wait_for(
+            run_with_concurrency_limit(_do_judge), SUBMIT_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        logger.error(
+            "submit: session %s 判题超过 %.0fs — 提前返回（线程仍在跑，结果会落 checkpoint）",
+            sid, SUBMIT_TIMEOUT,
+        )
+        raise HTTPException(
+            504, "判题比预期慢了些，代码还在后台判——稍等几秒刷新即可看到结果",
+        ) from None
     state = graph.get_state(config)
     values = state.values
 
@@ -461,11 +497,14 @@ async def submit_code(
         )
 
     # 持久化提交记录
+    problem = values.get("problem")
+    pid = (
+        problem.get("problem_id") if isinstance(problem, dict)
+        else getattr(problem, "problem_id", None)
+    ) if problem else None
     try:
-        problem = values.get("problem")
         subs = values.get("submissions", [])
         if subs and problem:
-            pid = problem.problem_id if hasattr(problem, "problem_id") else problem.get("problem_id")
             last_sub = subs[-1] if isinstance(subs, list) else subs
             verdict = getattr(last_sub, "last_verdict", "") or getattr(last_sub, "verdict", "") or values.get("last_verdict", "")
             if verdict:
@@ -485,9 +524,20 @@ async def submit_code(
     except Exception as exc:
         logger.warning("Failed to persist submission: %s", exc)
 
+    # ── 辅导文案：本请求不生成，交给后台补写（拆链路）──
+    # error 态（判题前置失败）不排：那一轮压根没有执行结果，后台只会写来一句
+    # 「没取到判题结果」，与前端已在展示的错误提示重复。
+    tutor_pending = bool(values.get("tutor_deferred")) and values.get("status") != "error"
+    if tutor_pending:
+        schedule_tutor_feedback(
+            graph, config,
+            expected_cycle=values.get("judge_cycle"),
+            expected_problem_id=pid,
+        )
+
     tutor_messages = values.get("tutor_messages", [])
     tutor_msg = None
-    if tutor_messages:
+    if tutor_messages and not tutor_pending:
         last = tutor_messages[-1]
         tutor_msg = last["content"] if isinstance(last, dict) else last.content
 
@@ -496,6 +546,7 @@ async def submit_code(
         status=values.get("status", "unknown"),
         verdict=values.get("last_verdict"),
         tutor_message=tutor_msg,
+        tutor_pending=tutor_pending,
         hint_level=values.get("hint_level", 0),
     )
 

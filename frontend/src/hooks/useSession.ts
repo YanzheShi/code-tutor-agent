@@ -130,6 +130,36 @@ function dedupeMessages(msgs: Message[]): Message[] {
   return out;
 }
 
+// ── 提交拆链路后的辅导文案补取（2026-10-27）──
+// /submit 现在只等执行引擎判题就返回，LLM 点评改由后端后台补写。
+const TUTOR_POLL_INTERVAL_MS = 1200;
+const TUTOR_WAIT_TIMEOUT_MS = 60000;
+const TUTOR_PENDING_TEXT = '🤔 正在看你的代码，稍等几秒…';
+const TUTOR_TIMEOUT_TEXT = '这次点评比预期慢了些——先按上面的用例结果调一版，稍后回来就能看到点评。';
+
+/**
+ * 轮询 /state 直到本轮点评落库。
+ *
+ * 判据用 `warm_feedback` 而不是 tutor_messages 的条数：它是后台那一次写入唯一的
+ * 产物，判题时已被显式置空（非空即代表本轮文案已写好）；而条数会被「用户提交气泡
+ * 只在前端本地渲染、不落后端」这一点干扰，内容比对又碰上新旧文案恰好相同的场景。
+ */
+async function waitForTutorReply(sid: string): Promise<string | null> {
+  const deadline = Date.now() + TUTOR_WAIT_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, TUTOR_POLL_INTERVAL_MS));
+    try {
+      const st = await getState(sid);
+      if (!(st.warm_feedback || '').trim()) continue;
+      const msgs = st.tutor_messages || [];
+      return msgs[msgs.length - 1]?.content || st.warm_feedback || null;
+    } catch {
+      // 单次轮询失败（网络抖动/会话已被清理）继续等到超时，不打断做题页
+    }
+  }
+  return null;
+}
+
 export function useSession() {
   const initial = getInitialPersist();
   // 只恢复 main 屏（做题页）；loading/error/admin 刷新后回 welcome 更安全
@@ -322,14 +352,32 @@ export function useSession() {
   }, []);
 
   // ── 提交 ──
+  // 后到的辅导文案要写回「它自己那一轮」的占位气泡；用户手快连提两次时，
+  // 只有最后一次提交的那个轮次才允许回写，否则旧轮次的迟到回复会盖掉新占位。
+  const tutorSeqRef = useRef(0);
   const handleSubmit = useCallback(async () => {
     if (!sessionId || submittingFlag) return;
     const sid = sessionId; const code = editorCode;
     await editTrace.mark('submit'); // 提交锚点：强制记一条当前代码快照并落盘（await 确保刷新/关页不丢）
     setSubmittingFlag(true); setRunResults(null);
+    const seq = ++tutorSeqRef.current;
     try {
       const resp = await submitCode(sid, code);
-      if (resp.tutor_message) setTutorMessages(prev => [...prev, { role: 'user' as const, content: code }, { role: 'tutor' as const, content: resp.tutor_message ?? '' }]);
+      // 用户提交气泡必须无条件上屏：拆链路后 resp.tutor_message 恒为空，
+      // 旧写法（以 tutor_message 存在为条件）会让用户连自己那条代码都看不到。
+      // 同时把上一轮还没回填的「正在看你的代码…」就地解决掉：那轮的点评已被这次
+      // 提交取代（后端也会丢弃它），留着就是一条永远转圈的占位。
+      setTutorMessages(prev => [
+        ...prev.map(m => (m.role === 'tutor' && m.content === TUTOR_PENDING_TEXT
+          ? { ...m, content: '（这轮的点评已被新的提交取代）' }
+          : m)),
+        { role: 'user' as const, content: code },
+        ...(resp.tutor_pending
+          ? [{ role: 'tutor' as const, content: TUTOR_PENDING_TEXT }]
+          : resp.tutor_message
+            ? [{ role: 'tutor' as const, content: resp.tutor_message }]
+            : []),
+      ]);
       setHintLevel(resp.hint_level); setLatestVerdict(resp.verdict);
       const full = await getState(sid);
       // 提交 CE：从 base judge_result 取结构化 payload → 编辑器行内红标 + 运行结果面板
@@ -396,13 +444,30 @@ export function useSession() {
       }
       // CE 提交：右栏切到「运行结果」展示 CE 面板；否则保持原行为切到导师对话
       setActiveTabs(prev => ({ ...prev, right: ceShowPanel ? 'run' : 'tutor' }));
+      // 辅导文案后到：这里**不 await**，否则提交按钮要一直灰到 LLM 回完，
+      // 等于把原来的「等两分钟」从后端搬到了前端。
+      if (resp.tutor_pending) {
+        void (async () => {
+          const reply = await waitForTutorReply(sid);
+          if (seq !== tutorSeqRef.current) return; // 期间又提交了新的一轮，旧轮的迟到点评不回写
+          setTutorMessages(prev => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last?.role !== 'tutor') return next;
+            next[next.length - 1] = { role: 'tutor', content: reply ?? TUTOR_TIMEOUT_TEXT };
+            return next;
+          });
+        })();
+      }
     } catch (e) {
-      // 413（代码超 10KB/300 行）/ 429（提交限频）都不进 error 屏：留在做题页、
+      // 413（代码超 10KB/300 行）/ 429（提交限频）/ 504（判题总超时）都不进 error 屏：留在做题页、
       // 在对话流里给可读提示即可（与 handleRun 同口径）。429 文案由后端携带
       // 已用/上限/恢复时间，直接透出，避免「点提交被弹到错误页」的突兀感。
-      if (e instanceof ApiError && (e.status === 413 || e.status === 429)) {
-        const tip = e.status === 429 ? '提交太频繁' : '提交被拒';
-        setTutorMessages(prev => [...prev, { role: 'tutor' as const, content: `⚠️ ${tip}：${e.message}` }]);
+      if (e instanceof ApiError && (e.status === 413 || e.status === 429 || e.status === 504)) {
+        const tip = e.status === 429 ? '提交太频繁' : e.status === 504 ? '判题超时' : '提交被拒';
+        // 504：判题线程仍在后台跑并会落 checkpoint，所以把这次提交的代码也上屏，稍后即可看到结果
+        const echo = e.status === 504 ? [{ role: 'user' as const, content: code }] : [];
+        setTutorMessages(prev => [...prev, ...echo, { role: 'tutor' as const, content: `⚠️ ${tip}：${e.message}` }]);
         setActiveTabs(prev => ({ ...prev, right: 'tutor' }));
       } else {
         setErrorMsg(String(e)); setScreen('error');

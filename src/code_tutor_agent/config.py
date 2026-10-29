@@ -87,6 +87,35 @@ PURPOSE_CONFIGS = {
 }
 
 
+# ── LLM 请求超时与重试上界（2026-10-27 submit 延迟治理）──
+# openai SDK 默认 timeout=600s、max_retries=2：网关挂住或被限流时，单次调用可以
+# 吃掉数分钟，而它又串在判题后面 → 用户点一次提交等两分钟。这里给每个用途设上界，
+# 超时后由各调用点已有的确定性降级接住（如 agents/agent_judge.py::analyze_judge_results
+# 的 except 分支给出兜底文案），效果是「有界、但一定有回复」。
+#
+# 阈值**惰性读 env**（与 api/deps.py::_queue_limit 同口径）：import 期定死会让想微调
+# 的部署只能改代码，测试也无法在不重启进程的前提下验证不同档位。
+_LLM_TIMEOUT_DEFAULT_SECONDS = "90"
+_LLM_MAX_RETRIES_DEFAULT = "1"
+# 用户正在请求里等结果的用途给更紧的额度，其余用默认。
+# 可用 LLM_TIMEOUT_<用途大写>_SECONDS 逐项覆盖，再退到 LLM_TIMEOUT_SECONDS。
+_LLM_TIMEOUT_PURPOSE_DEFAULTS = {"judge": "45"}
+
+
+def _llm_timeout_seconds(purpose: str) -> float:
+    per_purpose = "LLM_TIMEOUT_" + purpose.upper().replace("-", "_") + "_SECONDS"
+    return float(
+        os.getenv(per_purpose)
+        or _LLM_TIMEOUT_PURPOSE_DEFAULTS.get(purpose)
+        or os.getenv("LLM_TIMEOUT_SECONDS")
+        or _LLM_TIMEOUT_DEFAULT_SECONDS
+    )
+
+
+def _llm_max_retries() -> int:
+    return int(os.getenv("LLM_MAX_RETRIES") or _LLM_MAX_RETRIES_DEFAULT)
+
+
 def get_llm(purpose: str, alias: str | None = None, **kwargs):
     """根据业务用途获取大模型实例。
 
@@ -156,6 +185,11 @@ def get_llm(purpose: str, alias: str | None = None, **kwargs):
         "model_alias": alias,
         "model_name": config.get("model", "") or "",
     }
+
+    # 超时/重试上界。用 setdefault：调用方显式传参优先，否则按用途取，
+    # 保证任何一条 LLM 调用路径都不继承 openai SDK 那个 600s 的隐含默认值。
+    config.setdefault("timeout", _llm_timeout_seconds(purpose))
+    config.setdefault("max_retries", _llm_max_retries())
     return init_chat_model(**config)
 
 

@@ -266,12 +266,14 @@ def fire_and_forget_error_mode_analysis(
     judge_failure_tags: Optional[list[tuple[str, str]]] = None,
     user_id: str = "default",
 ) -> None:
-    """fire-and-forget 启动错误模式分析。
+    """排队启动错误模式分析（有界后台队列）。
 
     判题节点运行在 ``asyncio.to_thread`` 的 worker 线程中，无运行中的事件循环，
-    且分析含阻塞式 LLM 调用，因此用守护线程承载（即 fire-and-forget 的线程实现）。
-    非致命：线程内任何异常只记日志，不影响主流程。
+    且分析含阻塞式 LLM 调用，因此交给后台队列执行。非致命：任务内任何异常只记日志，
+    不影响主流程；队列满时直接丢弃本次分析（旁路让位于用户判题请求，见 llm_bg_queue）。
     """
+    from code_tutor_agent.llm_bg_queue import submit_bounded
+
     def _worker():
         try:
             run_error_mode_analysis(
@@ -283,9 +285,11 @@ def fire_and_forget_error_mode_analysis(
                 judge_failure_tags=judge_failure_tags,
                 user_id=user_id,
             )
-        except Exception as exc:  # 兜底，绝不让线程异常冒泡
+        except Exception as exc:  # 兜底，绝不让 worker 异常冒泡
             logger.error("fire_and_forget_error_mode_analysis worker failed: %s", exc)
 
-    t = threading.Thread(target=_worker, daemon=True)
-    t.start()
-    logger.info("fire_and_forget_error_mode_analysis started for session=%s verdict=%s", session_id, verdict)
+    queued = submit_bounded("error-mode", _worker)
+    logger.info(
+        "fire_and_forget_error_mode_analysis %s for session=%s verdict=%s",
+        "queued" if queued else "dropped (queue full)", session_id, verdict,
+    )

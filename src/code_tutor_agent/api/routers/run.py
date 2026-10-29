@@ -107,7 +107,14 @@ async def run_code(
     if state.values.get("status") == "error":
         from code_tutor_agent.api.deps import pause_safe_update
 
-        pause_safe_update(graph, config, {"status": "awaiting_submit", "error_message": ""})
+        # 同 session.py：pause_safe_update 内部是阻塞 graph.invoke，留在事件循环里
+        # 会卡住同进程所有请求与 SSE 推流。
+        await asyncio.to_thread(
+            pause_safe_update,
+            graph,
+            config,
+            {"status": "awaiting_submit", "error_message": ""},
+        )
 
     def _do_run() -> None:
         # 判题是同步阻塞的（graph.invoke 内含 LLM 调用），丢进线程池执行，

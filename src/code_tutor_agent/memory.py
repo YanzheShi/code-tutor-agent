@@ -230,9 +230,9 @@ def _has_signal(extraction: MemoryExtraction) -> bool:
 
 
 def schedule_extraction(state) -> None:
-    """critic_node 在 episode 终结时调用。同步快照 state → 后台线程抽取。
+    """critic_node 在 episode 终结时调用。同步快照 state → 有界后台队列抽取。
 
-    同步快照避免线程读 state 的竞争;启动失败/快照失败都静默降级。
+    同步快照避免 worker 读 state 的竞争;调度失败/快照失败都静默降级。
     state.user_id 随快照传入（多用户记忆隔离）。
     """
     try:
@@ -254,12 +254,14 @@ def schedule_extraction(state) -> None:
         logger.warning("memory: failed to snapshot state, skip: %s", exc)
         return
     try:
-        threading.Thread(
-            target=_run_extraction, args=(payload,),
-            daemon=True, name="memory-extract",
-        ).start()
+        from code_tutor_agent.llm_bg_queue import submit_bounded
+
+        # 有界队列而非裸起线程：抽取是大 prompt 的阻塞 LLM 调用，与用户判题共用
+        # 同一个 key 的 RPM 桶。连续提交时裸线程没有上界，会把配额吃满让下一个
+        # submit 撞 429（叠重试即分钟级等待）。队列满则丢弃——记忆是尽力而为的衍生数据。
+        submit_bounded("memory-extract", lambda: _run_extraction(payload))
     except Exception as exc:
-        logger.warning("memory: failed to start extraction thread: %s", exc)
+        logger.warning("memory: failed to schedule extraction: %s", exc)
 
 
 def _run_extraction(payload: dict) -> None:

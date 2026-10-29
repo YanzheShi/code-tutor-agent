@@ -23,9 +23,11 @@ export async function submitCode(
   sid: string,
   code: string,
 ): Promise<SubmitResponse> {
-  // 加硬超时，避免后端判题异常卡死时「判题中」永远不解除
+  // 加硬超时，避免后端判题异常卡死时「判题中」永远不解除。
+  // 拆链路后 /submit 只等执行引擎（后端 SUBMIT_TIMEOUT_SECONDS=60 会先返回 504 带
+  // 可读文案），这里留 15s 余量、只作最后一道保险，不再需要原来的 180s 大额度。
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 180000);
+  const timer = setTimeout(() => ctrl.abort(), 75000);
   try {
     const r = await apiFetch(`${BASE}/session/${sid}/submit`, {
       method: 'POST',

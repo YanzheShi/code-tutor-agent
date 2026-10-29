@@ -56,6 +56,8 @@ export type SubmitResponse = {
   status: string;
   verdict: string | null;
   tutor_message: string | null;
+  /** 判题已回、辅导文案仍在后台生成 → 前端轮询 /state 取（见 useSession.waitForTutorReply） */
+  tutor_pending: boolean;
   hint_level: number;
 };
 

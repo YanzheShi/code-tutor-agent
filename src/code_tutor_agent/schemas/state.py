@@ -325,6 +325,12 @@ class SessionState(BaseModel):
         description="Scope of the latest judge: 'sample' (运行, visible cases only, "
                     "diagnostic, no profile) or 'full' (提交, all cases incl. boundary).",
     )
+    tutor_deferred: bool = Field(
+        default=False,
+        description="本轮辅导文案改由后台生成（2026-10-27 submit 拆链路）。"
+                    "/submit 置 True：判题跑完立刻回 verdict，LLM 点评异步补写，"
+                    "避免用户在一次同步 POST 里等两分钟。/run 恒 False（sample 不走 LLM）。",
+    )
 
     # ── Error handling ──
     error_message: str = Field(default="", description="Populated when status=error")

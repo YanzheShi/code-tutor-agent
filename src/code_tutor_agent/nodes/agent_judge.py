@@ -523,16 +523,25 @@ def agent_judge_node(state: SessionState) -> dict:
         "last_exec_results": _to_plain_results(raw_results),
     }
     if deterministic_verdict == "AC":
-        analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
-        logger.info("Verdict: %s (AC 线在本节点生成反馈)", deterministic_verdict)
-        feedback_msg = analysis.warm_feedback
-        if analysis.repair_suggestion:
-            feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
-        update["warm_feedback"] = analysis.warm_feedback
-        update["repair_suggestion"] = analysis.repair_suggestion
-        update["tutor_messages"] = state.tutor_messages + [
-            {"role": "tutor", "content": feedback_msg}
-        ]
+        if state.tutor_deferred and state.judge_scope != "sample":
+            # /submit 拆链路：AC 的「祝贺 + 复杂度/优化建议」也交后台补写
+            # （与辅导节点共用 build_tutor_update）。请求里只跑执行引擎拿 verdict。
+            # 显式清空陈旧文案，否则前端会在文案到达前读到上一轮的点评。
+            # sample（运行）不延迟：它的反馈是本地拼的、不花钱。
+            logger.info("Verdict: AC — 文案延迟后台生成（defer）")
+            update["warm_feedback"] = ""
+            update["repair_suggestion"] = ""
+        else:
+            analysis = _run_analysis(state, problem_dict, code, raw_results, deterministic_verdict)
+            logger.info("Verdict: %s (AC 线在本节点生成反馈)", deterministic_verdict)
+            feedback_msg = analysis.warm_feedback
+            if analysis.repair_suggestion:
+                feedback_msg += f"\n\n**修复建议**\n{analysis.repair_suggestion}"
+            update["warm_feedback"] = analysis.warm_feedback
+            update["repair_suggestion"] = analysis.repair_suggestion
+            update["tutor_messages"] = state.tutor_messages + [
+                {"role": "tutor", "content": feedback_msg}
+            ]
     else:
         logger.info("Verdict: %s — 文案交棒 agent_tutor_node", deterministic_verdict)
     _m_judge_ok()

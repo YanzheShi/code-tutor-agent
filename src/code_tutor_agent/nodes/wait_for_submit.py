@@ -61,17 +61,22 @@ def wait_for_submit_node(state: SessionState) -> dict:
     code = ""
     language = "python"
     scope = "full"
+    defer_tutor = False
     if isinstance(resume_data, dict):
         code = resume_data.get("code", "")
         language = resume_data.get("language", "python")
         # 运行按钮传 scope="sample"，提交按钮默认 "full"
         scope = "sample" if resume_data.get("scope") == "sample" else "full"
+        # /submit 带 defer_tutor=True：判题先回、辅导文案交后台。
+        # 必须在此显式落值（含 False）：本通道 last-wins，不清会让上一轮的延迟标记
+        # 残留，导致后续任何一轮（包括 /run）都再也写不出文案。
+        defer_tutor = bool(resume_data.get("defer_tutor"))
     elif isinstance(resume_data, str):
         code = resume_data
 
     if not code:
         logger.warning("Resumed with empty code — keeping state unchanged")
-        return {}
+        return {"tutor_deferred": False}
 
     new_sub = Submission(
         index=len(state.submissions) + 1,
@@ -90,4 +95,6 @@ def wait_for_submit_node(state: SessionState) -> dict:
         "submissions": [new_sub],
         "status": "judging",
         "judge_scope": scope,
+        # sample（运行）本来就不调 LLM，不接受延迟标记
+        "tutor_deferred": defer_tutor and scope == "full",
     }
