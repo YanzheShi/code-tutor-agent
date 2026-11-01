@@ -367,11 +367,11 @@ POST   /auth/forgot-password                 → 忘记密码（邮件验证码�
 POST   /auth/reset-password                  → 凭验证码重置密码
 
 # ── 业务（需登录）──
-POST   /session                              → 新建 session，出题 + interrupt 返题面
+POST   /session                              → 新建 session，进入导师对话态（真实出题由后续 chat/stream 触发）
 POST   /session/{sid}/submit                 → 提交代码，走判题→辅导→下一轮
 POST   /session/{sid}/next-problem           → 回导师对话；引导文案按上一题 verdict×提示深度建议换题方向（AC 且提示用得深→同类型巩固，WA 且提示深→换方向/降难度）
 GET    /session/{sid}/state                  → 前端轮询渲染
-POST   /session/{sid}/chat/stream            → 导师对话（流式）
+POST   /session/{sid}/chat/stream            → 导师对话（流式）；确认出题意图后生成题目并扣做题配额
 POST   /session/{sid}/edit-trace             → 上报编辑轨迹（edit/idle/run/submit 四类事件）
 POST   /session/{sid}/analyze                → 触发轨迹分析
 GET    /session/{sid}/analysis               → 获取轨迹分析结果
@@ -439,7 +439,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | 否 | — | ⚠️ 旧变量名（历史遗留，勿用）。引导管理员认准下面的 `CTA_ADMIN_*` |
 | `CTA_ADMIN_EMAIL` / `CTA_ADMIN_PASSWORD` | 否 | — | 启动时引导创建管理员账号（`ensure_bootstrap_admin`，缺失则不创建） |
 | `CTA_ALLOW_CUSTOM_LLM` | 否 | `0` | 用户自定义 LLM 总开关（0=禁止用户自带 key，settings 相关端点 403；1=放开） |
-| `CTA_QUOTA_PROBLEM_USER` / `_IP` | 否 | `5` / `5` | 做题配额：每用户滚动 1h/24h 双窗口各 5 题；IP 维度仅对体验账号生效（≤0 关闭该项） |
+| `CTA_QUOTA_PROBLEM_USER` / `_IP` | 否 | `5` / `5` | 做题配额：每用户滚动 1h/24h 双窗口各 5 题；IP 维度仅对体验账号生效（≤0 关闭该项）。**扣点只在 chat/stream 确认出题意图时计 1；建会话、换题、题库选题不扣** |
 | `CTA_QUOTA_CHAT_USER` / `_IP` | 否 | `20` / `20` | 每题导师提问配额（IP 维度仅对体验账号生效） |
 | `CTA_QUOTA_TRACE_USER` / `_IP` | 否 | `20` / `20` | 每题轨迹追问配额（IP 维度仅对体验账号生效） |
 | `CTA_QUOTA_SUBMIT_USER` / `_WINDOW` | 否 | `20` / `1200` | 判题 submit/run 限频（不豁免自带 key 用户） |

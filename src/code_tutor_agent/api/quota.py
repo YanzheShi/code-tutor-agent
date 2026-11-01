@@ -16,11 +16,11 @@ IP 维度口径（2026-09-10 起）：**仅对测试用户（体验账号，role
 走转化钩子（引导注册），注册=原地转正后配额桶清零重新开闸。
 
 扣减点设计（每道新题恰好计 1，防双计/防绕过）：
-- create_session：后台 run_generation 立即绑题（生成新题）→ 计 1
+- create_session：只开对话、不产出题目 → 不计（agent 模式的图会停在 agent_dialog_node）
 - by-problem：从题库选题复用已有题面，**不消耗新题生成的 LLM 成本**（2026-09-10 起
   豁免做题配额）→ 不计（触额后仍可选题；运行/提交/提问仍受各自配额约束）
 - next-problem：仅重置回对话、不绑题 → 不计（绑题发生在 chat 出题分支，彼时计 1）
-- chat/stream 意图判定 is_ready：新题绑定点（生成新题）→ 计 1
+- chat/stream 意图判定 is_ready：新题绑定点（生成新题）→ 计 1（唯一扣点）
 
 豁免规则（用户确认 2026-09-08）：
 - 自带 API key 的用户（custom LLM 模式，runtime_settings.llm_override_ctx 生效中）
@@ -265,7 +265,9 @@ def reset_user(uid: str) -> None:
 def check_problem_start(request: Request | None, uid: str, is_test: bool = False) -> None:
     """开始做一道新题（**仅新题生成**）的配额检查（滚动 1h + 滚动 24h 双窗口）。
 
-    扣减点：create_session（topic 出题）/ chat 出题分支。
+    扣减点：chat/stream 的 is_ready 出题分支（**唯一扣点**）。
+    ⚠️ create_session（建会话）只开对话、不产出题目，**不调用本函数**——agent 模式下
+    graph 从 __start__ 直接进 agent_dialog_node 并暂停，题目由后续 chat 出题分支生成。
     ⚠️ by-problem（从题库选题）**不调用本函数**——选题复用已有题面、不消耗
     新题生成的 LLM 成本，故豁免做题配额（触额后仍可选题；运行/提交/提问仍受各自配额约束）。
     is_test（体验账号）：IP 维度**仅对测试用户生效**（清 localStorage 即换新身份，

@@ -203,31 +203,31 @@ def test_quota_ip_dimension_only_for_test_users(quota_on):
     assert "明天" in str(getattr(ei2.value, "detail", ""))
 
 
-def test_trial_ip_anchor_route_level(client, monkeypatch):
-    """路由级回归（2026-09-10 E2E 实测发现的存量 bug）。
+def test_create_session_does_not_consume_problem_quota(client, monkeypatch):
+    """建会话只开对话、不产出题目，不扣做题配额（2026-11-01 双计修复）。
 
-    session.py 曾漏 import Request，叠加 `from __future__ import annotations`
-    把注解字符串化，FastAPI 运行期解析失败后静默注入 request=None，
-    _client_ip(None)=='direct' → IP 维度在线上从未生效。
-    本测试走真实路由 + 真实 _client_ip（TestClient host='testclient'），
-    锁死 Request 注入行为；上面的单元测试 patch 掉了 _client_ip，抓不到这类问题。
+    旧实现曾在 create_session 无条件扣 1 次，随后 chat 的 is_ready 出题分支再扣 1 次，
+    导致每道题实扣 2 次、5 次配额只够做 2.5 道题。这里锁死「建会话 used=0」；
+    真正的扣点回归见 tests/test_quota_accounting.py（chat 出题恰好扣 1）。
     """
     from code_tutor_agent.api.routers import session as session_mod
 
     # 拦掉后台生成，避免测试触发真实 LLM
     monkeypatch.setattr(session_mod, "run_generation", lambda *a, **k: None)
     monkeypatch.setenv("CTA_QUOTA_ENABLED", "1")
-    monkeypatch.setenv("CTA_QUOTA_PROBLEM_USER", "0")  # 关用户维度，只测 IP 锚点
+    monkeypatch.setenv("CTA_QUOTA_PROBLEM_USER", "5")
     monkeypatch.setenv("CTA_QUOTA_PROBLEM_IP", "1")
     quota_mod.reset_all()
     try:
-        _, token = _make_trial(client)
+        user, token = _make_trial(client)
         body = {"topic": "数组", "difficulty": "easy"}
-        r1 = client.post("/session", json=body, headers=_auth(token))
-        assert r1.status_code == 200, r1.text  # IP 桶 1/1
-        r2 = client.post("/session", json=body, headers=_auth(token))
-        assert r2.status_code == 429, f"IP 锚点未生效（request 注入回归？）: {r2.text}"
-        assert "注册" in r2.json()["detail"]
+        for _ in range(5):
+            r = client.post("/session", json=body, headers=_auth(token))
+            assert r.status_code == 200, r.text
+
+        # 建会话不扣：用户桶 / IP 桶都应为空
+        assert not any(k.startswith(f"pu:{user['id']}:") for k in quota_mod._windows)
+        assert not any(k.startswith("pi:") for k in quota_mod._windows)
     finally:
         quota_mod.reset_all()
 

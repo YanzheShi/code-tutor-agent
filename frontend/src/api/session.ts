@@ -13,7 +13,8 @@ export async function createSession(
     body: opts ? JSON.stringify(opts) : undefined,
   });
   if (!r.ok) {
-    // 2026-09-10：走 parseApiError 透出 FastAPI detail（429 配额文案/413 超限等友好提示）
+    // 走 parseApiError 透出 FastAPI detail（429 限流/413 超限等友好提示）；
+    // 建会话不再扣做题配额，做题额度在 chat 出题分支校验。
     throw await parseApiError(r, `创建会话失败 (${r.status})，请确认后端服务已启动`);
   }
   return r.json();

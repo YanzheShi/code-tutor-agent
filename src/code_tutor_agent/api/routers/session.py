@@ -140,16 +140,11 @@ async def create_session(
     background_tasks: BackgroundTasks,
     body: CreateSessionRequest | None = None,
     current: dict = Depends(get_current_user),
-    request: Request = None,
 ):
     """Create a new tutoring session (background generation)."""
     graph = get_graph()
     uid = user_key(current)
-    # 做题配额（F-04）：建会话 = 绑定第一道新题（后台 run_generation 立即出题），
-    # 计 1 次做题；超限 429 + 友好文案（自带 key 用户豁免）
-    from code_tutor_agent.api.quota import check_problem_start
-
-    check_problem_start(request, uid, is_test=current.get("role") == "test")
+    # 建会话只开对话、不产出题目；做题配额在 chat/stream 的 is_ready 出题分支扣。
     sid = str(uuid.uuid4())
     config = build_run_config(
         sid,
