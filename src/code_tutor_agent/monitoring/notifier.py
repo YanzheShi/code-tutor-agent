@@ -14,13 +14,13 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
 
 # 北京时间（对齐 logging_config 的输出口径）
 def _now_str() -> str:
-    return datetime.now(timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _recipients() -> list[str]:

@@ -145,6 +145,13 @@ class TestNotifier:
         alerts = get_recent_alerts()
         assert any(a["rule_id"] == "rule_x" and a["status"] == "firing" for a in alerts)
 
+    def test_now_str_does_not_raise(self):
+        """回归：datetime.now(timedelta) 会抛 TypeError，整条告警被静默吞掉。"""
+        from code_tutor_agent.monitoring.notifier import _now_str
+
+        s = _now_str()
+        assert len(s) == 19 and s[4] == "-" and s[13] == ":"
+
     def test_cooldown_silences_repeat(self, notifier, monkeypatch):
         os.environ.pop("MCP_HUB_TOKEN", None)
         from code_tutor_agent.db.database import get_recent_alerts, save_alert
