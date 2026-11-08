@@ -9,10 +9,14 @@ Reads from .env:
 模型选择由下方的 PURPOSE_CONFIGS 统一控制，改模型只需改这一个文件。
 """
 
+import logging
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
+
+logger = logging.getLogger(__name__)
 
 # 在模块加载时加载 .env，使 LLM_CONFIGS 能读取环境变量
 load_dotenv()
@@ -58,8 +62,9 @@ PURPOSE_CONFIGS = {
     "judge":                {"alias": "default", "temperature": 0.7, "max_tokens": 4096},
     # 详细题解(agent_problem._get_solution_llm)
     "tutor":                {"alias": "default", "temperature": 0.4},
-    # 这里
-    "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 16384},
+    # 8192：历史 139 次 agnes-2.5-flash 出题 p99=2434、峰值 3825，留足长题余量；
+    # apihub 网关 2026-11-06 起上限 4096，get_llm 会自动钳到 4096（未限制端点仍发 8192）。
+    "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 8192},
 
     # === 上下文管理 ===
     "context-summary":      {"alias": "default", "temperature": 0.3},
@@ -85,6 +90,71 @@ PURPOSE_CONFIGS = {
     # === 基准测试 ===
     "benchmark":            {"alias": "secondary", "temperature": 0.5},
 }
+
+
+# ── 网关输出配额上限 ──
+# 「允许多大的 max_tokens」是网关能力，不是用途属性：同一个 agnes-2.5-flash，
+# 16384 在 api.agnes-ai.cn 正常，在 apihub.agnes-ai.com 被 400 拒绝
+# （"max_tokens exceeds the limit of 4096"，2026-11-06 线上事故）。
+# 这里只声明已知上限；未声明的网关不限制，运行期撞到 400 时由 llm_failover
+# 学到准确值并回填学习缓存，避免厂商再次收紧时静默降级。
+GATEWAY_OUTPUT_TOKEN_LIMITS: dict[str, int] = {
+    "apihub.agnes-ai.com": 4096,
+}
+
+_LEARNED_OUTPUT_TOKEN_LIMITS: dict[tuple[str, str], int] = {}
+_CLAMP_WARNED: set[tuple[str, str, int, int]] = set()
+
+
+def _normalize_base_url(base_url: str | None) -> str:
+    return (base_url or "").rstrip("/")
+
+
+def _host_of(base_url: str | None) -> str:
+    return urlparse(base_url or "").hostname or ""
+
+
+def output_token_limit(base_url: str | None, model: str | None) -> int | None:
+    """该端点允许的 max_tokens 上限；未知端点返回 None（不干预）。"""
+    learned = _LEARNED_OUTPUT_TOKEN_LIMITS.get(
+        (_normalize_base_url(base_url), (model or "").strip())
+    )
+    if learned:
+        return learned
+    return GATEWAY_OUTPUT_TOKEN_LIMITS.get(_host_of(base_url))
+
+
+def note_output_token_limit(base_url: str | None, model: str | None, limit: int) -> None:
+    """记录运行期从 400 错误里学到的上限，后续 get_llm 直接按它发。"""
+    if limit <= 0:
+        return
+    key = (_normalize_base_url(base_url), (model or "").strip())
+    if _LEARNED_OUTPUT_TOKEN_LIMITS.get(key) == limit:
+        return
+    _LEARNED_OUTPUT_TOKEN_LIMITS[key] = limit
+    logger.warning(
+        "Learned gateway output-token limit: model=%s base_url=%s → max_tokens=%d",
+        key[1] or "?", key[0] or "?", limit,
+    )
+
+
+def _apply_output_token_limit(config: dict, purpose: str) -> None:
+    """把用途诉求钳到网关上限；同一组合只告警一次，避免每请求刷屏。"""
+    want = config.get("max_tokens")
+    if not want:
+        return
+    limit = output_token_limit(config.get("base_url"), config.get("model"))
+    if not limit or want <= limit:
+        return
+    host = _host_of(config.get("base_url"))
+    warn_key = (host, purpose, int(want), int(limit))
+    if warn_key not in _CLAMP_WARNED:
+        _CLAMP_WARNED.add(warn_key)
+        logger.warning(
+            "purpose '%s' wants max_tokens=%d but gateway %s caps at %d — clamped",
+            purpose, want, host or "?", limit,
+        )
+    config["max_tokens"] = limit
 
 
 # ── LLM 请求超时与重试上界（2026-10-27 submit 延迟治理）──
@@ -171,6 +241,10 @@ def get_llm(purpose: str, alias: str | None = None, **kwargs):
             f"模型 '{alias}'（用途 '{purpose}'）的配置不完整，"
             f"请检查 .env 文件中的环境变量"
         )
+
+    # 网关能力协商：用途诉求不能超过端点允许的输出配额（放在 user override 之后，
+    # 因为 override 可能换掉 base_url/model）。
+    _apply_output_token_limit(config, purpose)
 
     # 注入 purpose / model 元数据:供 TokenUsageCallbackHandler 在 on_llm_end
     # 零侵入地归因(无需改动任何 agent 代码)。

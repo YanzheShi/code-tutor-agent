@@ -12,6 +12,11 @@
 - 归因：fallback 实例由 get_llm(purpose, alias="secondary") 构造，
   metadata.model_alias="secondary"，token_usage 天然按备用 key 归集。
 
+输出配额（2026-11-06 线上事故）：
+网关以 400 "max_tokens exceeds the limit of N" 拒绝超限请求时，**不换 key 重试**
+（换 key 也过不了同一个网关的上限），而是：把 N 记进 config 的学习缓存 →
+用同一用途重建模型、按 N 重发一次。后续 get_llm 直接按 N 发，不再撞。
+
 为什么不直接用 LangChain 的 with_fallbacks()：它返回 RunnableWithFallbacks
 包装对象，会丢掉 BaseChatModel 专属的 with_structured_output / bind_tools
 （本项目大量使用），所以只能在做调用的地方包一层。
@@ -20,9 +25,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any, Callable
 
-from code_tutor_agent.config import get_llm
+from code_tutor_agent.config import get_llm, note_output_token_limit
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +50,24 @@ def is_rate_limit_error(exc: BaseException) -> bool:
     """判断异常是否为限流类瞬时错误（按错误文本匹配，跨网关通用）。"""
     msg = f"{type(exc).__name__}: {exc}".lower()
     return any(marker in msg for marker in _RATE_LIMIT_MARKERS)
+
+
+# 网关对输出配额的拒绝，如 "max_tokens exceeds the limit of 4096"
+_OUTPUT_LIMIT_RE = re.compile(r"max_tokens exceeds the limit of (\d+)", re.IGNORECASE)
+
+
+def output_token_cap_from_error(exc: BaseException) -> int | None:
+    """识别输出配额 400，返回网关声明的上限；其它错误返回 None。"""
+    m = _OUTPUT_LIMIT_RE.search(f"{type(exc).__name__}: {exc}")
+    return int(m.group(1)) if m else None
+
+
+def _llm_identity(llm: Any) -> tuple[str, str]:
+    """(base_url, model) 用于学习缓存；兼容 ChatOpenAI 与测试假对象。"""
+    meta = getattr(llm, "metadata", None) or {}
+    base = getattr(llm, "openai_api_base", None) or meta.get("base_url") or ""
+    model = meta.get("model_name") or getattr(llm, "model_name", None) or ""
+    return str(base), str(model)
 
 
 def _m_record(name: str, value: float = 1.0) -> None:
@@ -98,6 +122,25 @@ def invoke_with_failover(
         _m_streak(True)
         return result
     except Exception as exc:
+        cap = output_token_cap_from_error(exc)
+        if cap:
+            note_output_token_limit(*_llm_identity(primary_llm), cap)
+            if not purpose:
+                _m_streak(False)
+                raise
+            logger.warning(
+                "LLM output budget rejected (purpose=%s): gateway caps max_tokens at %d "
+                "— retrying once at the cap: %s",
+                purpose, cap, exc,
+            )
+            _m_record("llm_token_cap_retry")
+            try:
+                result = invoke_fn(get_llm(purpose, max_tokens=cap))
+            except Exception:
+                _m_streak(False)
+                raise
+            _m_streak(True)
+            return result
         if not is_rate_limit_error(exc):
             _m_streak(False)
             raise
