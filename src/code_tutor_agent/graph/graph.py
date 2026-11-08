@@ -146,16 +146,24 @@ def compile_graph(
         # （实测：三个用户同时建会话 → "failed to enter pipeline mode" →
         #   checkpoint 没落库 → 后续全部 Session not found 404）。
         # autocommit + dict_row 语义不变；setup() 幂等建表，启动跑一次即可。
+        ckpt_kwargs: dict = {
+            "autocommit": True,
+            "row_factory": dict_row,
+            "connect_timeout": int(os.getenv("CTA_PG_CONNECT_TIMEOUT", "5")),
+        }
+        # 与 db.pg_compat 同口径的测试隔离：conftest 提供一次性 schema 时，
+        # checkpointer 的连接也必须切过去，否则 checkpoints 表落在 public ——
+        # 测试读到的就是开发库残留（2026-11-07 实测：zero-UUID 残留导致
+        # 「不存在的会话」被判定为存在，GET /state 返回 200 而非 404）。
+        schema = os.getenv("CTA_PG_SCHEMA")
+        if schema:
+            ckpt_kwargs["options"] = f"-c search_path={schema},public"
         pool = ConnectionPool(
             conn_string,
             min_size=int(os.getenv("CTA_CKPT_POOL_MIN", "2")),
             max_size=int(os.getenv("CTA_CKPT_POOL_MAX", "8")),
             open=True,
-            kwargs={
-                "autocommit": True,
-                "row_factory": dict_row,
-                "connect_timeout": int(os.getenv("CTA_PG_CONNECT_TIMEOUT", "5")),
-            },
+            kwargs=ckpt_kwargs,
         )
         checkpointer = PostgresSaver(pool)
         checkpointer.setup()

@@ -27,9 +27,21 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _require_judge0():
+    """服务没起时整模块 skip：配置了 URL 但容器掉了不算代码回归。"""
+    if not JUDGE0_URL:
+        pytest.skip("JUDGE0_URL 未配置")
+    info = judge0_client.check_health()
+    if not info or info.get("status") != "ok":
+        pytest.skip(f"Judge0 不可达（{JUDGE0_URL}）：{info.get('detail', '')}")
+
+
 def test_judge0_health():
     info = judge0_client.check_health()
-    assert info, "check_health 应返回非空信息"
+    # check_health 失败时也返回非空 dict（status=error），只看真值会恒真
+    assert info.get("status") == "ok", info
+    assert info.get("workers_alive", 0) > 0, info
 
 
 def test_judge0_single_submission_echo():
