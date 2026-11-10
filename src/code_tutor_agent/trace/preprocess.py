@@ -42,18 +42,64 @@ def _dialogue_snippet(dlg, max_turns: int = 4, truncate: int = 200) -> str:
     return " 导师说: " + " | ".join(snippets) if snippets else ""
 
 
+def _dedupe_dialogue(dlg: list) -> list:
+    """复合事件归并多段 dialogue_before：按内容去重，保留首次出现顺序。"""
+    seen: set[str] = set()
+    out: list = []
+    for d in dlg or []:
+        content = d.get("content") if isinstance(d, dict) else str(d)
+        if not content or content in seen:
+            continue
+        seen.add(content)
+        out.append(d)
+    return out
+
+
+def _composite_labels(parts: list[dict]) -> tuple[list[str], list]:
+    """把复合事件内的各子事件渲染成标签，并汇总其 dialogue_before。"""
+    labels: list[str] = []
+    dlg: list = []
+    for p in parts:
+        pt = p.get("type")
+        if pt == "idle":
+            idle = p.get("idleMs", 0) or 0
+            if idle < 1500:
+                continue
+            labels.append(f"[停顿{idle / 1000:.1f}s]")
+        elif pt in ("edit", "submit"):
+            change = p.get("change") or ""
+            labels.append(f"[{pt}/{change}]" if change else f"[{pt}]")
+            dlg.extend(p.get("dialogue_before") or [])
+        elif pt == "run":
+            labels.append("[运行]")
+    return labels, dlg
+
+
 def build_dialogue_timeline(events: list[dict], max_events: int = 80, with_diffs: bool = False) -> str:
     """把事件流预处理成时间线，并在每个 edit/submit 处附上其 dialogue_before（导师提示原文）。
 
     - idle < 1.5s 视为噪声丢弃（与原 build_trace_timeline 一致）；
     - edit/submit 带上"改动前导师轮次原文"（最多取最近 4 条、每条截断 200 字，防 payload 膨胀）；
-    - with_diffs=True 时额外输出与上一快照的 diff hunks，让分析 LLM 能还原"代码怎么一步步写出来"。
+    - with_diffs=True 时额外输出与上一快照的 diff hunks，让分析 LLM 能还原"代码怎么一步步写出来"；
+    - composite 事件（预算裁剪时两两归并而成）拼接各子事件标签，diff 取跨度净变化。
     """
     picked: list[str] = []
     prev_code = ""
     for ev in events:
         t = ev.get("type")
-        if t == "idle":
+        if t == "composite":
+            labels, dlg = _composite_labels(ev.get("parts") or [])
+            if not labels:
+                continue
+            label = " → ".join(labels) + _dialogue_snippet(_dedupe_dialogue(dlg))
+            code = ev.get("code")
+            if with_diffs and code is not None:
+                diff = _diff_hunks(prev_code, code)
+                prev_code = code
+                if diff:
+                    label += f"\n{diff}"
+            picked.append(label)
+        elif t == "idle":
             idle = ev.get("idleMs", 0) or 0
             if idle < 1500:
                 continue

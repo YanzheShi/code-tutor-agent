@@ -255,6 +255,58 @@ class TestExtractForAnalysis:
         res = extract_for_analysis(events)
         assert res.metrics["thrash_count"] >= 1
 
+    def test_over_limit_coalesces_instead_of_prefix_truncate(self):
+        from code_tutor_agent.trace.extract import extract_for_analysis
+
+        # 100 条独立 edit（间隔 10s，不会被 400ms 时间桶合并）
+        events = [
+            {"ts": i * 10_000, "type": "edit", "code": f"x = {i}\n", "problem_id": "67"}
+            for i in range(100)
+        ]
+        res = extract_for_analysis(events)
+        assert res.metrics["event_count_merged"] == 100
+        assert res.metrics["event_count_rendered"] <= 80
+        # 尾部不再被整段丢掉：最后一条 code 的净变化仍出现在时间线里
+        assert "x = 99" in res.timeline_text
+        # 归并后仍从会话开头起算（首条复合事件含两个 [edit] 标签）
+        assert res.timeline_text.startswith("[edit] → [edit]")
+
+    def test_budget_trim_keeps_full_span(self):
+        from code_tutor_agent.trace.extract import extract_for_analysis
+
+        events = [
+            {"ts": i * 10_000, "type": "edit", "code": f"x = {i}\n", "problem_id": "67"}
+            for i in range(20)
+        ]
+        res = extract_for_analysis(events, max_tokens=50)
+        assert res.metrics["event_count_rendered"] < res.metrics["event_count_merged"]
+        # 预算裁剪走两两归并：条数减少但会话尾部仍在
+        assert "x = 19" in res.timeline_text
+
+
+class TestCompositeTimeline:
+    """覆盖 preprocess 对复合事件（预算裁剪产物）的渲染。"""
+
+    def test_composite_renders_labels_and_net_diff(self):
+        from code_tutor_agent.trace.preprocess import build_dialogue_timeline
+
+        comp = {
+            "type": "composite",
+            "ts": 3000,
+            "code": "b\n",
+            "parts": [
+                {"type": "edit", "code": "a\n",
+                 "dialogue_before": [{"role": "tutor", "content": "提示A"}]},
+                {"type": "run"},
+                {"type": "edit", "change": "insert", "code": "b\n",
+                 "dialogue_before": [{"role": "tutor", "content": "提示A"}]},
+            ],
+        }
+        text = build_dialogue_timeline([comp], with_diffs=True)
+        assert "[edit] → [运行] → [edit/insert]" in text
+        assert text.count("提示A") == 1      # 对话按内容去重
+        assert "+ b" in text                 # 跨度净 diff（上一条保留事件 → 跨度末端）
+
 
 class TestPurgeTraceData:
     def test_purge_removes_old(self, tmp_db):

@@ -489,6 +489,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.prod.yml up
 ### 🔥 链路追踪辅导：edit-trace 即"教学可观测性"
 
 - **全量编辑轨迹入轨 + 独立分析**：每次键入(edit)/停顿(idle)/运行(run)/提交(submit) 四类结构化事件都入轨（`POST /session/{sid}/edit-trace`），由 `trace/` 模块做预处理 + 轨迹分析（`/analyze` → `/analysis` → `/analyze/summarize`）。
+- **零 LLM 蒸馏 + 超限归并**：分析前由 `trace/extract.py` 做确定性预处理（去噪去重、400ms 时间桶、里程碑快照、结构化卡壳段）；时间线超过 80 条或 token 预算时，对相邻事件做**两两归并**（条数减半、保留完整时间跨度与净 diff），而不是前缀截断丢掉会话后半段。
 - **摘要双落点**：分析结论压缩为 `TraceSummary` 后，一路渲染成主聊天的可见卡，一路在**换题时**追加进 `context_summary`、注入下一题的选题对话 prompt（`session.py` 读 `get_trace_summary` → `build_transcript_with_budget` → `analyze_user_intent`）。另有一路喂给 6 维错误模式画像。
 - 轨迹分析反推**真实思考路径与卡点**：是"不会用哈希表"还是"知道但写不对 dict"，从行为而非结果判定，避免误判。
 - **同屏联动**：导师辅导界面与轨迹分析并排展示，轨迹证据用于判定卡点类型。

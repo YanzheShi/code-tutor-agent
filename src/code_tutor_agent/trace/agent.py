@@ -312,11 +312,11 @@ def first_round_analysis(session_id: str, problem_id: str, problem_meta=None) ->
         f"## 编辑轨迹时间线（含相邻快照 diff 与改动前的导师提示原文）\n{extraction.timeline_text}"
     )
 
-    # 抽取层内已做 token 预算减半裁剪；此处仅打点观测是否触发
+    # 抽取层内已做 token 预算两两归并裁剪；此处仅打点观测是否触发
     tokens = count_tokens(data)
     if tokens > _FIRST_ROUND_TOKEN_BUDGET:
         logger.info(
-            "first_round_analysis: extracted data %d tokens > budget %d (timeline 已减半裁剪)",
+            "first_round_analysis: extracted data %d tokens > budget %d (timeline 已两两归并裁剪)",
             tokens, _FIRST_ROUND_TOKEN_BUDGET,
         )
 

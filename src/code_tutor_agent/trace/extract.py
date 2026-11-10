@@ -11,7 +11,7 @@
   3) 核心变化时间线（相邻保留的 edit/submit 用 preprocess._diff_hunks 算行级 diff）；
   4) 里程碑快照（全量方案下不再稀疏）；
   5) 结构化卡壳段 stuck_segments（卡壳锚定代码 + 卡前刚收到的导师提示）；
-  6) token 预算减半裁剪兜底。
+  6) 超限裁剪：两两归并相邻事件（条数减半、时间跨度不减），而非前缀截断。
 
 复用 preprocess._diff_hunks / build_dialogue_timeline / pick_code_snapshots —— 下游分析契约不变。
 """
@@ -28,7 +28,7 @@ from .preprocess import (
 
 _EDIT_BUCKET_MS = 400        # 相邻 edit 间隔 < 此值视为同一打字波次，波次内只留首尾
 _IDLE_NOISE_MS = 1500        # idle < 此值视为噪声丢弃（与 build_dialogue_timeline 口径一致）
-_MAX_EVENTS = 80             # 时间线事件上限（与 trace/agent.py 对齐）
+_MAX_EVENTS = 80             # 时间线事件上限；超出时两两归并（保时间跨度）
 _MAX_SNAPSHOTS = 4
 _SNAPSHOT_CODE_LIMIT = 1200
 _TOKEN_BUDGET = 12_000       # 同 trace/agent.py:_FIRST_ROUND_TOKEN_BUDGET
@@ -82,6 +82,50 @@ def _merge_time_buckets(kept: list[dict], bucket_ms: int) -> list[dict]:
     return out
 
 
+def _event_parts(ev: dict) -> list[dict]:
+    """取出事件包含的原始子事件；已归并的复合事件展平，避免多层嵌套。"""
+    if ev.get("type") == "composite":
+        return list(ev.get("parts") or [])
+    return [ev]
+
+
+def _coalesce_pairs(events: list[dict]) -> list[dict]:
+    """把相邻事件两两归并成一条复合事件：条数减半，时间跨度不变。
+
+    复合事件保留各子事件的标签与 dialogue_before（渲染层拼接 + 去重），
+    code 取跨度内最后一条带码事件，diff 由渲染层按「上一条保留事件 → 跨度末端」
+    重算，因此只损失单步 diff 粒度，不会像前缀截断那样整段丢掉会话尾部。
+    """
+    out: list[dict] = []
+    i = 0
+    n = len(events)
+    while i < n:
+        a = events[i]
+        if i + 1 >= n:
+            out.append(a)
+            break
+        b = events[i + 1]
+        parts = _event_parts(a) + _event_parts(b)
+        code = None
+        for p in reversed(parts):
+            if p.get("code") is not None:
+                code = p["code"]
+                break
+        out.append({
+            "type": "composite",
+            "ts": b.get("ts", a.get("ts")),
+            "parts": parts,
+            "code": code,
+        })
+        i += 2
+    return out
+
+
+def _render_timeline(events: list[dict]) -> str:
+    """渲染时间线；事件已按上限归并，这里不再做前缀截断。"""
+    return build_dialogue_timeline(events, max_events=max(len(events), 1), with_diffs=True)
+
+
 def _estimate_tokens(timeline_text: str, snapshots: list[dict]) -> int:
     """粗略估算：中文约 1 token/字符；代码英文约 3 字符/token。取保守上限。"""
     code_chars = sum(len(s.get("code", "")) for s in snapshots)
@@ -94,7 +138,7 @@ def extract_for_analysis(events: list[dict], max_tokens: int = _TOKEN_BUDGET) ->
     Args:
         events: 已 reconstruct 为全量 code 的事件列表
                 （edit/run/submit 带 code，idle 可能带 code_at_pause + dialogue_before）。
-        max_tokens: token 预算上限，超预算时对时间线减半裁剪。
+        max_tokens: token 预算上限，超预算时对时间线继续两两归并（保时间跨度）。
 
     Returns:
         ExtractionResult: timeline_text / snapshots / 计数器 / 结构化卡壳段。
@@ -130,16 +174,19 @@ def extract_for_analysis(events: list[dict], max_tokens: int = _TOKEN_BUDGET) ->
     merged = _merge_time_buckets(kept, _EDIT_BUCKET_MS)
 
     # 4) 核心变化时间线（相邻保留的 edit/submit 用 _diff_hunks 算行级 diff）
-    max_events = _MAX_EVENTS
-    timeline_text = build_dialogue_timeline(merged, max_events=max_events, with_diffs=True)
+    #    超出条目上限时两两归并：保留整个会话跨度，只降低单条粒度
+    render_events = merged
+    while len(render_events) > _MAX_EVENTS:
+        render_events = _coalesce_pairs(render_events)
+    timeline_text = _render_timeline(render_events)
 
     # 5) 里程碑快照（全量方案下每个 edit/submit 都有 code，不再稀疏——修旧 starvation）
     snapshots = pick_code_snapshots(merged, max_snapshots=_MAX_SNAPSHOTS, code_limit=_SNAPSHOT_CODE_LIMIT)
 
-    # 6) token 预算裁剪（减半兜底，沿用 trace/agent.py 逻辑）
-    while _estimate_tokens(timeline_text, snapshots) > max_tokens and max_events > 10:
-        max_events //= 2
-        timeline_text = build_dialogue_timeline(merged, max_events=max_events, with_diffs=True)
+    # 6) token 预算裁剪：继续两两归并，条数与 diff 数逐轮减半；至少保留 1 条
+    while _estimate_tokens(timeline_text, snapshots) > max_tokens and len(render_events) > 1:
+        render_events = _coalesce_pairs(render_events)
+        timeline_text = _render_timeline(render_events)
 
     # ★ A3：结构化卡壳段 —— 遍历 kept 的 idle 事件，关联"卡前/卡后代码 + 卡时对话"
     stuck_segments: list[dict] = []
@@ -187,6 +234,7 @@ def extract_for_analysis(events: list[dict], max_tokens: int = _TOKEN_BUDGET) ->
         "event_count_raw": len(raw),
         "event_count_kept": len(kept),
         "event_count_merged": len(merged),
+        "event_count_rendered": len(render_events),
     }
 
     return ExtractionResult(
