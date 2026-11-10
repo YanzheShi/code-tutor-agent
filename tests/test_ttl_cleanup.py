@@ -223,6 +223,42 @@ class TestDeleteSessionActivity:
         delete_session_activity("nonexistent-id")
 
 
+class TestSidecarCleanupKeepsSubmissionHistory:
+    """会话 TTL 清理只清轨迹旁路数据，提交记录是用户历史，必须保留。"""
+
+    def test_delete_session_sidecar_keeps_submissions(self, temp_db):
+        from code_tutor_agent.db.database import (
+            _with_conn,
+            delete_session_sidecar_data,
+            save_edit_trace,
+            save_problem,
+            save_submission,
+        )
+
+        pid, _reused = save_problem({
+            "title": "TTL-保留提交", "topic": "数组", "difficulty": "easy",
+            "description": "d",
+            "test_cases": [{"input_args": ["[1]"], "expected_output": "1"}],
+        })
+        save_submission(pid, "print(1)", "AC", [], session_id="ttl-keep-sub", user_id="u1")
+        save_edit_trace("ttl-keep-sub", "u1", [{"type": "edit", "ts": 1}], problem_id=str(pid))
+
+        delete_session_sidecar_data("ttl-keep-sub")
+
+        subs = _with_conn(lambda c: c.execute(
+            "SELECT user_id FROM submissions WHERE session_id = ?",
+            ("ttl-keep-sub",),
+        ).fetchall())
+        assert len(subs) == 1, "会话清理不得删除提交记录"
+        assert subs[0]["user_id"] == "u1"
+
+        traces = _with_conn(lambda c: c.execute(
+            "SELECT session_id FROM edit_traces WHERE session_id = ?",
+            ("ttl-keep-sub",),
+        ).fetchall())
+        assert len(traces) == 0, "轨迹旁路数据仍应随会话清理"
+
+
 # ============================================================
 # Cleanup API 端点（不依赖 graph）
 # ============================================================

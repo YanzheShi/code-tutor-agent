@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import jwt as pyjwt
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
@@ -594,14 +594,25 @@ async def my_profile_v2(current: dict = Depends(get_current_user)):
 
 
 @router.get("/me/submissions")
-async def my_submissions(current: dict = Depends(get_current_user)):
-    """当前用户的提交记录（个人中心「我的提交」Tab）。
+async def my_submissions(
+    limit: int = Query(default=100, ge=1, le=200, description="每页条数"),
+    offset: int = Query(default=0, ge=0, description="跳过条数（分页用）"),
+    current: dict = Depends(get_current_user),
+):
+    """当前用户的提交记录（个人中心「我的提交」Tab），按 id 倒序分页。
 
     user_id 只从 JWT 取，不接受任何参数指定——防越权的硬规则。
-    返回结构与管理端 /admin/submissions 一致，前端展示组件可复用。
+    提交记录是用户历史，不随会话 TTL 清理删除，可翻到最早一条。
+    ``has_more`` 供前端「加载更多」判断是否还有下一页。
     """
     from code_tutor_agent.db.database import get_all_submissions
-    return {"submissions": get_all_submissions(user_id=user_key(current))}
+
+    # 多取一条判断是否还有下一页，避免额外的 COUNT 查询
+    rows = get_all_submissions(
+        limit=limit + 1, offset=offset, user_id=user_key(current),
+    )
+    has_more = len(rows) > limit
+    return {"submissions": rows[:limit], "has_more": has_more}
 
 
 @router.post("/me/password")

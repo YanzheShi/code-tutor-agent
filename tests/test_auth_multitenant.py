@@ -255,6 +255,44 @@ def test_me_submissions_endpoint_isolation(temp_db):
         del _os
 
 
+def test_me_submissions_pagination(temp_db):
+    """GET /auth/me/submissions：limit/offset 分页，has_more 标记是否还有下一页。"""
+    from fastapi.testclient import TestClient
+
+    from code_tutor_agent.api import auth as a
+    from code_tutor_agent.api.main import app
+
+    uid = dbmod.create_user("page@test.com", a.hash_password("password123"))
+    a._RATE_BUCKETS.clear()
+
+    pid, _reused = dbmod.save_problem({
+        "title": f"T-{os.urandom(4).hex()}", "topic": "数组", "difficulty": "easy",
+        "description": "d", "test_cases": [{"input_args": ["[1]"], "expected_output": "1"}],
+    })
+    for i in range(3):
+        dbmod.save_submission(
+            pid, f"code-{i}", "AC", [], session_id=f"page-s{i}", user_id=str(uid),
+        )
+
+    with TestClient(app) as c:
+        tok = c.post(
+            "/auth/login", json={"email": "page@test.com", "password": "password123"},
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {tok}"}
+
+        first = c.get("/auth/me/submissions?limit=2&offset=0", headers=headers).json()
+        assert len(first["submissions"]) == 2
+        assert first["has_more"] is True
+
+        second = c.get("/auth/me/submissions?limit=2&offset=2", headers=headers).json()
+        assert len(second["submissions"]) == 1
+        assert second["has_more"] is False
+
+        # 参数校验：limit ≥ 1、offset ≥ 0
+        assert c.get("/auth/me/submissions?limit=0", headers=headers).status_code == 422
+        assert c.get("/auth/me/submissions?offset=-1", headers=headers).status_code == 422
+
+
 # ── build_run_config user_id 贯穿 ──
 
 

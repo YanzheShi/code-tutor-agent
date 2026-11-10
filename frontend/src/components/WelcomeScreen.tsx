@@ -1,7 +1,7 @@
 import { isAdmin } from '../api/auth';
 import FeedbackModal from './FeedbackModal';
 import { apiFetch } from '../api/client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API_BASE } from '../api/config';
 import AuthModal from './AuthModal';
 import BetaBadge from './BetaBadge';
@@ -18,17 +18,44 @@ const VERDICT_COLORS: Record<string, string> = {
   TLE: 'text-ct-error', RE: 'text-ct-error', CE: 'text-ct-error',
 };
 
-/* ── 我的提交（个人中心：所有登录用户可看自己的记录）── */
+/* ── 我的提交（个人中心：所有登录用户可看自己的记录，分页加载全部历史）── */
+const SUBMISSIONS_PAGE_SIZE = 50;
+
+type SubmissionPage = { submissions?: MySubmission[]; has_more?: boolean };
+
 function MySubmissionsView() {
   const [subs, setSubs] = useState<MySubmission[] | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [expandedCode, setExpandedCode] = useState<number | null>(null);
 
-  useEffect(() => {
-    apiFetch(BASE + '/auth/me/submissions')
-      .then(r => r.ok ? r.json() : null)
-      .then(d => setSubs((d?.submissions ?? []) as MySubmission[]))
-      .catch(() => setSubs([]));
+  const loadPage = useCallback(async (offset: number): Promise<SubmissionPage> => {
+    const r = await apiFetch(
+      `${BASE}/auth/me/submissions?limit=${SUBMISSIONS_PAGE_SIZE}&offset=${offset}`,
+    );
+    if (!r.ok) return { submissions: [], has_more: false };
+    return await r.json() as SubmissionPage;
   }, []);
+
+  useEffect(() => {
+    loadPage(0)
+      .then(d => { setSubs(d.submissions ?? []); setHasMore(Boolean(d.has_more)); })
+      .catch(() => { setSubs([]); setHasMore(false); });
+  }, [loadPage]);
+
+  const handleLoadMore = async () => {
+    if (!subs || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const d = await loadPage(subs.length);
+      setSubs(prev => [...(prev ?? []), ...(d.submissions ?? [])]);
+      setHasMore(Boolean(d.has_more));
+    } catch {
+      /* 失败保留当前列表，按钮可重试 */
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   if (subs === null) return <p className="text-sm text-ct-muted text-center py-8">加载提交记录中...</p>;
   if (subs.length === 0) return <p className="text-sm text-ct-muted text-center py-8">还没有提交记录，去做几道题吧</p>;
@@ -57,6 +84,12 @@ function MySubmissionsView() {
           </div>
         ))}
       </div>
+      {hasMore && (
+        <button onClick={handleLoadMore} disabled={loadingMore}
+          className="w-full rounded-lg border border-ct-border py-2 text-xs text-ct-muted transition hover:border-ct-accent/50 hover:text-ct-text disabled:opacity-50">
+          {loadingMore ? '加载中…' : '加载更多'}
+        </button>
+      )}
     </div>
   );
 }

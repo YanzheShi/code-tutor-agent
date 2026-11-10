@@ -1166,10 +1166,12 @@ def delete_session_activity(session_id: str) -> None:
 
 
 def delete_session_sidecar_data(session_id: str) -> None:
-    """清理某会话的全部旁路数据（与 checkpointer.delete_thread 联动，随会话 TTL 清理）。
+    """清理某会话的轨迹/分析旁路数据（与 checkpointer.delete_thread 联动，随会话 TTL 清理）。
 
     覆盖：edit_traces / trace_analysis / analysis_results / trace_summaries /
-    trace_threads / submissions（均按 session_id 为 key 持续增长，无 TTL）。
+    trace_threads（均按 session_id 为 key 持续增长，无 TTL）。
+    ⚠️ 不含 submissions：提交记录是用户历史（「我的提交」/ 题目提交记录页），
+    生命周期独立于会话——会话过期或被手动删除都不得连带清空历史。
     任一失败只告警不阻断主删除流程。
     """
     try:
@@ -1177,18 +1179,20 @@ def delete_session_sidecar_data(session_id: str) -> None:
             for table in ("edit_traces", "trace_analysis", "analysis_results",
                           "trace_summaries", "trace_threads"):
                 cursor.execute(f"DELETE FROM {table} WHERE session_id = ?", (session_id,))
-            cursor.execute("DELETE FROM submissions WHERE session_id = ?", (session_id,))
         _with_conn(_do)
         logger.info("delete_session_sidecar_data() — session=%s", session_id)
     except Exception as exc:
         logger.warning("delete_session_sidecar_data(%s) failed: %s", session_id, exc)
 
 
-def get_all_submissions(limit: int = 100, user_id: str | None = None) -> list[dict]:
-    """Return recent submissions (for admin panel / 个人中心).
+def get_all_submissions(
+    limit: int = 100, user_id: str | None = None, offset: int = 0,
+) -> list[dict]:
+    """Return submissions newest-first (for admin panel / 个人中心).
 
     ``user_id`` 传 None 时返回全部用户（管理端）；传具体 uid 只返回该用户的
     提交（个人中心「我的提交」）。存量旧数据 user_id='default' 天然被过滤。
+    ``offset`` 供「加载更多」分页（按 id 倒序翻页）。
     """
     try:
         if user_id is not None:
@@ -1196,15 +1200,15 @@ def get_all_submissions(limit: int = 100, user_id: str | None = None) -> list[di
                 "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
                 "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
                 "WHERE s.user_id = ? "
-                "ORDER BY s.id DESC LIMIT ?",
-                (user_id, limit),
+                "ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                (user_id, limit, offset),
             ).fetchall())
         else:
             rows = _with_conn(lambda cursor: cursor.execute(
                 "SELECT s.id, s.problem_id, p.title AS problem_title, s.verdict, s.student_code, s.created_at "
                 "FROM submissions s LEFT JOIN problems p ON s.problem_id = p.id "
-                "ORDER BY s.id DESC LIMIT ?",
-                (limit,),
+                "ORDER BY s.id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall())
         return [{
             "id": row[0],
