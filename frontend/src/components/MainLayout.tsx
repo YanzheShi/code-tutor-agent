@@ -12,6 +12,7 @@ import BetaBadge from './BetaBadge';
 import { useMemo } from 'react';
 import type { Message, ProblemMeta, RunResult, Submission, FailedCase } from '../types/session';
 import type { JudgeReport } from '../types/judge';
+import type { ProblemTimer } from '../hooks/useProblemTimer';
 
 type TabId = 'desc' | 'history' | 'reference' | 'code' | 'run' | 'tutor' | 'agent-history' | 'trace';
 
@@ -34,6 +35,7 @@ export type MainLayoutProps = {
   hintLevel: number;
   latestVerdict: string | null;
   judgeReport: JudgeReport | null;
+  problemTimer: ProblemTimer | null;
   referenceCode: string;
   submissions: Submission[];
   runResults: RunResult[] | null;
@@ -77,7 +79,7 @@ export type MainLayoutProps = {
 export default function MainLayout(props: MainLayoutProps) {
   const {
     problem, mode, phase, nextProblemLoading, activeTabs, tabPanel, splitRatio, tutorMessages, chatInput,
-    editorCode, hintLevel, latestVerdict, judgeReport, referenceCode,
+    editorCode, hintLevel, latestVerdict, judgeReport, referenceCode, problemTimer,
     submissions, runResults, progressMsgs, running, submittingFlag, isDialogPhase, isGenerating, isDone,
     dragging, dragTab, chatEndRef,
     onSetChatInput, onSetActiveTabs, onSetTabPanel, onSetSplitRatio, onSetEditorCode,
@@ -184,7 +186,7 @@ export default function MainLayout(props: MainLayoutProps) {
         // min-h-0 + overflow-hidden：flex 子项默认 min-height:auto，Monaco 重算尺寸时
         // 会把面板撑高、把底部「运行/提交」栏顶出裁剪区（全屏切换时偶现）
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="flex-1 min-h-0 overflow-hidden"><CodeEditor code={editorCode} onChange={onSetEditorCode} starterCode={problem?.starter_code} /></div>
+          <div className="flex-1 min-h-0 overflow-hidden"><CodeEditor code={editorCode} onChange={onSetEditorCode} starterCode={problem?.starter_code} timer={problem ? problemTimer : null} /></div>
         </div>
       );
     case 'run':

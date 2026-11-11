@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { useTheme } from '../../hooks/useTheme';
+import { formatElapsed, type ProblemTimer } from '../../hooks/useProblemTimer';
 
 /** 编辑器内容行数硬上限（与后端 MAX_CODE_LINES=300 / 10KB 同一条线，2026-09-09）。 */
 export const MAX_EDITOR_LINES = 300;
@@ -51,10 +52,12 @@ export default function CodeEditor({
   code,
   onChange,
   starterCode,
+  timer,
 }: {
   code: string;
   onChange: (v: string) => void;
   starterCode?: string;
+  timer?: ProblemTimer | null;
 }) {
   const { theme } = useTheme();
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
@@ -157,6 +160,34 @@ export default function CodeEditor({
           // 300 行硬拦统一由上方 handleChange 承担（后端 413 兜底同一条线）。
         }}
       />
+      {timer && (
+        <div
+          className="absolute right-3 top-2 z-10 flex select-none items-center gap-1 rounded border border-ct-border bg-ct-surface-secondary px-2 py-1 text-[11px] text-ct-text shadow-sm"
+          title="本题已用时"
+        >
+          <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${timer.running ? 'bg-ct-success' : 'bg-ct-muted'}`}
+          />
+          <span className="tabular-nums">{formatElapsed(timer.elapsedMs)}</span>
+          <button
+            type="button"
+            onClick={timer.running ? timer.pause : timer.start}
+            className="ml-1 rounded px-1 py-0.5 text-ct-muted hover:bg-ct-hover hover:text-ct-text"
+            title={timer.running ? '暂停计时' : timer.elapsedMs > 0 ? '继续计时' : '开始计时'}
+          >
+            {timer.running ? '暂停' : timer.elapsedMs > 0 ? '继续' : '开始'}
+          </button>
+          <button
+            type="button"
+            onClick={timer.reset}
+            className="rounded px-1 py-0.5 text-ct-muted hover:bg-ct-hover hover:text-ct-text"
+            title="重置为 00:00 并暂停"
+          >
+            重置
+          </button>
+        </div>
+      )}
       <div
         className={`pointer-events-none absolute bottom-1.5 right-3 z-10 select-none rounded px-1.5 py-0.5 text-[11px] tabular-nums ${
           lineCount > MAX_EDITOR_LINES

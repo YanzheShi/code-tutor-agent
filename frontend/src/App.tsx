@@ -76,6 +76,7 @@ export default function App() {
     tutorMessages: s.tutorMessages, chatInput: s.chatInput,
     editorCode: s.editorCode, hintLevel: s.hintLevel,
     latestVerdict: s.latestVerdict, judgeReport: s.judgeReport,
+    problemTimer: s.problemTimer,
     referenceCode: s.referenceCode,
     submissions: s.submissions,
     runResults: s.runResults, progressMsgs: s.progressMsgs,

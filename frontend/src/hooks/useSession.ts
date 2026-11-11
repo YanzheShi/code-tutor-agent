@@ -8,6 +8,7 @@ import { useSSE } from './useSSE';
 import { useProgressSSE } from './useProgressSSE';
 import { API_BASE } from '../api/config';
 import { useEditTrace } from './useEditTrace';
+import { useProblemTimer } from './useProblemTimer';
 import { reportError } from './useErrorReport';
 import { CE_MARKER_EVENT, recordCeDetail, type CeMarkerDetail } from '../components/LeftPanel/CodeEditor';
 
@@ -220,6 +221,8 @@ export function useSession() {
   const [nextProblemLoading, setNextProblemLoading] = useState(false);
   const { readStream } = useSSE();
   const { subscribe: subscribeProgress, close: closeProgress } = useProgressSSE();
+  // 本题计时：出题完成自动开始、AC 自动暂停；刷新续跑、关页恢复暂停（见 hook 注释）
+  const problemTimer = useProblemTimer(sessionId, problem?.problem_id ?? null, latestVerdict === 'AC');
   const dragging = useRef(false);
   const dragTab = useRef<TabId | null>(null);
   const editorInitialized = useRef(false);
@@ -802,7 +805,7 @@ export function useSession() {
 
   return {
     screen, mode, phase, nextProblemLoading, problem, editorCode, tutorMessages, hintLevel, latestVerdict,
-    judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults,
+    judgeReport, submissions, referenceCode, errorMsg, progressMsgs, runResults, problemTimer,
     running, submittingFlag, analyzingTrace, activeTabs, tabPanel, splitRatio, chatInput,
     traceAnalysis, traceMessages, traceAsking, traceInput, traceFailed,
     sessionId, status, isDialogPhase: mode === 'agent' && !problem && !nextProblemLoading,
