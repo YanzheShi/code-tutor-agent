@@ -73,22 +73,27 @@ class TestMemory:
         new = _merge(empty_memory(), ex)
         assert new["preferences"] == {"hint_style": "socratic"}
 
-    def test_merge_behavior_truncation(self):
+    def test_merge_behavior_store_truncation(self):
         from code_tutor_agent.memory import (
-            BEHAVIOR_CAP,
-            OBSERVATIONS_CAP,
+            BEHAVIOR_STORE_CAP,
+            OBSERVATIONS_STORE_CAP,
             MemoryExtraction,
             _merge,
             empty_memory,
         )
         ex = MemoryExtraction(
             unchanged=False,
-            behavior=[f"b{i}" for i in range(12)],
-            observations=[f"o{i}" for i in range(9)],
+            behavior=[f"b{i}" for i in range(BEHAVIOR_STORE_CAP + 6)],
+            observations=[f"o{i}" for i in range(OBSERVATIONS_STORE_CAP + 4)],
         )
         new = _merge(empty_memory(), ex)
-        assert len(new["behavior"]) == BEHAVIOR_CAP
-        assert len(new["observations"]) == OBSERVATIONS_CAP
+        assert len(new["behavior"]) == BEHAVIOR_STORE_CAP
+        assert len(new["observations"]) == OBSERVATIONS_STORE_CAP
+        # memory@2：每条都带稳定 id + 证据/来源字段
+        assert all(
+            {"id", "text", "evidence", "source_session", "retracted"} <= set(x)
+            for x in new["behavior"]
+        )
 
     def test_merge_prefs_overlay_old(self):
         """LLM 未输出的旧偏好键应保留(新值按键覆盖)。"""
@@ -120,8 +125,9 @@ class TestMemory:
         save_memory(mem)
         back = load_memory()
         assert back["preferences"] == {"hint_style": "socratic"}
-        assert back["behavior"] == ["看提示后自己先试"]
-        assert back["observations"] == ["常漏边界条件"]
+        assert back["behavior"][0]["text"] == "看提示后自己先试"
+        assert "id" in back["behavior"][0]
+        assert back["observations"][0]["text"] == "常漏边界条件"
 
     def test_dao_bad_json_fallback(self):
         from code_tutor_agent.db import database as dbmod
@@ -210,11 +216,12 @@ class TestMemory:
         mem._run_extraction(self._payload(user_msgs=3))
         back = mem.load_memory()
         assert back["preferences"] == {"difficulty_preference": "medium"}
-        assert back["behavior"] == ["失败 3 次倾向换题"]
+        assert back["behavior"][0]["text"] == "失败 3 次倾向换题"
+        assert back["behavior"][0]["source_session"] == "s1"
         assert back["meta"]["watermark"] == {"session_id": "s1", "count": 6}
 
-    def test_llm_failure_degrades_to_watermark(self, monkeypatch):
-        """LLM 层抛错(走真实 _call_llm 的兜底)→ 返回 None → 只推进水位,不崩。"""
+    def test_llm_failure_keeps_watermark_for_retry(self, monkeypatch):
+        """LLM 层抛错 → 返回 None → 不推进水位(下次重试),只累计 fail_count,不崩。"""
         import sys
         import types
 
@@ -232,7 +239,9 @@ class TestMemory:
 
         mem._run_extraction(self._payload(user_msgs=3))  # 不应抛错
         back = mem.load_memory()
-        assert back["meta"]["watermark"]["count"] == 6
+        # 失败不再推进水位 → 下次同一段对话可重试
+        assert back["meta"]["watermark"]["count"] == 0
+        assert back["meta"]["fail_count"] == 1
         assert back["behavior"] == []
 
     def test_second_run_skips_already_extracted(self, monkeypatch):
