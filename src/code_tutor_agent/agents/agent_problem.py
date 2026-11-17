@@ -279,7 +279,7 @@ def generate_problem(
     范式与 agent_dialog / agent_judge 一致：``ChatPromptTemplate | llm.with_structured_output``。
 
     * ``max_tokens=8192``：完整 ``Problem`` 结构化输出实测 709–1000 tokens、历史峰值 3825；
-      8192 给长题留余量，apihub 网关上限 4096 时由 ``config.get_llm`` 自动钳制。
+      8192 给长题留余量；网关声明/学习到的上限由 ``config.get_llm`` 自动钳制。
     * ``temperature=0.7``：增加多样性，减少 AC 题目重复出题。
     * 全部尝试（含重试）均失败（problem 为 None）时抛 ``RuntimeError``，交由上层降级。
 
@@ -293,8 +293,8 @@ def generate_problem(
         以免与 ``{topic}`` / ``{difficulty}`` 占位符冲突。
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
-    # 输出预算由 purpose="problem" 统一配置（当前 8192；apihub 等受限网关会被
-    # config.get_llm 自动钳制并在日志里告警一次）。
+    # 输出预算由 purpose="problem" 统一配置（当前 8192；网关上限由 config.get_llm
+    # 按静态表/运行期学习结果自动钳制并在日志里告警一次）。
     llm = get_llm(purpose=purpose)
 
     prompt = ChatPromptTemplate.from_messages([

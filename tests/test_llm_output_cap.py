@@ -35,8 +35,9 @@ def _use_gateway(monkeypatch, base_url: str, model: str = "agnes-2.5-flash"):
 
 
 def test_known_cap_clamps_purpose_want(_capture, monkeypatch):
-    """apihub 声明 4096：edit-trace 的 16384 诉求必须被钳到上限。"""
-    _use_gateway(monkeypatch, "https://apihub.agnes-ai.com/v1")
+    """静态表声明的主机：edit-trace 的 16384 诉求必须被钳到上限（合成主机）。"""
+    monkeypatch.setitem(cfg.GATEWAY_OUTPUT_TOKEN_LIMITS, "capped.example.com", 4096)
+    _use_gateway(monkeypatch, "https://capped.example.com/v1")
     cfg.get_llm(purpose="edit-trace")
     assert _capture["max_tokens"] == 4096
 
@@ -54,10 +55,18 @@ def test_problem_budget_has_headroom():
 
 
 def test_problem_budget_clamped_on_capped_gateway(_capture, monkeypatch):
-    """受限网关上仍按 4096 发（purpose 诉求再大也越不过网关上限）。"""
-    _use_gateway(monkeypatch, "https://apihub.agnes-ai.com/v1")
+    """静态表声明的主机上仍按上限发（purpose 诉求再大也越不过网关上限）。"""
+    monkeypatch.setitem(cfg.GATEWAY_OUTPUT_TOKEN_LIMITS, "capped.example.com", 4096)
+    _use_gateway(monkeypatch, "https://capped.example.com/v1")
     cfg.get_llm(purpose="problem")
     assert _capture["max_tokens"] == 4096
+
+
+def test_problem_budget_full_on_apihub(_capture, monkeypatch):
+    """apihub 不再静态钳制：agnes-3.0-flash 实测接受 16384，problem 按 8192 诉求发。"""
+    _use_gateway(monkeypatch, "https://apihub.agnes-ai.com/v1")
+    cfg.get_llm(purpose="problem")
+    assert _capture["max_tokens"] == 8192
 
 
 def test_problem_budget_kept_on_uncapped_gateway(_capture, monkeypatch):

@@ -62,8 +62,8 @@ PURPOSE_CONFIGS = {
     "judge":                {"alias": "default", "temperature": 0.7, "max_tokens": 4096},
     # 详细题解(agent_problem._get_solution_llm)
     "tutor":                {"alias": "default", "temperature": 0.4},
-    # 8192：历史 139 次 agnes-2.5-flash 出题 p99=2434、峰值 3825，留足长题余量；
-    # apihub 网关 2026-11-06 起上限 4096，get_llm 会自动钳到 4096（未限制端点仍发 8192）。
+    # 8192：历史 139 次出题 p99=2434、峰值 3825，留足长题余量；
+    # 4096 主机钳制已移除（agnes-3.0-flash 实测接受 16384），撞限由 llm_failover 运行期学习。
     "problem":              {"alias": "default", "temperature": 0.7, "max_tokens": 8192},
 
     # === 上下文管理 ===
@@ -96,11 +96,10 @@ PURPOSE_CONFIGS = {
 # 「允许多大的 max_tokens」是网关能力，不是用途属性：同一个 agnes-2.5-flash，
 # 16384 在 api.agnes-ai.cn 正常，在 apihub.agnes-ai.com 被 400 拒绝
 # （"max_tokens exceeds the limit of 4096"，2026-11-06 线上事故）。
-# 这里只声明已知上限；未声明的网关不限制，运行期撞到 400 时由 llm_failover
-# 学到准确值并回填学习缓存，避免厂商再次收紧时静默降级。
-GATEWAY_OUTPUT_TOKEN_LIMITS: dict[str, int] = {
-    "apihub.agnes-ai.com": 4096,
-}
+# 静态表只声明「全主机、与模型无关」的已知上限；按模型的差异（4096 只是
+# agnes-2.5-flash 在 apihub 的上限，agnes-3.0-flash 实测 ≥16384）交给运行期：
+# 撞到 400 时由 llm_failover 学到准确值并回填学习缓存，避免写死过时值误钳新模型。
+GATEWAY_OUTPUT_TOKEN_LIMITS: dict[str, int] = {}
 
 _LEARNED_OUTPUT_TOKEN_LIMITS: dict[tuple[str, str], int] = {}
 _CLAMP_WARNED: set[tuple[str, str, int, int]] = set()
