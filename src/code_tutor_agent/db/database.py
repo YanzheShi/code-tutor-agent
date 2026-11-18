@@ -2246,6 +2246,64 @@ def save_user_memory(memory: dict, user_id: str = MEMORY_USER_ID) -> None:
         logger.warning("save_user_memory(%s) failed: %s", user_id, exc)
 
 
+def get_user_memory_raw(user_id: str = MEMORY_USER_ID) -> str | None:
+    """读取记忆行的原始 JSON 文本（乐观锁 CAS 的期望值）。
+
+    - 行不存在 → None（期望「新建」）；
+    - 读取失败 → 抛异常，由调用方放弃本次写入。不能把读失败伪装成「行不存在」：
+      否则会退化成 INSERT ... ON CONFLICT DO NOTHING 冲突重试后静默丢更新。
+    """
+    row = _with_conn(lambda cursor: cursor.execute(
+        "SELECT profile_json FROM profiles WHERE user_id = ?", (user_id,)
+    ).fetchone())
+    return row["profile_json"] if row else None
+
+
+def cas_save_user_memory(memory: dict, expected_raw: str | None,
+                         user_id: str = MEMORY_USER_ID) -> bool:
+    """乐观锁写入（compare-and-swap on profile_json）。
+
+    - expected_raw=None：期望行不存在 → ``INSERT ... ON CONFLICT DO NOTHING``；
+    - 否则：``UPDATE ... WHERE user_id=? AND profile_json=expected_raw``。
+    返回 True=写入成功；False=检测到并发修改 / 写入失败 → 调用方重读重试。
+
+    用「整行 JSON 文本」当 CAS 令牌，无需加列/改表结构；记忆行只有本模块写。
+    """
+    import json as _json
+    payload = _json.dumps(memory, ensure_ascii=False)
+    try:
+        if expected_raw is None:
+            n = _with_conn(lambda cursor: (
+                cursor.execute(
+                    "INSERT INTO profiles (user_id, profile_json) VALUES (?, ?) "
+                    "ON CONFLICT(user_id) DO NOTHING",
+                    (user_id, payload),
+                ),
+                cursor.rowcount,
+            )[1])
+        else:
+            n = _with_conn(lambda cursor: (
+                cursor.execute(
+                    "UPDATE profiles SET profile_json = ?, updated_at = LOCALTIMESTAMP "
+                    "WHERE user_id = ? AND profile_json = ?",
+                    (payload, user_id, expected_raw),
+                ),
+                cursor.rowcount,
+            )[1])
+        if n == 1:
+            logger.info(
+                "cas_save_user_memory(%s) — revision=%s behavior=%d observations=%d",
+                user_id, (memory.get("meta") or {}).get("revision"),
+                len(memory.get("behavior", [])), len(memory.get("observations", [])),
+            )
+            return True
+        logger.info("cas_save_user_memory(%s) — CAS conflict, skip write", user_id)
+        return False
+    except Exception as exc:
+        logger.warning("cas_save_user_memory(%s) failed: %s", user_id, exc)
+        return False
+
+
 # ── 用户账号（邮箱密码登录，多用户支持）──
 
 

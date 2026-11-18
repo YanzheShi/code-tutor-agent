@@ -73,22 +73,28 @@ class TestMemory:
         new = _merge(empty_memory(), ex)
         assert new["preferences"] == {"hint_style": "socratic"}
 
-    def test_merge_behavior_truncation(self):
+    def test_merge_behavior_store_truncation(self):
         from code_tutor_agent.memory import (
-            BEHAVIOR_CAP,
-            OBSERVATIONS_CAP,
+            BEHAVIOR_STORE_CAP,
+            OBSERVATIONS_STORE_CAP,
             MemoryExtraction,
             _merge,
             empty_memory,
         )
         ex = MemoryExtraction(
             unchanged=False,
-            behavior=[f"b{i}" for i in range(12)],
-            observations=[f"o{i}" for i in range(9)],
+            behavior=[f"b{i}" for i in range(BEHAVIOR_STORE_CAP + 6)],
+            observations=[f"o{i}" for i in range(OBSERVATIONS_STORE_CAP + 4)],
         )
         new = _merge(empty_memory(), ex)
-        assert len(new["behavior"]) == BEHAVIOR_CAP
-        assert len(new["observations"]) == OBSERVATIONS_CAP
+        assert len(new["behavior"]) == BEHAVIOR_STORE_CAP
+        assert len(new["observations"]) == OBSERVATIONS_STORE_CAP
+        # memory@2：每条都带稳定 id + 证据/来源字段
+        assert all(
+            {"id", "text", "evidence", "source_session", "first_session", "retracted"}
+            <= set(x)
+            for x in new["behavior"]
+        )
 
     def test_merge_prefs_overlay_old(self):
         """LLM 未输出的旧偏好键应保留(新值按键覆盖)。"""
@@ -99,6 +105,156 @@ class TestMemory:
         new = _merge(mem, ex)
         assert new["preferences"]["language"] == "python"
         assert new["preferences"]["goals"] == "竞赛"
+
+    # ── 证据驱动确认 / 来源 / 复活 ──
+
+    def test_relist_same_evidence_does_not_inflate_confirm(self):
+        """LLM 复述旧条目（证据未变）不算再确认，不刷新 last_seen/source_session。"""
+        from code_tutor_agent.memory import MemoryExtraction, _merge, empty_memory
+        item = {"text": "看提示后先自己尝试", "evidence": "我先自己试试"}
+        mem = _merge(
+            empty_memory(), MemoryExtraction(unchanged=False, behavior=[item]),
+            session_id="s1", now="2026-11-01T10:00:00",
+        )
+        mem = _merge(
+            mem, MemoryExtraction(unchanged=False, behavior=[item]),
+            session_id="s2", now="2026-11-10T10:00:00",
+        )
+        b = mem["behavior"][0]
+        assert b["confirm_count"] == 1
+        assert b["last_seen"] == "2026-11-01T10:00:00"
+        assert b["source_session"] == "s1"
+        assert b["first_session"] == "s1"
+
+    def test_new_evidence_updates_source_keeps_first(self):
+        """新证据才算再确认；source_session 跟证据走，first_session 保留首次来源。"""
+        from code_tutor_agent.memory import MemoryExtraction, _merge, empty_memory
+        mem = _merge(
+            empty_memory(),
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "看提示后先自己尝试", "evidence": "我先自己试试"}],
+            ),
+            session_id="s1", now="2026-11-01T10:00:00",
+        )
+        mem = _merge(
+            mem,
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "看提示后先自己尝试", "evidence": "还是想自己先写"}],
+            ),
+            session_id="s3", now="2026-11-11T10:00:00",
+        )
+        b = mem["behavior"][0]
+        assert b["confirm_count"] == 2
+        assert b["evidence"] == "还是想自己先写"
+        assert b["source_session"] == "s3"
+        assert b["first_session"] == "s1"
+        assert b["last_seen"] == "2026-11-11T10:00:00"
+
+    def test_retracted_item_revives_with_new_evidence(self):
+        """作废条目被新证据重新支持时恢复，而不是永久隐藏。"""
+        from code_tutor_agent.memory import (
+            MemoryExtraction,
+            _merge,
+            _visible_items,
+            empty_memory,
+        )
+        mem = _merge(
+            empty_memory(),
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "看提示后先自己尝试", "evidence": "我先自己试试"}],
+            ),
+            session_id="s1", now="2026-11-01T10:00:00",
+        )
+        mem = _merge(
+            mem, MemoryExtraction(unchanged=False, retract=["看提示后先自己尝试"]),
+            session_id="s2", now="2026-11-02T10:00:00",
+        )
+        assert mem["behavior"][0]["retracted"] is True
+        assert _visible_items(mem["behavior"], 8) == []
+
+        mem = _merge(
+            mem,
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "看提示后先自己尝试", "evidence": "我又开始自己先试了"}],
+            ),
+            session_id="s3", now="2026-11-03T10:00:00",
+        )
+        b = mem["behavior"][0]
+        assert b["retracted"] is False
+        assert b["retracted_at"] == ""
+        assert b["confirm_count"] == 2
+        assert _visible_items(mem["behavior"], 8)[0]["text"] == "看提示后先自己尝试"
+
+    def test_llm_id_reuse_requires_matching_text(self):
+        """LLM 复用 id 时必须 text 一致；text 不一致的新结论另起条目，不覆盖旧条目。"""
+        from code_tutor_agent.memory import MemoryExtraction, _merge, empty_memory
+        mem = _merge(
+            empty_memory(),
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "看提示后先自己尝试", "evidence": "我先自己试试"}],
+            ),
+            session_id="s1", now="2026-11-01T10:00:00",
+        )
+        old = mem["behavior"][0]
+        mem = _merge(
+            mem,
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{
+                    "id": old["id"], "text": old["text"], "evidence": "还是想自己先写",
+                }],
+            ),
+            session_id="s2", now="2026-11-02T10:00:00",
+        )
+        assert len(mem["behavior"]) == 1
+        assert mem["behavior"][0]["confirm_count"] == 2
+
+        mem = _merge(
+            mem,
+            MemoryExtraction(
+                unchanged=False,
+                behavior=[{
+                    "id": old["id"], "text": "完全不同的结论", "evidence": "另一句证据",
+                }],
+            ),
+            session_id="s3", now="2026-11-03T10:00:00",
+        )
+        assert len(mem["behavior"]) == 2
+        texts = {b["text"] for b in mem["behavior"]}
+        assert texts == {"看提示后先自己尝试", "完全不同的结论"}
+
+    # ── 逐条置信度 ──
+
+    def test_low_confidence_demotes_only_that_item(self):
+        """单条低置信只降级该条，高证据条目仍留在 behavior。"""
+        from code_tutor_agent.memory import MemoryExtraction, _merge, empty_memory
+        ex = MemoryExtraction(
+            unchanged=False,
+            behavior=[
+                {"text": "读题先看样例", "evidence": "我习惯先看样例", "confidence": 0.9},
+                {"text": "偏好上午刷题", "evidence": "", "confidence": 0.2},
+            ],
+        )
+        new = _merge(empty_memory(), ex)
+        assert [b["text"] for b in new["behavior"]] == ["读题先看样例"]
+        assert "偏好上午刷题" in [o["text"] for o in new["observations"]]
+
+    def test_global_confidence_fallback_when_item_omits(self):
+        """模型没给逐条 confidence 时，沿用顶层 confidence 兜底（兼容旧输出）。"""
+        from code_tutor_agent.memory import MemoryExtraction, _merge, empty_memory
+        ex = MemoryExtraction(
+            unchanged=False,
+            behavior=[{"text": "偏好上午刷题", "evidence": "上午效率高"}],
+            confidence=0.3,
+        )
+        new = _merge(empty_memory(), ex)
+        assert new["behavior"] == []
+        assert [o["text"] for o in new["observations"]] == ["偏好上午刷题"]
 
     def test_has_signal_false_when_all_empty(self):
         """unchanged=False 但三通道全空 → 视为无信号(防误清)。"""
@@ -120,8 +276,9 @@ class TestMemory:
         save_memory(mem)
         back = load_memory()
         assert back["preferences"] == {"hint_style": "socratic"}
-        assert back["behavior"] == ["看提示后自己先试"]
-        assert back["observations"] == ["常漏边界条件"]
+        assert back["behavior"][0]["text"] == "看提示后自己先试"
+        assert "id" in back["behavior"][0]
+        assert back["observations"][0]["text"] == "常漏边界条件"
 
     def test_dao_bad_json_fallback(self):
         from code_tutor_agent.db import database as dbmod
@@ -210,11 +367,12 @@ class TestMemory:
         mem._run_extraction(self._payload(user_msgs=3))
         back = mem.load_memory()
         assert back["preferences"] == {"difficulty_preference": "medium"}
-        assert back["behavior"] == ["失败 3 次倾向换题"]
+        assert back["behavior"][0]["text"] == "失败 3 次倾向换题"
+        assert back["behavior"][0]["source_session"] == "s1"
         assert back["meta"]["watermark"] == {"session_id": "s1", "count": 6}
 
-    def test_llm_failure_degrades_to_watermark(self, monkeypatch):
-        """LLM 层抛错(走真实 _call_llm 的兜底)→ 返回 None → 只推进水位,不崩。"""
+    def test_llm_failure_keeps_watermark_for_retry(self, monkeypatch):
+        """LLM 层抛错 → 返回 None → 不推进水位(下次重试),只累计 fail_count,不崩。"""
         import sys
         import types
 
@@ -232,7 +390,9 @@ class TestMemory:
 
         mem._run_extraction(self._payload(user_msgs=3))  # 不应抛错
         back = mem.load_memory()
-        assert back["meta"]["watermark"]["count"] == 6
+        # 失败不再推进水位 → 下次同一段对话可重试
+        assert back["meta"]["watermark"]["count"] == 0
+        assert back["meta"]["fail_count"] == 1
         assert back["behavior"] == []
 
     def test_second_run_skips_already_extracted(self, monkeypatch):
@@ -249,6 +409,58 @@ class TestMemory:
         mem._run_extraction(payload)
         mem._run_extraction(payload)  # 第二次:水位已到位,delta 空
         assert len(calls) == 1
+
+    # ── CAS 乐观锁 ──
+
+    def test_read_failure_aborts_cas_write(self, monkeypatch):
+        """读失败不能伪装成「行不存在」继续写，直接放弃本次更新。"""
+        import code_tutor_agent.memory as mem
+        from code_tutor_agent.db import database as dbmod
+
+        def boom(*a, **k):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(dbmod, "get_user_memory_raw", boom)
+        touched = []
+        ok = mem._write_with_cas("default", lambda old: touched.append(1) or old)
+        assert ok is False
+        assert touched == []
+
+    def test_cas_conflict_keeps_signal_and_watermark_max(self, monkeypatch):
+        """冲突重试时别的 worker 已推进水位 → 仍合并信号，水位取 max，不丢弃。"""
+        import code_tutor_agent.memory as mem
+        from code_tutor_agent.db import database as dbmod
+
+        stale = mem.empty_memory()
+        ahead = mem.empty_memory()
+        ahead["meta"]["watermark"] = {"session_id": "s1", "count": 8}
+        loads = [(stale, None, True), (ahead, "raw-ahead", True), (ahead, "raw-ahead", True)]
+
+        def fake_load(user_id):
+            return loads.pop(0) if loads else (ahead, "raw-ahead", True)
+
+        monkeypatch.setattr(mem, "_load_with_raw", fake_load)
+        monkeypatch.setattr(
+            mem, "_call_llm",
+            lambda *a, **k: mem.MemoryExtraction(
+                unchanged=False,
+                behavior=[{"text": "失败 3 次倾向换题", "evidence": "算了换一题"}],
+                confidence=0.9,
+            ),
+        )
+        writes = []
+
+        def fake_cas(memory, expected_raw, user_id):
+            writes.append((memory, expected_raw))
+            return len(writes) > 1
+
+        monkeypatch.setattr(dbmod, "cas_save_user_memory", fake_cas)
+
+        mem._run_extraction(self._payload(user_msgs=3))
+        assert len(writes) == 2
+        final, _raw = writes[-1]
+        assert final["behavior"][0]["text"] == "失败 3 次倾向换题"
+        assert final["meta"]["watermark"] == {"session_id": "s1", "count": 8}
 
     # ── schedule_extraction 快照 ──
 
