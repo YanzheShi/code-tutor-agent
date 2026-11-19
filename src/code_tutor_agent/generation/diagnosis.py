@@ -324,6 +324,26 @@ def diagnose(draft: ProblemDraft, agent, *, timeout: float = 5.0) -> Diagnosis:
             item = dict(tc)
             item["expected_output"] = _actual_of(result)
             verified.append(item)
+
+        # 延迟 import：quality 依赖本模块的 Defect，模块级导入会成环。
+        from code_tutor_agent.generation.quality import check_quality, quality_gate_enabled
+
+        if quality_gate_enabled():
+            quality_defects, anchor = check_quality(
+                agent, draft, test_cases, results, timeout=timeout,
+            )
+            if quality_defects:
+                return _finish(
+                    Diagnosis(
+                        passed=False,
+                        defects=quality_defects,
+                        stage_reached="quality",
+                        anchor_available=anchor,
+                    ),
+                    draft,
+                    started,
+                )
+
         return _finish(
             Diagnosis(passed=True, verified_cases=verified, stage_reached="examples"),
             draft,

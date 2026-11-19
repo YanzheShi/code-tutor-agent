@@ -24,6 +24,7 @@ agents/agent_judge.py 保持一致：本仓把「用 LLM 结构化输出完成�
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -366,13 +367,15 @@ def generate_problem(
         # P0 零 LLM 修复：仅剥代码里的 CoT 注释再校验一次。
         # 注释对执行无影响，所以「代码本来合法、只是注释脏」的题可以原地救回；
         # 截断题（函数没有 return）剥完依然过不了静态闸，不会被误救。
-        cleaned, removed = strip_cot_comments_in_dict(problem_dict)
-        if cleaned and verify_problem(problem_dict):
-            logger.warning(
-                "CoT comments stripped (%d lines) — problem accepted without LLM retry",
-                removed,
-            )
-            return Problem.model_validate(problem_dict)
+        # 可用 CTA_GEN_COT_STRIP=0 关闭。
+        if os.getenv("CTA_GEN_COT_STRIP", "1").strip().lower() not in ("0", "false", "no", "off"):
+            cleaned, removed = strip_cot_comments_in_dict(problem_dict)
+            if cleaned and verify_problem(problem_dict):
+                logger.warning(
+                    "CoT comments stripped (%d lines) — problem accepted without LLM retry",
+                    removed,
+                )
+                return Problem.model_validate(problem_dict)
 
     if problem is None:
         raise RuntimeError("all generation attempts failed (LLM output unusable)")

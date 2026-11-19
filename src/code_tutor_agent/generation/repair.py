@@ -102,6 +102,10 @@ def decide(diagnosis: Diagnosis, draft: ProblemDraft, attempt: int) -> str:
     codes = set(diagnosis.codes())
     if codes & {"CODE_TRUNCATED", "DESIGN_STYLE", "REFERENCE_MISSING"}:
         return "resample"          # 缺陷密度接近 100%，重抽更便宜
+    if codes & {"WEAK_EXAMPLES", "EXAMPLE_INPUT_OUT_OF_DOMAIN"}:
+        return "resample"          # 示例只读，改不动；只能换题
+    if "SOLVER_DISAGREEMENT" in codes:
+        return "repair"            # 两解都过了示例，允许模型改任意一个
     if diagnosis.only_cosmetic and _CLEAN_CODE in codes:
         return "clean"
     if diagnosis.density >= 0.6:
