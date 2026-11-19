@@ -33,6 +33,12 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from code_tutor_agent.config import get_llm
 from code_tutor_agent.llm_failover import invoke_with_failover
+from code_tutor_agent.guards.code_quality import (
+    code_cot_issues,
+    code_quality_issues,
+    example_issues,
+    text_cot_issues,
+)
 from code_tutor_agent.guards.design_guard import extract_main_classes, is_design_style_code
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.prompts.generate_problem import (
@@ -195,19 +201,32 @@ def verify_problem(problem_dict: dict) -> bool:
             logger.warning("brute_solution syntax error: %s", exc)
             return False
 
-    # 检查描述中是否有思考过程泄漏（desc 已在上方取过）
-    # 注意：只拦截真正的思维链泄露，不要误伤正常描述用语。
-    # "这道题"、"其实"、"但是"、"经典的" 等是正常描述常见词，不应拦截。
-    cot_keywords = ["让我们", "再试一个", "再试", "一步一步", "我们先", "我们来试试"]
-    if any(kw in desc for kw in cot_keywords):
-        logger.warning("Description contains chain-of-thought — rejecting")
-        return False
+    # 静态闸（2026-11-19）：一次收齐全部静态缺陷再拒绝，而不是首错即返。
+    # 修复回路需要完整诊断——只报「示例含 CoT」会让模型去改解释，却留下写了一半的
+    # 解法（badcase BC-GEN-2026-11-18-02 同时有：示例解释含推理 + 192 行里 185 行
+    # 注释 + 入口方法没有 return）。
+    static_issues: list[str] = []
+    static_issues += text_cot_issues(desc, where="description")
+    for idx, ex in enumerate(examples):
+        static_issues += example_issues(str(ex), where=f"examples[{idx}]")
 
     try:
         compile(optimal, "<optimal_solution>", "exec")
         logger.info("✓ optimal_solution compiles OK")
     except SyntaxError as exc:
-        logger.warning("optimal_solution syntax error: %s", exc)
+        static_issues.append(f"optimal_solution 语法错误: {exc}")
+
+    # 代码质量必须查在沙箱自验证之前：能编译但「只写了一半」的题解
+    # 不该浪费一次 runner 调用。
+    static_issues += code_quality_issues(optimal, field="optimal_solution")
+    static_issues += code_cot_issues(optimal, field="optimal_solution")
+    if brute:
+        static_issues += code_quality_issues(brute, field="brute_solution")
+        static_issues += code_cot_issues(brute, field="brute_solution")
+
+    if static_issues:
+        for issue in static_issues:
+            logger.warning("Static gate rejected — %s", issue)
         return False
 
     # 先去掉 LLM 结构化输出里可能夹带的 ```python 代码围栏

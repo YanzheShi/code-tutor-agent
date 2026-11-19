@@ -1,45 +1,42 @@
-"""CodeVerifier — 出题验证器（三查，设计 §9）。
+"""CodeVerifier — 出题验证器（四查，设计 §9）。
 
 V1 节点对应物：前两项提炼自 ``agent_problem.verify_problem``（L125，十项检查），
-「无 CoT 泄漏」为新增第三项。
+「无 CoT 泄漏」为新增第三项；「静态代码质量」为 2026-11-19 新增第四项。
 
-三查：
+四查：
 1) 结构完整：title/description/starter_code/签名 非空 + class Solution
 2) 编译：``compile()``（与 verify_problem 现有检查一致，等价 py_compile）
-3) 无 CoT 泄漏：扫描 description 与 optimal/brute 代码注释中的思考痕迹
-   （仿 constitutional_guard._r09/_r10 的保守扫描风格）
+3) 静态代码质量（``guards.code_quality``）：入口方法无 return、注释占比过高
+   —— 专治「输出被截断 / 用思考注释填满预算」的假合格题解
+4) 无 CoT 泄漏：扫描 description、examples（含解释）与参考解代码注释中的
+   思考痕迹（中英文，口径集中在 guards.code_quality）
 """
 
 from __future__ import annotations
 
 import logging
-import re
 
+from code_tutor_agent.guards.code_quality import (
+    CN_COT_KEYWORDS,  # noqa: F401  # 兼容旧引用
+    code_cot_issues,
+    code_quality_issues,
+    example_issues,
+    text_cot_issues,
+)
 from code_tutor_agent.guards.design_guard import is_design_style_code
 
 logger = logging.getLogger(__name__)
 
-# CoT 泄漏关键词：拦截真正的思维链痕迹，避免误伤正常描述用语
-# （"这道题"、"其实"、"经典" 等正常用语不在列，与 agent_problem.verify_problem 同口径）
-_COT_KEYWORDS = (
-    "让我们", "再试一个", "再试", "一步一步", "我们先", "我们来试试",
-    "思考过程", "推理如下", "逐步分析", "接下来考虑",
-)
-# 代码注释中出现的思考痕迹（"思考"性话术出现在题解里说明 LLM 泄了推理链）
-_COT_COMMENT_PATTERNS = (
-    r"#.*(逐步|思考|推理|我们来试)",
-    r"#.*(先.*再.*最后)",
-)
-
 
 class CodeVerifier:
-    """对 ``ProblemDraft`` 做结构 / 编译 / 无 CoT 三查。"""
+    """对 ``ProblemDraft`` 做结构 / 编译 / 静态质量 / 无 CoT 四查。"""
 
     def verify(self, draft) -> tuple[bool, list[str]]:
         """返回 (是否通过, 问题列表)；不修改 draft。"""
         issues: list[str] = []
         self._check_structure(draft, issues)
         self._check_compiles(draft, issues)
+        self._check_code_quality(draft, issues)
         self._check_no_cot(draft, issues)
         return (not issues, issues)
 
@@ -75,14 +72,19 @@ class CodeVerifier:
             except SyntaxError as exc:
                 issues.append(f"{field_name} 语法错误: {exc}")
 
-    # ── 3) 无 CoT 泄漏 ──
+    # ── 3) 静态代码质量（截断 / 注释填充）──
+    def _check_code_quality(self, draft, issues: list[str]) -> None:
+        for field_name in ("optimal_solution", "brute_solution"):
+            code = (getattr(draft, field_name, "") or "").strip()
+            if code:
+                issues.extend(code_quality_issues(code, field=field_name))
+
+    # ── 4) 无 CoT 泄漏（description / examples / 代码注释）──
     def _check_no_cot(self, draft, issues: list[str]) -> None:
-        desc = draft.description or ""
-        if any(kw in desc for kw in _COT_KEYWORDS):
-            issues.append("description 含思维链痕迹")
+        issues.extend(text_cot_issues(draft.description or "", where="description"))
+        for idx, example in enumerate(getattr(draft, "examples", None) or []):
+            issues.extend(example_issues(str(example), where=f"examples[{idx}]"))
         for field_name in ("optimal_solution", "brute_solution"):
             code = getattr(draft, field_name, "") or ""
-            for pat in _COT_COMMENT_PATTERNS:
-                if re.search(pat, code, re.IGNORECASE):
-                    issues.append(f"{field_name} 注释含思维链痕迹")
-                    break
+            if code.strip():
+                issues.extend(code_cot_issues(code, field=field_name))
