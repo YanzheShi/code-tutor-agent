@@ -15,6 +15,8 @@ from code_tutor_agent.guards.code_quality import (
     code_cot_issues,
     code_quality_issues,
     example_issues,
+    strip_cot_comments,
+    strip_cot_comments_in_dict,
     text_cot_issues,
 )
 
@@ -162,6 +164,56 @@ def test_normal_example_passes():
 def test_description_cot_still_works():
     issues = text_cot_issues("让我们一步一步来分析", where="description")
     assert issues and "思维链痕迹" in issues[0]
+
+
+# ── 确定性修复：剥 CoT 注释 ──────────────────────────────────────
+
+
+def test_strip_cot_comments_removes_only_whole_line_cot():
+    code = (
+        "# 用哈希表记录已访问元素\n"
+        + _OK_SOLUTION
+        + "# Wait, this formula is wrong\n"
+        + "# 正常说明：时间复杂度 O(n)\n"
+    )
+    cleaned, removed = strip_cot_comments(code)
+    assert removed == 1
+    assert "Wait" not in cleaned
+    assert "用哈希表" in cleaned
+    assert "正常说明" in cleaned
+
+
+def test_strip_cot_comments_keeps_inline_directives():
+    code = "# type: ignore\n" + _OK_SOLUTION
+    cleaned, removed = strip_cot_comments(code)
+    assert removed == 0
+    assert cleaned == code
+
+
+def test_strip_cot_comments_does_not_fix_truncated_solution():
+    truncated = (
+        "class Solution:\n"
+        "    def solve(self, nums: list[int]) -> int:\n"
+        "        total = 0\n"
+        "        # Wait, I need to think again\n"
+    )
+    cleaned, removed = strip_cot_comments(truncated)
+    assert removed == 1
+    # 剥完仍然没有 return，静态闸依旧拒绝——不会被误救
+    assert any("没有任何 return" in i for i in code_quality_issues(cleaned, field="optimal_solution"))
+
+
+def test_strip_cot_comments_in_dict_handles_both_fields():
+    d = {
+        "optimal_solution": "# Let's think\n" + _OK_SOLUTION,
+        "brute_solution": "# 等一下，让我重新推导\n" + _OK_SOLUTION,
+        "description": "让我们开始吧",
+    }
+    changed, removed = strip_cot_comments_in_dict(d)
+    assert changed and removed == 2
+    assert "Let's think" not in d["optimal_solution"]
+    assert "等一下" not in d["brute_solution"]
+    assert d["description"] == "让我们开始吧"  # 只碰代码字段
 
 
 # ── CodeVerifier 集成 ───────────────────────────────────────────

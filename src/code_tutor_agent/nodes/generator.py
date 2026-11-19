@@ -207,6 +207,7 @@ def generator_node(state: SessionState) -> Command[Literal["wait_for_submit_node
         lc_url=lc_url or None,
         profile_hint=_profile_hint_from(state),
         exclude_problem_ids=exclude_ids,
+        session_id=state.session_id,
     )
     result = _GEN_AGENT.run(ctx, sink)
     record_generation_channel(sid, result.channel)

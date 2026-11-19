@@ -24,6 +24,29 @@ class SandboxGateway:
             force_local=True,
         )
 
+    def run_batch(
+        self,
+        code: str,
+        test_cases: list[dict],
+        function_signature: str = "",
+        timeout: float = 5.0,
+    ) -> list:
+        """一次进程跑完整批用例（诊断专用）。
+
+        与 ``run_solution`` 的区别只是超时更短、明确按批调用；底层同一个 runner。
+        ``_build_sample_tests`` 原来逐例起 subprocess，3 个示例 3 次启动，
+        诊断阶段统一改走这里。
+        """
+        from code_tutor_agent.sandbox.runner import run_solution
+
+        return run_solution(
+            code,
+            test_cases,
+            timeout=timeout,
+            function_signature=function_signature or None,
+            force_local=True,
+        )
+
     def compile(self, code: str) -> bool:
         """校验代码可编译。"""
         try:

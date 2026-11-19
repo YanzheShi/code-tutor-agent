@@ -37,6 +37,7 @@ from code_tutor_agent.guards.code_quality import (
     code_cot_issues,
     code_quality_issues,
     example_issues,
+    strip_cot_comments_in_dict,
     text_cot_issues,
 )
 from code_tutor_agent.guards.design_guard import extract_main_classes, is_design_style_code
@@ -361,6 +362,17 @@ def generate_problem(
 
         logger.warning("Self-verification failed on attempt %d — retrying", attempt + 1)
         logger.debug("Rejected problem dict: %s", problem_dict)
+
+        # P0 零 LLM 修复：仅剥代码里的 CoT 注释再校验一次。
+        # 注释对执行无影响，所以「代码本来合法、只是注释脏」的题可以原地救回；
+        # 截断题（函数没有 return）剥完依然过不了静态闸，不会被误救。
+        cleaned, removed = strip_cot_comments_in_dict(problem_dict)
+        if cleaned and verify_problem(problem_dict):
+            logger.warning(
+                "CoT comments stripped (%d lines) — problem accepted without LLM retry",
+                removed,
+            )
+            return Problem.model_validate(problem_dict)
 
     if problem is None:
         raise RuntimeError("all generation attempts failed (LLM output unusable)")

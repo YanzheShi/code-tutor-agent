@@ -300,6 +300,7 @@ async def _fallback_problem(sid: str, config: dict, values: dict) -> None:
         difficulty=difficulty,
         profile_hint=profile_hint,
         exclude_problem_ids=exclude,
+        session_id=sid,
     )
     result = None
     try:

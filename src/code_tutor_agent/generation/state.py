@@ -29,6 +29,8 @@ class GenerationContext:
     options: GenerationOptions = field(default_factory=GenerationOptions)
     # 兜底选题时排除的题目 id 集合：当前会话已出现/已做过的题，避免重复出题给用户。
     exclude_problem_ids: set[int] = field(default_factory=set)
+    # 会话标识：只用于 trace 归因（可选，不影响出题逻辑）。
+    session_id: str = ""
 
 
 @dataclass
@@ -75,6 +77,17 @@ class GenerationResult:
     reused_from_id: int | None = None    # 复用的源题目 id（reused=True 时有值）
     fallback_chain: list[str] = field(default_factory=list)
     error: str = ""
+
+
+@dataclass
+class RepairRevision:
+    """一次修复提交的产物（LLM 结构化输出 → 内部数据）。"""
+
+    draft: ProblemDraft
+    change_summary: str = ""
+    addressed_defects: list[str] = field(default_factory=list)
+    confidence: float = 0.0
+    tool_calls: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

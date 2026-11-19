@@ -29,6 +29,7 @@ from typing import Callable
 from code_tutor_agent.agents.agent_problem import ProblemChannel
 from code_tutor_agent import config as cfg
 from code_tutor_agent.generation.injection import decide_injection
+from code_tutor_agent.generation.diagnosis import Diagnosis, diagnose as _diagnose
 from code_tutor_agent.generation.gateways import (
     LeetCodeGateway,
     LlmGateway,
@@ -36,6 +37,12 @@ from code_tutor_agent.generation.gateways import (
     StoreGateway,
 )
 from code_tutor_agent.generation.gateways.leetcode import slug_from_url
+from code_tutor_agent.generation.repair import (
+    RepairBudget,
+    RepairSession,
+    decide,
+    repair_enabled,
+)
 from code_tutor_agent.generation.state import (
     GenerationContext,
     GenerationResult,
@@ -44,7 +51,9 @@ from code_tutor_agent.generation.state import (
     ProblemDraft,
     ProgressSink,
 )
+from code_tutor_agent.generation.trace import record_gen_trace
 from code_tutor_agent.generation.verifier import CodeVerifier
+from code_tutor_agent.guards.code_quality import strip_cot_comments
 
 logger = logging.getLogger(__name__)
 
@@ -152,16 +161,82 @@ class ProblemGenerationAgent:
             #    丢弃本 draft 换题重采样，绝不整轮失败把会话卡死在 dialog；
             # 内层：LlmGateway.generate_problem 重试一次，针对结构不对（缺字段/题解异常）；
             # 网络问题 langchain 自带重试（默认 2 次）。
+            # 预算在整轮出题内共享：避免每个 attempt 重置 180s，把外层 timeout 撑爆。
+            repair_budget = RepairBudget.from_env(ctx)
             for _attempt in range(ctx.options.max_retries or MAX_RETRIES):
                 # 第 2 轮起把「上一轮没过自洽校验」写进 prompt（_SELFCHECK_RETRY_HINT）：
                 # 光靠简单重试，模型会以同样的方式再错一遍；带上失败信号才有修正方向。
-                draft = self._llm_generate(
+                draft = self._generate_draft(
                     ctx, sink,
                     retry_hint=_SELFCHECK_RETRY_HINT if _attempt else None,
                 )
-                if not draft or not self.verifier.verify(draft)[0]:
-                    draft = None
+                if draft is None:
+                    record_gen_trace({
+                        "session_id": ctx.session_id,
+                        "topic": ctx.topic,
+                        "difficulty": ctx.difficulty,
+                        "attempt": _attempt + 1,
+                        "stage": "no_draft",
+                        "codes": [],
+                        "passed": False,
+                    })
                     continue
+
+                sink.event(GenEvent("progress", "🧪 正在解析示例测试用例…"))
+                diag = self.diagnose(draft)
+                record_gen_trace({
+                    "session_id": ctx.session_id,
+                    "topic": ctx.topic,
+                    "difficulty": ctx.difficulty,
+                    "attempt": _attempt + 1,
+                    "stage": diag.stage_reached,
+                    "codes": diag.codes(),
+                    "passed": diag.passed,
+                    "anchor": diag.anchor_available,
+                    "density": diag.density,
+                    "elapsed_ms": diag.elapsed_ms,
+                })
+                if not diag.passed:
+                    action = decide(diag, draft, _attempt)
+
+                    if action == "clean":
+                        cleaned = self._clean_cosmetic(draft)
+                        if cleaned is not None:
+                            diag = self.diagnose(cleaned)
+                            record_gen_trace({
+                                "session_id": ctx.session_id,
+                                "topic": ctx.topic,
+                                "attempt": _attempt + 1,
+                                "stage": "deterministic_clean",
+                                "codes": diag.codes(),
+                                "passed": diag.passed,
+                            })
+
+                    if not diag.passed and action in ("repair", "clean") and repair_enabled():
+                        outcome = RepairSession(
+                            self, repair_budget, sink,
+                        ).run(draft, diag)
+                        record_gen_trace({
+                            "session_id": ctx.session_id,
+                            "topic": ctx.topic,
+                            "attempt": _attempt + 1,
+                            "stage": "repair",
+                            "decision": action,
+                            "reason": outcome.reason,
+                            "passed": outcome.ok,
+                            "rounds": [r.to_dict() for r in outcome.rounds],
+                        })
+                        if outcome.ok:
+                            draft, diag = outcome.draft, outcome.diagnosis
+
+                    if not diag.passed:
+                        sink.event(GenEvent("warning", "示例用例校验失败，重试或走降级链"))
+                        draft = None
+                        if action == "fallback":
+                            break
+                        continue
+
+                draft.test_cases = diag.verified_cases
                 try:
                     llm_saved_pid, llm_saved_reused = self.store.save(draft)
                     break
@@ -351,10 +426,15 @@ class ProblemGenerationAgent:
         return draft
 
     # ── 通道 B：LLM 生成 ──
-    def _llm_generate(
+    def _generate_draft(
         self, ctx: GenerationContext, sink: ProgressSink, *,
         retry_hint: str | None = None,
     ) -> ProblemDraft | None:
+        """只做「LLM 生成 + 静态闸」，不跑沙箱；示例校验交给 :meth:`diagnose`。
+
+        拆开的目的：修复回路需要「生成一次、诊断多次」，不能每修一轮都把
+        沙箱校验绑在生成里重复跑。
+        """
         # 方案 H：每次出题随机二选一注入 F（场景）或 G（维度），二者不混用；
         # 选 G 无维度文件时 decide_injection 内部自动 fallback 到 F。
         mode, suffix = decide_injection(ctx.topic)
@@ -367,16 +447,43 @@ class ProblemGenerationAgent:
         # retry_hint 拼进 USER prompt 末尾（与方案 H 的 suffix 共存）——刻意不用
         # 实例属性传状态：_SUITE_AGENT 是模块级单例，多用户并发会串号。
         user_suffix = (suffix or "") + (retry_hint or "")
-        draft = self.llm.generate_problem(
+        return self.llm.generate_problem(
             ctx.topic, ctx.difficulty, user_suffix=user_suffix or None)
+
+    def diagnose(self, draft: ProblemDraft) -> Diagnosis:
+        """静态 + 沙箱诊断（纯本地，不调 LLM / 不写库）。"""
+        return _diagnose(draft, self)
+
+    def _clean_cosmetic(self, draft: ProblemDraft) -> ProblemDraft | None:
+        """零 LLM 的确定性修复：剥掉代码里的 CoT 注释。
+
+        只处理 ``optimal_solution`` / ``brute_solution`` 的整行注释；
+        description / examples 不碰（那是教学内容，截断会变病句）。
+        没有可剥的注释时返回 None。
+        """
+        removed = 0
+        for field in ("optimal_solution", "brute_solution"):
+            code = getattr(draft, field, "") or ""
+            new_code, count = strip_cot_comments(code)
+            if count:
+                setattr(draft, field, new_code)
+                removed += count
+        return draft if removed else None
+
+    def _llm_generate(
+        self, ctx: GenerationContext, sink: ProgressSink, *,
+        retry_hint: str | None = None,
+    ) -> ProblemDraft | None:
+        """兼容包装：生成 + 诊断，通过则回填可见用例；失败返回 None。"""
+        draft = self._generate_draft(ctx, sink, retry_hint=retry_hint)
         if draft is None:
             return None
         sink.event(GenEvent("progress", "🧪 正在解析示例测试用例…"))
-        sample = self._build_sample_tests(draft)
-        if sample is None:
+        diag = self.diagnose(draft)
+        if not diag.passed:
             sink.event(GenEvent("warning", "示例用例校验失败，重试或走降级链"))
             return None
-        draft.test_cases = sample
+        draft.test_cases = diag.verified_cases
         return draft
 
     def _build_sample_tests(self, draft: ProblemDraft) -> list[dict] | None:

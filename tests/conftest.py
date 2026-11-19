@@ -29,6 +29,10 @@ import pytest
 # 配额开着会把整包回归顶到 429。配额行为本身由 test_quota.py 专项覆盖。
 os.environ.setdefault("CTA_QUOTA_ENABLED", "0")
 
+# 出题 trace 默认关闭：单元测试不应往 logs/gen_repair.jsonl 追加记录。
+# 需要验证 trace 的用例自行 monkeypatch.setenv 即可。
+os.environ.setdefault("CTA_GEN_TRACE_PATH", "")
+
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limit_buckets():

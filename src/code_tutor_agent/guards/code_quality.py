@@ -190,6 +190,59 @@ def code_cot_issues(code: str, *, field: str) -> list[str]:
     return []
 
 
+def _is_cot_comment_line(line: str) -> bool:
+    """整行 ``#`` 注释且正文命中 CoT 特征；行尾注释一律不碰（避免误伤 noqa/type）。"""
+    s = line.lstrip()
+    if not s.startswith("#"):
+        return False
+    body = s.lstrip("#").strip()
+    if not body:
+        return False
+    if _first_cot_hit(body) is not None:
+        return True
+    return any(re.search(pat, body) for pat in _COMMENT_COT_HINTS)
+
+
+def strip_cot_comments(code: str) -> tuple[str, int]:
+    """剥掉代码里「整行且命中 CoT」的注释，返回 (新代码, 剥掉行数)。
+
+    只做字符串处理，不执行代码、不调 LLM。调用方必须重新 ``compile``：
+    - 正常题解里混了几句推理注释 → 剥完仍然合法，直接救回；
+    - 截断题（函数没有 return）→ 剥完依然过不了静态闸，不会被误救。
+    """
+    code = code or ""
+    if not code.strip():
+        return code, 0
+    kept: list[str] = []
+    removed = 0
+    for line in code.splitlines():
+        if _is_cot_comment_line(line):
+            removed += 1
+            continue
+        kept.append(line)
+    if not removed:
+        return code, 0
+    new_code = "\n".join(kept)
+    if code.endswith("\n") and not new_code.endswith("\n"):
+        new_code += "\n"
+    return new_code, removed
+
+
+def strip_cot_comments_in_dict(problem_dict: dict) -> tuple[bool, int]:
+    """对 ``optimal_solution`` / ``brute_solution`` 原地剥 CoT 注释。
+
+    返回 (是否有改动, 总剥离行数)。不碰 description / examples。
+    """
+    total = 0
+    for field in ("optimal_solution", "brute_solution"):
+        code = problem_dict.get(field) or ""
+        new_code, removed = strip_cot_comments(code)
+        if removed:
+            problem_dict[field] = new_code
+            total += removed
+    return bool(total), total
+
+
 def example_issues(example: str, *, where: str) -> list[str]:
     """单个示例的静态检查：思维链痕迹 + 解释过长（疑似推理过程）。"""
     example = example or ""
