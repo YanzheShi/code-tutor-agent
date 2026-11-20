@@ -85,20 +85,51 @@ def test_domain_violation_detected():
     assert defects and defects[0].code == "EXAMPLE_INPUT_OUT_OF_DOMAIN"
 
 
-def test_solver_disagreement_reported_without_blaming_either_side():
-    sandbox = _QueueSandbox([
-        [RunnerResult(0, "Skipped", "1")],   # optimal on random
-        [RunnerResult(0, "Skipped", "2")],   # brute on random
-    ])
+def test_solver_disagreement_reported_when_repeated():
+    sandbox = _QueueSandbox(
+        [
+            [RunnerResult(0, "Skipped", "1"), RunnerResult(0, "Skipped", "1")],
+            [RunnerResult(0, "Skipped", "2"), RunnerResult(0, "Skipped", "2")],
+        ],
+        inputs=[["[2,7]", "9"], ["[3,2]", "5"]],
+    )
     results = [_passed("1"), _passed("2")]
     defects, anchor = check_quality(_agent(sandbox), _draft(), _CASES, results)
-    assert [d.code for d in defects] == ["SOLVER_DISAGREEMENT"]
-    assert defects[0].input_args == ["[2,7]", "9"]
+    assert defects and all(d.code == "SOLVER_DISAGREEMENT" for d in defects)
+    assert len(defects) == 2
     assert defects[0].allowed_fields == ("optimal_solution", "brute_solution")
     assert anchor is False
 
 
-def test_reference_crash_on_random_input():
+def test_single_disagreement_is_ignored():
+    """单条分歧可能只是随机输入越界，不阻断。"""
+    sandbox = _QueueSandbox(
+        [
+            [RunnerResult(0, "Skipped", "1")],
+            [RunnerResult(0, "Skipped", "2")],
+        ],
+        inputs=[["[2,7]", "9"]],
+    )
+    results = [_passed("1"), _passed("2")]
+    defects, _ = check_quality(_agent(sandbox), _draft(), _CASES, results)
+    assert defects == []
+
+
+def test_type_mismatch_is_ignored_as_bad_brute():
+    """brute 返回 bool、optimal 返回 int → 是 brute 写坏了，不算真分歧。"""
+    sandbox = _QueueSandbox(
+        [
+            [RunnerResult(0, "Skipped", "0"), RunnerResult(0, "Skipped", "0")],
+            [RunnerResult(0, "Skipped", "False"), RunnerResult(0, "Skipped", "False")],
+        ],
+        inputs=[["[2,7]", "9"], ["[3,2]", "5"]],
+    )
+    results = [_passed("1"), _passed("2")]
+    defects, _ = check_quality(_agent(sandbox), _draft(), _CASES, results)
+    assert defects == []
+
+
+def test_reference_crash_on_random_input_is_warning_only():
     sandbox = _QueueSandbox([
         [RunnerResult(0, "Runtime Error", "IndexError: list index out of range")],
         [RunnerResult(0, "Skipped", "1")],
@@ -106,7 +137,7 @@ def test_reference_crash_on_random_input():
     results = [_passed("1"), _passed("2")]
     defects, _ = check_quality(_agent(sandbox), _draft(), _CASES, results)
     assert defects[0].code == "REFERENCE_RE"
-    assert defects[0].allowed_fields == ("optimal_solution",)
+    assert defects[0].severity == "quality"
 
 
 def test_no_brute_skips_cross_check():
@@ -164,6 +195,27 @@ def test_diagnose_marks_domain_violation():
     assert not diag.passed
     assert diag.stage_reached == "quality"
     assert "EXAMPLE_INPUT_OUT_OF_DOMAIN" in diag.codes()
+
+
+class _WarnSandbox(_DiagSandbox):
+    """示例全过，但随机输入上参考解崩溃 → 只应产生 warning。"""
+
+    def run_batch(self, code, cases, function_signature="", timeout=5.0):
+        if cases and cases[0].get("expected_output", "") == "":
+            return [RunnerResult(0, "Runtime Error", "IndexError: list index out of range")
+                    for _ in cases]
+        return [RunnerResult(i, "Passed", str(i + 1)) for i in range(len(cases))]
+
+    def random_inputs(self, sig, n, seed, constraints, description):
+        return [["[1]"]]
+
+
+def test_diagnose_passes_with_quality_warning():
+    agent = _agent(_WarnSandbox(), cases=_CASES)
+    diag = diagnose(_draft(optimal_solution=_VALID, brute_solution=_VALID), agent)
+    assert diag.passed is True
+    assert diag.stage_reached == "quality"
+    assert "REFERENCE_RE" in diag.codes()
 
 
 # ── 分诊 ────────────────────────────────────────────────────────

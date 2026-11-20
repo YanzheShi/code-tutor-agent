@@ -333,12 +333,27 @@ def diagnose(draft: ProblemDraft, agent, *, timeout: float = 5.0) -> Diagnosis:
                 agent, draft, test_cases, results, timeout=timeout,
             )
             if quality_defects:
+                blocking = [
+                    d for d in quality_defects if d.severity in ("blocking", "fatal")
+                ]
+                if blocking:
+                    return _finish(
+                        Diagnosis(
+                            passed=False,
+                            defects=quality_defects,
+                            stage_reached="quality",
+                            anchor_available=anchor,
+                        ),
+                        draft,
+                        started,
+                    )
+                # 只有 quality 级（低置信）信号：放行，但把 warning 带进 trace。
                 return _finish(
                     Diagnosis(
-                        passed=False,
+                        passed=True,
                         defects=quality_defects,
+                        verified_cases=verified,
                         stage_reached="quality",
-                        anchor_available=anchor,
                     ),
                     draft,
                     started,

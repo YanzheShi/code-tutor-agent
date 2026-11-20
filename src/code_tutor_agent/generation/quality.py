@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from code_tutor_agent.generation.diagnosis import Defect
@@ -40,6 +41,30 @@ def _actual_of(result) -> str:
     if status == "Runtime Error":
         return detail.splitlines()[0].strip() if detail else ""
     return detail
+
+
+def _value_type(value: str) -> str:
+    """输出的 JSON 类型（用来识别 brute 连返回类型都写错的假分歧）。"""
+    text = (value or "").strip()
+    if text in ("True", "False", "true", "false"):
+        return "bool"
+    try:
+        parsed = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return "str"
+    if isinstance(parsed, bool):
+        return "bool"
+    if isinstance(parsed, int):
+        return "int"
+    if isinstance(parsed, float):
+        return "float"
+    if isinstance(parsed, list):
+        return "list"
+    if isinstance(parsed, dict):
+        return "dict"
+    if isinstance(parsed, str):
+        return "str"
+    return "other"
 
 
 def _run_batch(agent, code: str, cases: list[dict], signature: str, timeout: float) -> list:
@@ -139,43 +164,50 @@ def _cross_check_defects(
     if len(optimal_results) != len(probe_cases) or len(brute_results) != len(probe_cases):
         return [], False
 
-    defects: list[Defect] = []
+    crashes: list[Defect] = []
+    disagreements: list[Defect] = []
     for index, (opt, bru) in enumerate(zip(optimal_results, brute_results)):
         opt_status = getattr(opt, "status", "")
         if opt_status in ("Runtime Error", "TLE"):
-            defects.append(Defect(
+            # 随机输入的取值域不一定完全符合题面（生成器只按长度/粗略范围取样），
+            # 参考解在“可能是非法输入”上崩溃 → 只记 warning，不阻断。
+            crashes.append(Defect(
                 code="REFERENCE_TLE" if opt_status == "TLE" else "REFERENCE_RE",
-                severity="blocking",
+                severity="quality",
                 where=f"random[{index}]",
-                message="示例能过，但参考解在随机输入上崩溃/超时",
+                message="示例能过，但参考解在随机输入上崩溃/超时（该输入可能越界，仅提示）",
                 input_args=probe_cases[index].get("input_args"),
                 actual=_actual_of(opt),
                 allowed_fields=("optimal_solution",),
                 evidence=f"{opt_status} on random input",
             ))
-        elif (
-            opt_status in _OK_STATUSES
-            and getattr(bru, "status", "") in _OK_STATUSES
-        ):
-            opt_actual = _actual_of(opt).strip()
-            brute_actual = _actual_of(bru).strip()
-            if opt_actual != brute_actual:
-                # 两个解都过了示例，分歧说明至少一个在边界上有 bug；
-                # 不预设谁对，允许模型改任意一个。
-                defects.append(Defect(
-                    code="SOLVER_DISAGREEMENT",
-                    severity="blocking",
-                    where=f"random[{index}]",
-                    message="最优解与暴力解在随机输入上结果不一致，至少有一个在边界上写错了",
-                    input_args=probe_cases[index].get("input_args"),
-                    stated=opt_actual,
-                    actual=brute_actual,
-                    allowed_fields=("optimal_solution", "brute_solution"),
-                    evidence=f"optimal={opt_actual!r} brute={brute_actual!r}",
-                ))
-        if len(defects) >= _MAX_DEFECTS:
-            break
-    return defects, False
+            continue
+        if opt_status not in _OK_STATUSES or getattr(bru, "status", "") not in _OK_STATUSES:
+            continue
+
+        opt_actual = _actual_of(opt).strip()
+        brute_actual = _actual_of(bru).strip()
+        if opt_actual == brute_actual:
+            continue
+        if _value_type(opt_actual) != _value_type(brute_actual):
+            # brute 连返回类型都写错（如 int vs bool）→ 是 brute 坏，不是真分歧
+            continue
+        disagreements.append(Defect(
+            code="SOLVER_DISAGREEMENT",
+            severity="blocking",
+            where=f"random[{index}]",
+            message="最优解与暴力解在随机输入上结果不一致，至少有一个在边界上写错了",
+            input_args=probe_cases[index].get("input_args"),
+            stated=opt_actual,
+            actual=brute_actual,
+            allowed_fields=("optimal_solution", "brute_solution"),
+            evidence=f"optimal={opt_actual!r} brute={brute_actual!r}",
+        ))
+
+    # 单条分歧可能只是随机输入越界；≥2 条同类型分歧才当作真信号。
+    if len(disagreements) < 2:
+        disagreements = []
+    return (crashes + disagreements)[:_MAX_DEFECTS], False
 
 
 def check_quality(
