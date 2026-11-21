@@ -243,6 +243,8 @@ class LlmGateway:
         导致整个 LLM 原创通道永远失败（2026-08-10 修复）。
 
         user_suffix：方案 H（F/G 随机二选一）注入段，追加到 USER prompt 末尾。
+        expected_topic 用原始 topic：``gen_topic`` 是给模型的口语归一化描述，
+        可能含杂质（如「堆」的说明里有「完全二叉树」），不能拿来做题型守卫。
         """
         from code_tutor_agent.agents.agent_problem import generate_problem as _llm_generate_problem
 
@@ -250,7 +252,7 @@ class LlmGateway:
         try:
             p = _llm_generate_problem(
                 gen_topic, difficulty, purpose="problem", max_retries=1,
-                user_suffix=user_suffix,
+                user_suffix=user_suffix, expected_topic=topic,
             )
             return _problem_to_draft(p, topic, difficulty)
         except Exception as exc:

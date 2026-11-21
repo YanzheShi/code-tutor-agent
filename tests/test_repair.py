@@ -87,6 +87,11 @@ def test_decide_truncated_resamples():
     assert decide(_diag(codes=("CODE_TRUNCATED",), density=1.0), _draft(), 0) == "resample"
 
 
+def test_decide_topic_mismatch_resamples():
+    """题型跑偏是整题概念错误，重抽比修复更便宜。"""
+    assert decide(_diag(codes=("TOPIC_MISMATCH",), density=1.0), _draft(), 0) == "resample"
+
+
 def test_decide_cosmetic_cleans():
     assert decide(_diag(codes=("COT_IN_CODE",), density=0.0), _draft(), 0) == "clean"
 

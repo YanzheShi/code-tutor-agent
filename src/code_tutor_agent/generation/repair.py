@@ -100,7 +100,7 @@ def decide(diagnosis: Diagnosis, draft: ProblemDraft, attempt: int) -> str:
         return "fallback"
 
     codes = set(diagnosis.codes())
-    if codes & {"CODE_TRUNCATED", "DESIGN_STYLE", "REFERENCE_MISSING"}:
+    if codes & {"CODE_TRUNCATED", "DESIGN_STYLE", "REFERENCE_MISSING", "TOPIC_MISMATCH"}:
         return "resample"          # 缺陷密度接近 100%，重抽更便宜
     if codes & {"WEAK_EXAMPLES", "EXAMPLE_INPUT_OUT_OF_DOMAIN"}:
         return "resample"          # 示例只读，改不动；只能换题

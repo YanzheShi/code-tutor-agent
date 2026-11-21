@@ -76,7 +76,22 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 ### 4. 函数签名描述（用于解析示例输入）
 - `function_signature`: 描述方法的参数类型和返回类型，格式如：
   - `"nums: List[int], target: int -> List[int]"`
-  - 类型只能是：`int`, `float`, `str`, `bool`, `List[int]`, `List[str]`, `List[List[int]]`
+  - 基础类型：`int`, `float`, `str`, `bool`, `List[int]`, `List[str]`, `List[List[int]]`
+  - 结构体类型（仅链表/树/图题使用）：`ListNode`, `Optional[ListNode]`,
+    `List[Optional[ListNode]]`, `TreeNode`, `Optional[TreeNode]`, `GraphNode`,
+    `Optional[GraphNode]`
+
+## 知识点与数据结构一致性（硬约束）
+- 系统会校验题目是否真正属于所要求的知识点；**只把 `topic` 字段填成知识点不算**。
+- 知识点为「链表」：`starter_code` 必须包含 `class ListNode` 定义；`function_signature`
+  的输入/输出必须使用 `ListNode`（如 `head: Optional[ListNode] -> Optional[ListNode]`）；
+  `optimal_solution` / `brute_solution` 必须通过 `.next` 指针操作链表。
+  **禁止**把链表题写成数组/二维数组入参只做列表处理（如 `nums: List[int]`）。
+- 知识点为「二叉树 / 树」：`starter_code` 必须包含 `class TreeNode` 定义，
+  `function_signature` 必须使用 `TreeNode`。
+- 知识点为「图」：使用 `GraphNode`，或用邻接表 / 邻接矩阵表示，并在
+  `function_signature` 中写清类型。
+- 场景包装（业务背景）可以自由发挥，但**不得改变知识点对应的数据结构**。
 
 ## 题型限制（重要）
 - **只出「单方法函数题」**：`class Solution` 中只有一个需要实现的方法，传入输入、一次调用返回结果即完成判定。

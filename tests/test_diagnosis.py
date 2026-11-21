@@ -97,6 +97,15 @@ def _agent(cases, batches, *, optimal=_OPTIMAL, brute=_BRUTE):
 # ── diagnose ────────────────────────────────────────────────────
 
 
+def test_diagnose_topic_mismatch_is_static_and_skips_sandbox():
+    """topic=链表 但代码是数组题 → 静态阶段直接 TOPIC_MISMATCH，不跑沙箱。"""
+    agent = _agent([], [])
+    diag = diagnose(_draft(topic="链表"), agent)
+    assert not diag.passed
+    assert "TOPIC_MISMATCH" in diag.codes()
+    assert agent.sandbox.calls == 0
+
+
 def test_diagnose_passes_and_backfills_expected():
     agent = _agent([_TC0], [[RunnerResult(0, "Passed", "[0,1]")]])
     diag = diagnose(_draft(), agent)

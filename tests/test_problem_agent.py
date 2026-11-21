@@ -290,6 +290,72 @@ def test_verify_problem_rejects_empty_content():
         assert verify_problem(bad) is False
 
 
+def _array_problem_labeled_linked_list() -> dict:
+    return {
+        "title": "地铁换乘顺序去重生成",
+        "optimal_solution": (
+            "class Solution:\n"
+            "    def process(self, stations: List[List[str]]) -> List[str]:\n"
+            "        return []\n"
+        ),
+        "brute_solution": (
+            "class Solution:\n"
+            "    def process(self, stations: List[List[str]]) -> List[str]:\n"
+            "        return []\n"
+        ),
+        "description": "给定二维字符串列表，按顺序展开并去重，返回站点序列。",
+        "examples": ['Input: stations = [["A"]]\nOutput: ["A"]\n解释：只有一个站点。'],
+        "constraints": ["1 <= stations.length <= 10^5"],
+        "starter_code": (
+            "class Solution:\n"
+            "    def process(self, stations: List[List[str]]) -> List[str]:\n"
+            "        pass\n"
+        ),
+        "topic": "链表",
+    }
+
+
+def _real_linked_list_problem() -> dict:
+    return {
+        "title": "好友推荐流合并",
+        "optimal_solution": (
+            "class Solution:\n"
+            "    def merge(self, l1: 'ListNode', l2: 'ListNode') -> 'ListNode':\n"
+            "        return l1\n"
+        ),
+        "brute_solution": (
+            "class Solution:\n"
+            "    def merge(self, l1: 'ListNode', l2: 'ListNode') -> 'ListNode':\n"
+            "        return l1 if l1 else l2\n"
+        ),
+        "description": "给定两个升序单链表，合并为一个升序单链表并返回头节点。",
+        "examples": ["Input: l1 = [1], l2 = [2]\nOutput: [1,2]\n解释：合并后保持升序。"],
+        "constraints": ["0 <= 链表长度 <= 1000"],
+        "starter_code": (
+            "class ListNode:\n"
+            "    def __init__(self, val=0, next=None):\n"
+            "        self.val = val\n"
+            "        self.next = next\n\n"
+            "class Solution:\n"
+            "    def merge(self, l1: 'ListNode', l2: 'ListNode') -> 'ListNode':\n"
+            "        pass\n"
+        ),
+        "topic": "链表",
+    }
+
+
+def test_verify_problem_topic_gate_rejects_array_problem_for_linked_list():
+    """回归 2026-11-13：topic=链表 但实际是数组题，必须被题型守卫拒绝。"""
+    assert verify_problem(_array_problem_labeled_linked_list()) is True
+    assert verify_problem(
+        _array_problem_labeled_linked_list(), expected_topic="链表"
+    ) is False
+
+
+def test_verify_problem_topic_gate_accepts_real_linked_list():
+    assert verify_problem(_real_linked_list_problem(), expected_topic="链表") is True
+
+
 # ───────────────────────── _extract_code ─────────────────────────
 
 def test_extract_code_strips_fence():

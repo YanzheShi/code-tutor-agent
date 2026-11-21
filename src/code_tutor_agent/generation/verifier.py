@@ -1,15 +1,17 @@
-"""CodeVerifier — 出题验证器（四查，设计 §9）。
+"""CodeVerifier — 出题验证器（五查，设计 §9）。
 
 V1 节点对应物：前两项提炼自 ``agent_problem.verify_problem``（L125，十项检查），
-「无 CoT 泄漏」为新增第三项；「静态代码质量」为 2026-11-19 新增第四项。
+「无 CoT 泄漏」为新增第三项；「静态代码质量」为 2026-11-19 新增第四项；
+「题型与数据结构一致性」为 2026-11-21 新增第五项。
 
-四查：
+五查：
 1) 结构完整：title/description/starter_code/签名 非空 + class Solution
 2) 编译：``compile()``（与 verify_problem 现有检查一致，等价 py_compile）
 3) 静态代码质量（``guards.code_quality``）：入口方法无 return、注释占比过高
    —— 专治「输出被截断 / 用思考注释填满预算」的假合格题解
 4) 无 CoT 泄漏：扫描 description、examples（含解释）与参考解代码注释中的
    思考痕迹（中英文，口径集中在 guards.code_quality）
+5) 题型一致：链表题必须用 ListNode、树题必须用 TreeNode（``guards.topic_guard``）
 """
 
 from __future__ import annotations
@@ -24,12 +26,13 @@ from code_tutor_agent.guards.code_quality import (
     text_cot_issues,
 )
 from code_tutor_agent.guards.design_guard import is_design_style_code
+from code_tutor_agent.guards.topic_guard import topic_structure_issues
 
 logger = logging.getLogger(__name__)
 
 
 class CodeVerifier:
-    """对 ``ProblemDraft`` 做结构 / 编译 / 静态质量 / 无 CoT 四查。"""
+    """对 ``ProblemDraft`` 做结构 / 编译 / 静态质量 / 无 CoT / 题型一致五查。"""
 
     def verify(self, draft) -> tuple[bool, list[str]]:
         """返回 (是否通过, 问题列表)；不修改 draft。"""
@@ -38,6 +41,7 @@ class CodeVerifier:
         self._check_compiles(draft, issues)
         self._check_code_quality(draft, issues)
         self._check_no_cot(draft, issues)
+        self._check_topic_structure(draft, issues)
         return (not issues, issues)
 
     # ── 1) 结构完整 ──
@@ -88,3 +92,12 @@ class CodeVerifier:
             code = getattr(draft, field_name, "") or ""
             if code.strip():
                 issues.extend(code_cot_issues(code, field=field_name))
+
+    # ── 5) 题型与数据结构一致 ──
+    def _check_topic_structure(self, draft, issues: list[str]) -> None:
+        issues.extend(topic_structure_issues(
+            getattr(draft, "topic", "") or "",
+            starter_code=getattr(draft, "starter_code", "") or "",
+            function_signature=getattr(draft, "function_signature", "") or "",
+            optimal_solution=getattr(draft, "optimal_solution", "") or "",
+        ))

@@ -3,7 +3,7 @@
 覆盖新架构下关键 helper：
 * `ProblemGenerationAgent._build_sample_tests` — 解析示例 → 参考解自验证回填
   expected_output（原 `_self_verify_reference` + `_parse_examples_to_test_cases`）；
-* `CodeVerifier` — 三查（结构 / 编译 / 无 CoT 泄漏）。
+* `CodeVerifier` — 五查（结构 / 编译 / 静态质量 / 无 CoT 泄漏 / 题型一致）。
 """
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ class TestBuildSampleTests:
         assert agent._build_sample_tests(d) is None
 
 
-# ── CodeVerifier 三查 ──
+# ── CodeVerifier 五查 ──
 class TestCodeVerifier:
     def test_accepts_valid_draft(self):
         ok, issues = CodeVerifier().verify(_draft())
@@ -163,3 +163,45 @@ class TestCodeVerifier:
         )
         assert not ok
         assert any("注释含思维链痕迹" in i for i in issues)
+
+    def test_topic_mismatch_rejected(self):
+        """回归 2026-11-13：链表 topic 下出数组题必须被第五查拒绝。"""
+        d = _draft(
+            topic="链表",
+            starter_code=(
+                "class Solution:\n"
+                "    def f(self, nums: list[int]) -> int:\n"
+                "        pass\n"
+            ),
+            optimal_solution=(
+                "class Solution:\n"
+                "    def f(self, nums: list[int]) -> int:\n"
+                "        return 0\n"
+            ),
+            function_signature="nums: list[int] -> int",
+        )
+        ok, issues = CodeVerifier().verify(d)
+        assert not ok
+        assert any("题型跑偏" in i for i in issues)
+
+    def test_real_linked_list_draft_passes(self):
+        d = _draft(
+            topic="链表",
+            starter_code=(
+                "class ListNode:\n"
+                "    def __init__(self, val=0, next=None):\n"
+                "        self.val = val\n"
+                "        self.next = next\n\n"
+                "class Solution:\n"
+                "    def f(self, head: 'ListNode') -> 'ListNode':\n"
+                "        pass\n"
+            ),
+            optimal_solution=(
+                "class Solution:\n"
+                "    def f(self, head: 'ListNode') -> 'ListNode':\n"
+                "        return head\n"
+            ),
+            function_signature="head: 'ListNode' -> 'ListNode'",
+        )
+        ok, issues = CodeVerifier().verify(d)
+        assert ok, issues

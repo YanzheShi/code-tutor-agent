@@ -42,6 +42,7 @@ from code_tutor_agent.guards.code_quality import (
     text_cot_issues,
 )
 from code_tutor_agent.guards.design_guard import extract_main_classes, is_design_style_code
+from code_tutor_agent.guards.topic_guard import topic_structure_issues
 from code_tutor_agent.models.problem import Problem
 from code_tutor_agent.prompts.generate_problem import (
     GENERATE_PROBLEM_SYSTEM,
@@ -135,7 +136,7 @@ def _is_stub_solution(code: str) -> bool:
     return True
 
 
-def verify_problem(problem_dict: dict) -> bool:
+def verify_problem(problem_dict: dict, expected_topic: str | None = None) -> bool:
     """校验题目内容完整性 + optimal_solution 可编译、描述无思维链泄漏、starter_code 有效。
 
     会**原地**修正 problem_dict（去掉 ```python 围栏、必要时从 optimal_solution
@@ -143,6 +144,9 @@ def verify_problem(problem_dict: dict) -> bool:
 
     除代码层校验外，还校验内容已真正填写：标题/描述/示例/约束非空，且 optimal_solution
     不是仅含 ``pass`` 的桩——否则视为不合格，触发重试而非直接返回空题。
+
+    ``expected_topic`` 传入本次请求的知识点时，额外校验题型与数据结构一致
+    （链表题必须用 ListNode、树题必须用 TreeNode），防止模型只改 topic 标签换结构。
     """
     logger.info("▶ verify_problem() — checking optimal_solution compiles")
 
@@ -285,6 +289,19 @@ def verify_problem(problem_dict: dict) -> bool:
         else:
             logger.warning("Could not parse method from optimal_solution — keeping as-is")
 
+    # 题型一致性：模型只把 topic 填成「链表」、实际出数组题的情况必须在这里拦下。
+    if expected_topic:
+        topic_issues = topic_structure_issues(
+            expected_topic,
+            starter_code=problem_dict.get("starter_code", ""),
+            function_signature=problem_dict.get("function_signature", ""),
+            optimal_solution=optimal,
+        )
+        for issue in topic_issues:
+            logger.warning("Topic-structure gate rejected — %s", issue)
+        if topic_issues:
+            return False
+
     return True
 
 
@@ -294,6 +311,7 @@ def generate_problem(
     purpose: str = "problem",
     max_retries: int =2,
     user_suffix: str | None = None,
+    expected_topic: str | None = None,
 ) -> Problem:
     """（主通道）调用 LLM 结构化生成一道题，返回 ``Problem`` 对象。
 
@@ -312,8 +330,11 @@ def generate_problem(
     user_suffix: 可选注入文本，追加到 USER prompt 末尾（如方案 H 的
         F/G 随机二选一注入段）。调用方须确保其中花括号已转义为 ``{{ }}``，
         以免与 ``{topic}`` / ``{difficulty}`` 占位符冲突。
+    expected_topic: 题型校验用的原始知识点。``topic`` 可能是归一化后的长描述
+        （如「堆」→ 含「完全二叉树」），用它做题型判断会误伤；缺省时退回 ``topic``。
     """
     logger.info("▶ generate_problem() — topic=%s difficulty=%s", topic, difficulty)
+    check_topic = expected_topic or topic
     # 输出预算由 purpose="problem" 统一配置（当前 8192；网关上限由 config.get_llm
     # 按静态表/运行期学习结果自动钳制并在日志里告警一次）。
     llm = get_llm(purpose=purpose)
@@ -345,7 +366,7 @@ def generate_problem(
         problem_dict = problem.model_dump()
 
         # 校验题目的完整性, 给出的暴力解和最优解能否编译
-        if verify_problem(problem_dict):
+        if verify_problem(problem_dict, expected_topic=check_topic):
             # 日志：打印 LLM 出题完整内容，方便调试
             logger.info(
                 "LLM generate_problem OK — title=%s | topic=%s | diff=%s | "
@@ -370,7 +391,7 @@ def generate_problem(
         # 可用 CTA_GEN_COT_STRIP=0 关闭。
         if os.getenv("CTA_GEN_COT_STRIP", "1").strip().lower() not in ("0", "false", "no", "off"):
             cleaned, removed = strip_cot_comments_in_dict(problem_dict)
-            if cleaned and verify_problem(problem_dict):
+            if cleaned and verify_problem(problem_dict, expected_topic=check_topic):
                 logger.warning(
                     "CoT comments stripped (%d lines) — problem accepted without LLM retry",
                     removed,

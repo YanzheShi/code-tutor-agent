@@ -37,6 +37,7 @@ _STATIC_RULES: tuple[tuple[str, str, Severity, tuple[str, ...]], ...] = (
     ("没有任何 return", "CODE_TRUNCATED", "fatal", ()),
     ("注释占比", "CODE_TRUNCATED", "fatal", ()),
     ("是设计类", "DESIGN_STYLE", "fatal", ()),
+    ("题型跑偏", "TOPIC_MISMATCH", "fatal", ()),
     ("语法错误", "COMPILE_ERROR", "blocking", ("optimal_solution", "brute_solution", "starter_code")),
     ("optimal_solution 为空", "REFERENCE_MISSING", "fatal", ()),
     ("title 为空", "STRUCT_MISSING_FIELD", "fatal", ()),

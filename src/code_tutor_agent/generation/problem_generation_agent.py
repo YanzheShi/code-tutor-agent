@@ -54,6 +54,7 @@ from code_tutor_agent.generation.state import (
 from code_tutor_agent.generation.trace import record_gen_trace
 from code_tutor_agent.generation.verifier import CodeVerifier
 from code_tutor_agent.guards.code_quality import strip_cot_comments
+from code_tutor_agent.guards.topic_guard import required_struct_for_topic
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +64,25 @@ MAX_RETRIES = 3
 # 不一致」（2026-09-23 实测：描述要求「升序重排」、示例却给原序，参考解按描述实现
 # → 首条示例即 WA，整题作废）。把失败信号回灌进 prompt，让第二次尝试有针对性修正。
 _SELFCHECK_RETRY_HINT = (
-    "\n\n[重试] 你上一轮生成的题目未通过系统自洽校验（系统真的把 optimal_solution "
-    "跑在了 examples 上）。这次务必做到："
+    "\n\n[重试] 你上一轮生成的题目未通过系统校验（示例自洽 / 题型与数据结构一致性）。"
+    "这次务必做到："
     "①每个示例的 Output 与你给出的 optimal_solution 在该 Input 下的真实输出完全一致；"
     "②description 里的规则必须能唯一推出示例的 Output，推不出来就改描述，不要改示例；"
     "③optimal_solution 与 brute_solution 各自只含一个 class Solution。"
 )
+
+
+def _selfcheck_retry_hint(topic: str) -> str:
+    """通用重试提示；指针类知识点再追加一条题型约束（2026-11-13 偏题事故）。"""
+    required = required_struct_for_topic(topic)
+    if not required:
+        return _SELFCHECK_RETRY_HINT
+    return _SELFCHECK_RETRY_HINT + (
+        f"④本轮知识点是「{topic}」：题目必须使用 {required} 作为输入/输出，"
+        f"starter_code 必须包含 {required}，optimal_solution / brute_solution "
+        f"必须操作其指针字段；只把 topic 字段写成「{topic}」不算，"
+        "禁止改用数组/列表替代。"
+    )
 
 # 参考解在这些状态下说明 input 本身有问题（或参考解崩了），该用例应丢弃。
 # 注意 WA（detail 为 "expected=… got=…" 对拍文案）也绝不能当期望落库。
@@ -168,7 +182,7 @@ class ProblemGenerationAgent:
                 # 光靠简单重试，模型会以同样的方式再错一遍；带上失败信号才有修正方向。
                 draft = self._generate_draft(
                     ctx, sink,
-                    retry_hint=_SELFCHECK_RETRY_HINT if _attempt else None,
+                    retry_hint=_selfcheck_retry_hint(ctx.topic) if _attempt else None,
                 )
                 if draft is None:
                     record_gen_trace({
