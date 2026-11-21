@@ -22,6 +22,7 @@ import re
 
 from code_tutor_agent.generation.problem_generation_agent import ProblemGenerationAgent
 from code_tutor_agent.generation.state import GenEvent, ProgressSink
+from code_tutor_agent.sandbox.input_generator import check_length_relations
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ def _generate_random_cases(
     random_inputs: list,
     char_domain: str | None,
     problem_id: int,
+    constraints: list[str] | None = None,
 ) -> tuple[list[dict], int]:
     """随机生成分支：对沙箱随机输入逐个对齐签名并验证，返回 ``(用例列表, 交叉丢弃数)``。"""
     sink.event(GenEvent("progress", f"🔧 正在运行参考解验证 {len(random_inputs)} 个用例..."))
@@ -195,6 +197,13 @@ def _generate_random_cases(
             dropped_domain += 1
             logger.warning(
                 "Random case input out of problem domain, dropping (pid=%d idx=%d) %s",
+                problem_id, idx, inp,
+            )
+            continue
+        if func_sig and not check_length_relations(func_sig, inp, constraints):
+            dropped_domain += 1
+            logger.warning(
+                "Random case violates cross-param length relation, dropping (pid=%d idx=%d) %s",
                 problem_id, idx, inp,
             )
             continue
@@ -247,6 +256,7 @@ def _generate_llm_boundary_cases(
     random_visible_examples: list,
     char_domain: str | None,
     problem_id: int,
+    constraints: list[str] | None = None,
 ) -> tuple[list[dict], int]:
     """LM 生成分支：调用 LLM 生成边界用例并逐个验证，返回 ``(用例列表, 交叉丢弃数)``。"""
     sink.event(GenEvent("progress", "🤖 正在生成边界测试用例..."))
@@ -278,6 +288,14 @@ def _generate_llm_boundary_cases(
             ):
                 logger.warning(
                     "Boundary case input out of problem domain, dropping: %s",
+                    bc.get("explanation", ""),
+                )
+                continue
+            if func_sig and not check_length_relations(
+                func_sig, bc.get("input_args") or [], constraints
+            ):
+                logger.warning(
+                    "Boundary case violates cross-param length relation, dropping: %s",
                     bc.get("explanation", ""),
                 )
                 continue
@@ -422,6 +440,7 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
         use_cross_validation=use_cross_validation,
         optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
         random_inputs=random_inputs, char_domain=char_domain, problem_id=problem_id,
+        constraints=constraints,
     )
 
     # ── LM 生成分支（边界用例）──
@@ -432,6 +451,7 @@ def build_suite(agent: ProblemGenerationAgent, problem_id: int, sink: ProgressSi
         optimal_code=optimal_code, brute_code=brute_code, ref_code=ref_code,
         full=full, random_visible_examples=random_cases[:4],
         char_domain=char_domain, problem_id=problem_id,
+        constraints=constraints,
     )
 
     # ── 既有可见用例校验 ──

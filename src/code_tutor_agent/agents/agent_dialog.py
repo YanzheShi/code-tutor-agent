@@ -60,7 +60,7 @@ class DialogIntent(BaseModel):
     topic: str = Field(default="", description="确定的知识点")
     difficulty: str = Field(default="", description="easy/medium/hard")
     is_ready: bool = Field(default=False, description="是否可以出题了")
-    is_random: bool = Field(default=False, description="用户是否让 AI 随机选题（topic/难度由 AI 决定，不向用户透露）")
+    is_random: bool = Field(default=False, description="是否有维度由 AI 随机决定（具体维度由用户消息中的显式 topic/难度推断）")
     next_message: str = Field(default="", description="给用户的下一轮消息")
     # —— 工具调用扩展（由 agent 工具循环填充，LLM 结构化输出不会生成这些）——
     source: Literal["generated", "leetcode"] = Field(default="generated", description="题目来源")
@@ -87,6 +87,7 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
     * 如果用户已经 2 轮以上表示无偏好，不要再追问！直接从用户画像弱项中选一个 topic，难度默认 medium，标记 is_ready=true 和 is_random=true
   - 用户说 "出题吧" 或 "给我出题" → 若 topic 已明确则追问难度，若 topic+难度都明确则 is_ready=true
   - 用户明确说 "随机来一道"、"随便都行"、"由你决定" 等（topic/难度都交给 AI 决定）→ 直接选好 topic 和难度，is_ready=true 且 is_random=true
+  - 用户只让**一个维度**随机（如 "主题随机，中等难度" / "滑动窗口，难度随意"）→ 只把该维度交给 AI，另一个维度用用户给的值；is_ready=true 且 is_random=true（但文案不得把用户指定的维度说成随机）
   - 用户 topic 明确后 → 追问难度："你想从 Easy 开始热身，还是直接挑战 Medium？"
   - 用户说 "难度无所谓" → 难度设为 medium，话题已明确则直接标记 is_ready=true
   - 用户主动指定 topic 和 difficulty（如 "简单动态规划"、"中等难度的数组题"）→ 直接设置 is_ready=true
@@ -105,10 +106,12 @@ AGENT_DIALOG_SYSTEM = """你是 AI 编程导师的对话助手。你的任务是
 - 用户把 topic 和难度都交给 AI 决定（"随机出题"、"你决定"）→ is_ready=true 且 is_random=true
 
 ## is_random=true 时的文案规则
-- 不要向用户透露你选的 topic 和难度！出题确认文案固定为：
-  "好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀"
-- 这是保留惊喜感的关键场景：topic 和 difficulty 字段照常填写实际选择（供后端出题），
-  但 next_message 只输出上述固定文案，绝不包含具体方向或难度。
+- `is_random` 表示「至少一个维度由 AI 决定」，**不代表两个维度都随机**。
+- 用户只让某个维度随机时，另一个维度必须原样保留，文案也不能把它改成随机：
+  - 随机方向 + 显式难度："好的！我来为你准备一道 **随机方向**、**中等** 的题。请稍等，马上就好 🚀"
+  - 显式方向 + 随机难度："好的！我来为你准备一道 **滑动窗口** 方向、**随机难度** 的题。请稍等，马上就好 🚀"
+  - 两个都随机："好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀"
+- 只隐藏 AI 自己选的随机维度；用户明确给出的 topic/难度必须原样保留。
 
 ## LeetCode 链接处理
 - 只要用户消息里出现 LeetCode 链接（leetcode.com 或 leetcode.cn 的 /problems/xxx），即视为用户想做这道具体题。
@@ -353,6 +356,21 @@ def _detect_explicit_request(message: str) -> tuple[str, str]:
     return topic, diff
 
 
+def explicit_request_for_message(message: str) -> tuple[str, str]:
+    """公开别名：路由层做「显式 topic/难度」确定性补强用。"""
+    return _detect_explicit_request(message)
+
+
+def random_scope_for_message(message: str) -> tuple[bool, bool]:
+    """is_random=True 时，推断 topic/difficulty 各自是否真的随机。
+
+    用户显式给了某个维度，就不允许把它当随机（2026-11-21 文案事故：
+    "主题随机，中等难度" 被回成 "随机方向、随机难度"）。
+    """
+    topic_hit, diff_hit = _detect_explicit_request(message)
+    return (not bool(topic_hit), not bool(diff_hit))
+
+
 def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogIntent:
     """Fallback when structured output fails: raw LLM call with manual JSON parse.
 
@@ -376,7 +394,7 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
             '{"topic": "知识点或空", "difficulty": "easy/medium/hard或空", "is_ready": false, "is_random": false, "next_message": "你的回复"}\n\n'
             "规则：\n"
             '- 若用户说了具体方向（数组/链表/动态规划/二叉树等），topic 填入该方向\n'
-            '- 若用户说"随便/随机/你决定"（不指定 topic 和难度），topic 和 difficulty 由你直接选定并填入，is_ready=true，is_random=true，且 next_message 只能写"好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀"，不得透露你选的 topic 和难度\n'
+            '- 若用户说"随便/随机/你决定"：把未指定的维度交给 AI，已指定的维度原样保留；is_ready=true，is_random=true（仅当确有维度交给 AI），next_message 不透露随机维度，但必须保留用户指定的 topic/难度\n'
             '- 若用户没有明确 topic，topic 留空 ，引导追问\n'
             '- 若 topic + difficulty 都明确，is_ready=true\n'
             '- next_message 是给用户的自然语言回复\n'
@@ -427,16 +445,22 @@ def _fallback_parse_intent(transcript: str, profile_summary: str) -> DialogInten
                 next_message=f"明白了，你想练习 **{found_topic}** 方向！你想从 Easy（简单）开始热身，还是直接挑战 Medium（中等）？",
             )
 
-    # 兜底：用户把选题和难度都交给 AI（"随机/随便/你决定"）
+    # 兜底：用户把选题和/或难度交给 AI（"随机/随便/你决定"）
     if any(w in last_user_msg for w in ["随机", "随便", "都行", "你决定", "你来定", "由你"]):
-        topic = _pick_auto_topic(profile_summary)
-        diff = "medium"
+        topic_hit, diff_hit = _detect_explicit_request(last_user_msg)
+        topic = topic_hit or _pick_auto_topic(profile_summary)
+        diff = diff_hit or "medium"
+        topic_random = not bool(topic_hit)
+        difficulty_random = not bool(diff_hit)
         return DialogIntent(
             topic=topic,
             difficulty=diff,
             is_ready=True,
-            is_random=True,
-            next_message="好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀",
+            is_random=bool(topic_random or difficulty_random),
+            next_message=build_ready_message(
+                topic, diff,
+                topic_random=topic_random, difficulty_random=difficulty_random,
+            ).content,
         )
 
     logger.warning("All fallback methods failed — returning generic prompt")
@@ -604,6 +628,27 @@ async def analyze_user_intent(
         intent.next_message = design_dialog_refusal(intent.topic or "")
         return intent
 
+    # ── 随机维度补强：用户显式给了某个维度，就不允许把它标成随机 ──
+    # 2026-11-21 事故："主题随机，中等难度" 被回成 "随机方向、随机难度"。
+    _topic_hit, _diff_hit = _detect_explicit_request(_last_user_text)
+    _wants_random = any(
+        w in _last_user_text
+        for w in ("随机", "随便", "都行", "你决定", "你来定", "由你", "随意")
+    )
+    if _topic_hit:
+        intent.topic = _topic_hit
+    if _diff_hit:
+        intent.difficulty = _diff_hit
+    if _topic_hit and _diff_hit:
+        intent.is_random = False
+    elif _wants_random:
+        intent.is_random = True
+    if _topic_hit or _diff_hit:
+        logger.info(
+            "explicit request guard — topic=%r diff=%r is_random=%s",
+            intent.topic, intent.difficulty, intent.is_random,
+        )
+
     # ── 正向兜底：用户一句话显式给了 topic+难度 → 强制 is_ready=True ──
     # 契约（prompt 第 90 行）本就是"用户主动指定 topic 和 difficulty → is_ready=true"，
     # 但弱模型偶发自相矛盾：next_message 嘴上说"马上出题 🚀"，is_ready 却填 false，
@@ -611,7 +656,6 @@ async def analyze_user_intent(
     # 此处在设计围栏之后做确定性补强：非设计题 + 显式双要素 → 直接推进出题。
     # 注意顺序：设计围栏在上面已 return，这里不会再把设计题放行。
     if not intent.is_ready and not intent.is_random:
-        _topic_hit, _diff_hit = _detect_explicit_request(_last_user_text)
         if _topic_hit and _diff_hit:
             logger.info(
                 "explicit topic+difficulty detected (user=%r topic=%r diff=%s) — forcing is_ready=True",
@@ -706,10 +750,20 @@ def build_initial_message(user_id: str = "default") -> Message:
     )
 
 
-def build_ready_message(topic: str, difficulty: str) -> Message:
+def build_ready_message(
+    topic: str,
+    difficulty: str,
+    *,
+    topic_random: bool = False,
+    difficulty_random: bool = False,
+) -> Message:
+    """生成出题确认文案；只把真正随机的维度写成「随机」。"""
     diff_label = {"easy": "简单", "medium": "中等", "hard": "困难"}.get(difficulty, difficulty)
+    topic_text = "**随机方向**" if topic_random else f"**{topic}** 方向"
+    diff_text = "**随机难度**" if difficulty_random else f"**{diff_label}** 难度"
+    suffix = " 的题" if difficulty_random else "的题"
     return Message(
         role="tutor",
-        content=f"好的！我来为你准备一道 **{topic}** 方向、**{diff_label}** 难度的题。"
+        content=f"好的！我来为你准备一道 {topic_text}、{diff_text}{suffix}。"
                 "请稍等，马上就好 🚀",
     )

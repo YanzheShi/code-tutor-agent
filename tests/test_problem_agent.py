@@ -26,6 +26,7 @@ from code_tutor_agent.agents.agent_problem import (
     _flat_to_problem,
     generate_detailed_solution,
     generate_problem,
+    sanitize_generated_title,
     verify_problem,
 )
 from code_tutor_agent.models.problem import Problem
@@ -354,6 +355,20 @@ def test_verify_problem_topic_gate_rejects_array_problem_for_linked_list():
 
 def test_verify_problem_topic_gate_accepts_real_linked_list():
     assert verify_problem(_real_linked_list_problem(), expected_topic="链表") is True
+
+
+def test_sanitize_generated_title_strips_lc_prefix():
+    assert sanitize_generated_title("88. 寻找重复子串") == "寻找重复子串"
+    assert sanitize_generated_title("LeetCode 438. Find All Anagrams") == "Find All Anagrams"
+    assert sanitize_generated_title("力扣 88、寻找重复子串") == "寻找重复子串"
+    assert sanitize_generated_title("合并两个有序数组") == "合并两个有序数组"
+
+
+def test_verify_problem_sanitizes_generated_title():
+    d = _real_linked_list_problem()
+    d["title"] = "88. 好友推荐流合并"
+    assert verify_problem(d, expected_topic="链表") is True
+    assert d["title"] == "好友推荐流合并"
 
 
 # ───────────────────────── _extract_code ─────────────────────────

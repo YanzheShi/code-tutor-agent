@@ -94,6 +94,19 @@ def _extract_code(solution_text: str) -> str:
 _STRUCT_TOPIC_KEYWORDS = ("tree", "二叉树", "graph", "图", "linked", "链表")
 _STRUCT_CLASS_NAMES = ("TreeNode", "ListNode", "GraphNode")
 
+# 模型给原创题编造 LeetCode 题号前缀（2026-11-21："88. 寻找重复子串"）。
+_LC_TITLE_PREFIX_RE = re.compile(
+    r"^\s*(?:(?:LeetCode|力扣|LC)\s*[:：-]?\s*)?\d{1,4}\s*[.、:：]\s*",
+    re.IGNORECASE,
+)
+
+
+def sanitize_generated_title(title: str) -> str:
+    """去掉原创题的 LeetCode 题号前缀；清洗后为空则保留原标题。"""
+    raw = (title or "").strip()
+    cleaned = _LC_TITLE_PREFIX_RE.sub("", raw).strip()
+    return cleaned or raw
+
 
 def _strip_unrelated_structs(starter_code: str, topic: str) -> str:
     """若题目不属于树/图/链表题型，移除 starter_code 中多余的 TreeNode/ListNode/GraphNode 定义。"""
@@ -151,10 +164,14 @@ def verify_problem(problem_dict: dict, expected_topic: str | None = None) -> boo
     logger.info("▶ verify_problem() — checking optimal_solution compiles")
 
     # 内容完整性：标题 / 描述 / 示例 / 约束 必须真填了
-    title = (problem_dict.get("title") or "").strip()
+    raw_title = (problem_dict.get("title") or "").strip()
+    title = sanitize_generated_title(raw_title)
     if not title:
         logger.warning("title is empty — rejecting")
         return False
+    if title != raw_title:
+        logger.info("Sanitized generated title: %r -> %r", raw_title, title)
+    problem_dict["title"] = title
     desc = (problem_dict.get("description") or "").strip()
     if len(desc) < 10:
         logger.warning("description too short/empty — rejecting")

@@ -20,13 +20,15 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from code_tutor_agent.generation.suite import _generate_random_cases, _verify_visible_cases
 from code_tutor_agent.generation.state import NullSink
+from code_tutor_agent.generation.suite import _generate_random_cases, _verify_visible_cases
 from code_tutor_agent.sandbox.input_generator import (
     check_input_domain,
-    infer_char_domain,
-    parse_signature,
+    check_length_relations,
     generate_random_inputs,
+    infer_char_domain,
+    parse_length_relations,
+    parse_signature,
     sanitize_test_case,
 )
 
@@ -159,6 +161,37 @@ def test_sorted_hint_problem_keeps_str_quoting():
 
 
 # ──────────────────────────────────────────────
+# 2.5) 跨参数长度关系：p.length <= s.length
+# ──────────────────────────────────────────────
+
+def test_parse_length_relations():
+    assert parse_length_relations(["1 <= p.length <= s.length <= 10^4"]) == [
+        ("p", "<=", "s"),
+    ]
+    assert parse_length_relations(["s.length >= p.length"]) == [("s", ">=", "p")]
+    assert parse_length_relations(["1 <= nums.length <= 10^5"]) == []
+
+
+def test_check_length_relations():
+    sig = "s: str, p: str -> List[int]"
+    cons = ["1 <= p.length <= s.length <= 10^4"]
+    assert check_length_relations(sig, ['"abc"', '"ab"'], cons) is True
+    assert check_length_relations(sig, ['"abc"', '"abcd"'], cons) is False
+    assert check_length_relations(sig, ['"abc"', '"abcd"'], None) is True
+
+
+def test_generate_random_inputs_respects_length_relations():
+    sig = "s: str, p: str -> List[int]"
+    cons = ["1 <= p.length <= s.length <= 10^4", "s 和 p 只包含小写字母"]
+    outs = generate_random_inputs(sig, count=30, constraints=cons, seed=7)
+    assert outs
+    for args in outs:
+        s = json.loads(args[0])
+        p = json.loads(args[1])
+        assert 1 <= len(p) <= len(s), args
+
+
+# ──────────────────────────────────────────────
 # 4) 生成编排层：域校验先于参考解验证；退化套件不占可见槽位
 # ──────────────────────────────────────────────
 
@@ -187,13 +220,16 @@ class _FakeSandbox:
         return [SimpleNamespace(status="Skipped", detail=detail)]
 
 
-def _run_random_branch(sandbox, *, func_sig, random_inputs, char_domain=None):
+def _run_random_branch(
+    sandbox, *, func_sig, random_inputs, char_domain=None, constraints=None,
+):
     agent = SimpleNamespace(sandbox=sandbox)
     cases, _ = _generate_random_cases(
         agent, NullSink(),
         func_sig=func_sig, sort_inputs=False, use_cross_validation=False,
         optimal_code="x", brute_code="", ref_code="x",
         random_inputs=random_inputs, char_domain=char_domain, problem_id=179,
+        constraints=constraints,
     )
     return cases
 
@@ -210,6 +246,20 @@ def test_random_branch_drops_out_of_domain_input_before_running_reference():
     )
     assert [c["input_args"] for c in cases] == [["[3,9,20]"]], cases
     assert sb.ran == [["[3,9,20]"]], "域外输入不应触发参考解执行"
+
+
+def test_random_branch_drops_cross_param_violation():
+    """p 比 s 长的输入违反题面约束，必须在跑参考解前丢弃。"""
+    sig = "s: str, p: str -> List[int]"
+    cons = ["1 <= p.length <= s.length <= 10^4"]
+    sb = _FakeSandbox({json.dumps(['"abcd"', '"abc"']): "[0]"})
+    cases = _run_random_branch(
+        sb, func_sig=sig,
+        random_inputs=[['"abc"', '"abcd"'], ['"abcd"', '"abc"']],
+        constraints=cons,
+    )
+    assert [c["input_args"] for c in cases] == [['"abcd"', '"abc"']], cases
+    assert sb.ran == [['"abcd"', '"abc"']], "越界输入不应触发参考解执行"
 
 
 def test_random_branch_hides_degenerate_expected_outputs():

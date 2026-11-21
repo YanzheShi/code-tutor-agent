@@ -18,6 +18,7 @@ import re
 
 from code_tutor_agent.generation.diagnosis import Defect
 from code_tutor_agent.generation.state import ProblemDraft
+from code_tutor_agent.sandbox.input_generator import check_length_relations
 
 _OK_STATUSES = {"Passed", "Skipped"}
 _MAX_RANDOM = 4
@@ -91,6 +92,10 @@ def _domain_defects(agent, draft: ProblemDraft, cases: list[dict]) -> list[Defec
             ok = check(signature, case.get("input_args") or [], None)
         except Exception:  # noqa: BLE001
             ok = True
+        if ok:
+            ok = check_length_relations(
+                signature, case.get("input_args") or [], draft.constraints,
+            )
         if not ok:
             defects.append(Defect(
                 code="EXAMPLE_INPUT_OUT_OF_DOMAIN",

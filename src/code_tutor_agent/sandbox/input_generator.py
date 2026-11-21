@@ -412,8 +412,9 @@ def _generate_param_value(
             min_val if min_val is not None else -1000,
             max_val if max_val is not None else 1000,
         )
-    if type_str == "str" and char_domain:
-        return _random_str(alphabet=char_domain)
+    if type_str == "str":
+        _max_len = max(1, max_len) if max_len is not None else 8
+        return _random_str(max_len=_max_len, alphabet=char_domain)
     gen = _TYPE_GENERATORS.get(type_str)
     if gen:
         return gen()
@@ -424,6 +425,58 @@ def _generate_param_value(
         min_val if min_val is not None else -1000,
         max_val if max_val is not None else 1000,
     )
+
+
+_LEN_REL_RE = re.compile(
+    r"(\w+)\.length\s*(<=|>=|<|>)\s*(\w+)\.length"
+)
+
+
+def parse_length_relations(constraints: list[str] | None) -> list[tuple[str, str, str]]:
+    """解析 ``a.length <= b.length`` 这类跨参数长度关系。"""
+    relations: list[tuple[str, str, str]] = []
+    for text in constraints or []:
+        for match in _LEN_REL_RE.finditer(text or ""):
+            relations.append((match.group(1), match.group(2), match.group(3)))
+    return relations
+
+
+def _length_of(value) -> int | None:
+    if isinstance(value, (str, list, tuple)):
+        return len(value)
+    return None
+
+
+def _compare_length(left: int, op: str, right: int) -> bool:
+    if op == "<=":
+        return left <= right
+    if op == "<":
+        return left < right
+    if op == ">=":
+        return left >= right
+    return left > right
+
+
+def _relation_max_len(
+    name: str,
+    generated: dict[str, str],
+    relations: list[tuple[str, str, str]],
+    default_max: int | None,
+) -> int | None:
+    """根据已生成参数的长度，收紧当前参数的长度上限。"""
+    cap = default_max
+    for left, op, right in relations:
+        if left == name and right in generated and op in ("<=", "<"):
+            right_len = _length_of(parse_arg_value(generated[right]))
+            if right_len is not None:
+                limit = right_len if op == "<=" else right_len - 1
+                cap = limit if cap is None else min(cap, limit)
+        elif right == name and left in generated and op in (">=", ">"):
+            left_len = _length_of(parse_arg_value(generated[left]))
+            if left_len is not None:
+                limit = left_len if op == ">=" else left_len - 1
+                cap = limit if cap is None else min(cap, limit)
+    return cap
 
 
 def generate_random_inputs(
@@ -468,6 +521,7 @@ def generate_random_inputs(
     if not params:
         logger.warning("Empty params from sig '%s', returning empty", function_sig)
         return []
+    length_relations = parse_length_relations(constraints)
 
     # 综合 constraints + description 判断是否为「有序输入」类题目。
     sort_inputs = _needs_sorted_inputs(*(constraints or []), description or "")
@@ -485,10 +539,14 @@ def generate_random_inputs(
     results = []
     for i in range(count):
         args = []
+        generated: dict[str, str] = {}
         prev_type = None
         prev_val = None
         for name, type_str in params:
             t = type_str.strip()
+            _param_max_len = _relation_max_len(
+                name, generated, length_relations, _parsed_max_len,
+            )
             # 位置/倒数索引类参数（如「倒数第 k 个」的 k）：若前一个参数是
             # 结构类型（链表/树），则把 k 约束在 [1, len(结构)]，避免生成非法负值。
             if t == "int" and prev_type and _is_struct_type(prev_type) and prev_val:
@@ -516,9 +574,10 @@ def generate_random_inputs(
                 _rmin = _parsed_min_val if _is_int_like else None
                 _rmax = _parsed_max_val if _is_int_like else None
                 val = _generate_param_value(
-                    type_str, _rmin, _rmax, _parsed_min_len, _parsed_max_len, char_domain,
+                    type_str, _rmin, _rmax, _parsed_min_len, _param_max_len, char_domain,
                 )
             args.append(val)
+            generated[name] = val
             prev_type = t
             prev_val = val
         # 有序类题目：对 List[int] 输入的「真实元素」升序排序（方案 B）。
@@ -576,6 +635,36 @@ def check_input_domain(func_sig: str, input_args: list, char_domain: str | None 
         elif t == "str" and char_domain:
             if not isinstance(value, str) or not set(value) <= set(char_domain):
                 return False
+    return True
+
+
+def check_length_relations(
+    func_sig: str, input_args: list, constraints: list[str] | None,
+) -> bool:
+    """校验 ``a.length <op> b.length`` 这类跨参数长度约束（2026-11-21）。
+
+    典型：``1 <= p.length <= s.length <= 10^4``。单参数域校验拦不住
+    ``p`` 比 ``s`` 长的随机输入，必须单独按关系校验。
+    """
+    relations = parse_length_relations(constraints)
+    if not relations:
+        return True
+    params, _ = parse_signature(func_sig)
+    if len(input_args) != len(params):
+        return False
+    values: dict[str, object] = {}
+    for (name, _), raw in zip(params, input_args):
+        value = raw if not isinstance(raw, str) else parse_arg_value(raw)
+        if value is _UNPARSEABLE:
+            return False
+        values[name] = value
+    for left, op, right in relations:
+        left_len = _length_of(values.get(left))
+        right_len = _length_of(values.get(right))
+        if left_len is not None and right_len is not None and not _compare_length(
+            left_len, op, right_len
+        ):
+            return False
     return True
 
 

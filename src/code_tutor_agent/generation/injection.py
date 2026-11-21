@@ -126,8 +126,13 @@ def build_g_suffix(rng: random.Random, topic: str) -> Optional[str]:
     desc = dim.get("description", "")
     ex = dim.get("example_directions", [])
     if isinstance(ex, list) and ex:
-        ex_lines = "\n".join(f"    · {e}" for e in ex)
-        ex_block = f"  可参考的具体方向：\n{ex_lines}\n"
+        # 只注入一个方向：整段注入 N 条会让模型试图综合多条（2026-11-21：
+        # 滑动窗口 8 条方向 → 8192 token 截断），也会放大经典原题命中率。
+        direction = rng.choice(ex)
+        ex_block = (
+            "  本次只围绕下面这一个具体方向设计，不要综合其他方向：\n"
+            f"    · {direction}\n"
+        )
     else:
         ex_block = ""
     return (

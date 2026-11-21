@@ -69,6 +69,8 @@ _SELFCHECK_RETRY_HINT = (
     "①每个示例的 Output 与你给出的 optimal_solution 在该 Input 下的真实输出完全一致；"
     "②description 里的规则必须能唯一推出示例的 Output，推不出来就改描述，不要改示例；"
     "③optimal_solution 与 brute_solution 各自只含一个 class Solution。"
+    "④输出预算：examples 最多 2 个，alternative_solutions 给 []，description ≤ 300 字；"
+    "若上一轮因超长被截断，本轮只输出必要字段，不要写推导/候选题目。"
 )
 
 
@@ -78,7 +80,7 @@ def _selfcheck_retry_hint(topic: str) -> str:
     if not required:
         return _SELFCHECK_RETRY_HINT
     return _SELFCHECK_RETRY_HINT + (
-        f"④本轮知识点是「{topic}」：题目必须使用 {required} 作为输入/输出，"
+        f"⑤本轮知识点是「{topic}」：题目必须使用 {required} 作为输入/输出，"
         f"starter_code 必须包含 {required}，optimal_solution / brute_solution "
         f"必须操作其指针字段；只把 topic 字段写成「{topic}」不算，"
         "禁止改用数组/列表替代。"

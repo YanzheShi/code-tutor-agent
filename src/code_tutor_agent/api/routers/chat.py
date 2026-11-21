@@ -374,6 +374,8 @@ def _handle_agent_dialog_stream(
         DialogIntent,
         analyze_user_intent,
         build_ready_message,
+        explicit_request_for_message,
+        random_scope_for_message,
     )
 
     raw_history = values.get("agent_dialog_history", [])
@@ -431,8 +433,14 @@ def _handle_agent_dialog_stream(
             _explicit_generate_signals(message) or _explicit_random_signals(message)
         ):
             intent.is_ready = True
-            # topic 与 difficulty 都缺失 → 用户把选择权交给 AI，走随机路径（保留惊喜感）
-            if not intent.topic and not intent.difficulty:
+            # 用户显式给了维度就采用，不能把它当随机（2026-11-21 文案事故）
+            topic_hit, diff_hit = explicit_request_for_message(message)
+            if topic_hit:
+                intent.topic = topic_hit
+            if diff_hit:
+                intent.difficulty = diff_hit
+            # 任一维度缺失 → 用户把该维度交给 AI，走随机路径（保留惊喜感）
+            if not intent.topic or not intent.difficulty:
                 intent.is_random = True
             logger.info(
                 "intent 兜底强制 is_ready=True（关键词命中，原 is_ready=False）"
@@ -461,17 +469,15 @@ def _handle_agent_dialog_stream(
                 # LeetCode 导入：用意图确认文案，避免误显「数组 方向、简单 难度」
                 # （intent.topic/difficulty 对 leetcode 来源本就为空，硬填会误导）
                 ready_msg = Message(role="tutor", content=intent.next_message)
-            elif intent.is_random:
-                # 随机出题：不向用户透露真实 topic/难度，保留惊喜感；
-                # topic/difficulty 仍写入 state，供后端按实际选择出题
-                ready_msg = Message(
-                    role="tutor",
-                    content="好的！我来为你准备一道 **随机方向**、**随机难度** 的题。请稍等，马上就好 🚀",
-                )
             else:
-                # 收尾回复固定为「正在生成题目」提示，不再让自由模型临场发挥
-                # 说出「题目信息遗漏」这类错位文案（对话衔接修复-1）
-                ready_msg = build_ready_message(topic, difficulty)
+                # 只隐藏真正随机的维度；用户显式给的 topic/难度原样展示
+                topic_random, difficulty_random = (
+                    random_scope_for_message(message) if intent.is_random else (False, False)
+                )
+                ready_msg = build_ready_message(
+                    topic, difficulty,
+                    topic_random=topic_random, difficulty_random=difficulty_random,
+                )
             history.append(ready_msg)
             # 立即置 awaiting_problem，前端可进入「生成中」视图（对话衔接修复-3）
             _display = _fresh_display()

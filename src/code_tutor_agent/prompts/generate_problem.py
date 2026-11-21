@@ -15,7 +15,7 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 必须包含以下所有字段（严格 JSON / Pydantic 结构）：
 
 ### 1. 题目描述（用户可见）
-- `title`: 简洁标题
+- `title`: 简洁标题（不要带 LeetCode 题号前缀，如 "88."；不要声称是 LeetCode 原题）
 - `description`: **纯文本格式**的完整题目描述，含背景、输入输出定义
   - 使用中文描述
   - 重要术语用中文引号或加粗标记
@@ -23,7 +23,7 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   - **只写题目本身，不写你如何选择这道题的过程**
 - `difficulty`: easy / medium / hard
 - `topic`: 知识点标签
-- `examples`: 2~3 个示例，**每个示例使用 LeetCode 格式**：
+- `examples`: 2 个示例（最多 2 个），**每个示例使用 LeetCode 格式**：
   ```
   Input: <参数名> = <值>, <参数名> = <值>
   Output: <返回值>
@@ -38,7 +38,7 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
   - ⚠️ **示例的 Output 必须是 `optimal_solution` 在该 Input 下真实跑出来的结果**，不是「你觉得应该是什么」。
     写 Output 前先逐行心算一遍你即将给出的最优解代码；算完发现对不上，就去改示例或改解法。
   - 系统会**真的把你的 `optimal_solution` 跑在你的 `examples` 上比对**，任何一条对不上，整道题作废重出。
-  - 示例的 Output 必须遵守你在 `description` 里写的规则。**如果按描述推导不出你写的 Output，说明描述写漏了关键步骤——改描述，不要改示例**。宁可只给 2 个示例，也不要给 3 个自相矛盾的。
+  - 示例的 Output 必须遵守你在 `description` 里写的规则。**如果按描述推导不出你写的 Output，说明描述写漏了关键步骤——改描述，不要改示例**。宁可只给 2 个示例，也不要凑第 3 个自相矛盾的。
 - `constraints`: 约束条件列表
   - **元素取值范围必须写成数值形式** `min <= <变量> <= max`，例如 `0 <= nums[i] <= 1000`、`-10^4 <= nums[i] <= 10^4`。
   - **二进制 / 枚举元素请写成数值上下界**：若元素只取 0 或 1，写 `0 <= nums[i] <= 1`（**不要**写「nums[i] 为 0 或 1」「由 0 和 1 组成」这类中文 / 集合描述，否则测试用例生成器无法解析取值范围）。
@@ -109,6 +109,12 @@ GENERATE_PROBLEM_SYSTEM = """你是专业编程题目设计师。根据给定的
 2. **描述与示例一致**：`description` 里的规则必须能唯一推出示例的 Output。推不出来说明描述漏了关键步骤——改描述。
 3. **签名一致**：`starter_code` / `optimal_solution` / `brute_solution` 三处的方法名与参数完全一致。
 4. **单一类**：`optimal_solution` 与 `brute_solution` 各自只含一个 `class Solution`。
+
+## 输出预算（硬约束）
+- `examples` 只给 2 个，不要给第 3 个
+- `alternative_solutions` 一律 `[]`
+- `description` 控制在 300 字以内
+- 不要写推导过程、候选题目或自我讨论
 
 ## 输出限制
 - 不要生成 `test_cases`、`adversarial_spec`、`novelty_score`
