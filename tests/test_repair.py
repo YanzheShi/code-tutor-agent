@@ -389,6 +389,11 @@ class _FlowLLM:
 
 
 def test_run_repairs_then_saves():
+    """示例 Output 不一致 → 重抽拿新题（P0 改判：此类缺陷修复成功率极低）。
+
+    修复回路本身的成功路径由 test_repair_round_repairs 覆盖；这里验证的是
+    ProblemGenerationAgent.run 的分诊结果：EXAMPLE_OUTPUT_MISMATCH 走 resample。
+    """
     store = _FlowStore()
     llm = _FlowLLM()
     agent = ProblemGenerationAgent(
@@ -400,7 +405,5 @@ def test_run_repairs_then_saves():
     result = agent.run(GenerationContext(topic="数组", difficulty="easy"))
     assert result.ok, result.error
     assert result.channel == "llm"
-    assert llm.repairs == 1
+    assert llm.repairs == 0
     assert len(store.saved) == 1
-    assert "return [0, 1]" in store.saved[0].optimal_solution
-    assert store.saved[0].test_cases[0]["expected_output"] == "[0,1]"

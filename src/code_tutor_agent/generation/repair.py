@@ -102,8 +102,17 @@ def decide(diagnosis: Diagnosis, draft: ProblemDraft, attempt: int) -> str:
     codes = set(diagnosis.codes())
     if codes & {"CODE_TRUNCATED", "DESIGN_STYLE", "REFERENCE_MISSING", "TOPIC_MISMATCH"}:
         return "resample"          # 缺陷密度接近 100%，重抽更便宜
-    if codes & {"WEAK_EXAMPLES", "EXAMPLE_INPUT_OUT_OF_DOMAIN"}:
-        return "resample"          # 示例只读，改不动；只能换题
+    # 示例自洽类缺陷改判重抽（2026-11-21 评测依据：19 次修复仅 1 次成功）：
+    # - COT_IN_EXAMPLE：examples 是只读字段，示例里的思维链痕迹物理上改不掉；
+    # - EXAMPLE_OUTPUT_MISMATCH / REFERENCE_RE：允许字段是 optimal_solution，
+    #   但示例 Output 由模型心算写出、本身就不可靠；让修复器改解法去迁就
+    #   可能错的示例，等于把题解改坏。实测修复后这两类仍是残留缺陷 Top2
+    #   （9 + 7 次），重抽比修更划算。
+    if codes & {
+        "WEAK_EXAMPLES", "EXAMPLE_INPUT_OUT_OF_DOMAIN",
+        "COT_IN_EXAMPLE", "EXAMPLE_OUTPUT_MISMATCH", "REFERENCE_RE",
+    }:
+        return "resample"          # 示例只读/解法迁就无效，只能换题
     if "SOLVER_DISAGREEMENT" in codes:
         return "repair"            # 两解都过了示例，允许模型改任意一个
     if diagnosis.only_cosmetic and _CLEAN_CODE in codes:
